@@ -33,7 +33,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 
 fn header_line(app: &App) -> Paragraph<'static> {
     let mut spans = vec![
-        Span::styled(" tr-monitor ", Style::new().bold().fg(Color::Cyan)),
+        Span::styled(" alphai-tui ", Style::new().bold().fg(Color::Cyan)),
         Span::raw(format!(
             "· {} · {}/{} ",
             app.source_name,

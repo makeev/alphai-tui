@@ -14,7 +14,10 @@ use crate::app::App;
 use crate::domain::{Interval, Range, fmt_price};
 
 #[derive(Parser, Debug)]
-#[command(name = "tr-monitor", about = "Terminal ticker price monitor")]
+#[command(
+    name = "alphai-tui",
+    about = "Terminal stock dashboard: quotes, charts, AI-scored news and insider activity"
+)]
 struct Args {
     /// Ticker symbols to watch, e.g. AAPL MSFT NVDA
     #[arg(required = true)]

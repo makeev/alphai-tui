@@ -1,7 +1,12 @@
 [package]
-name = "tr-monitor"
-version = "0.1.0"
+name = "alphai-stock-tui-platform"
+version = "0.2.0"
 edition = "2024"
+description = "Terminal stock dashboard: live quotes and charts plus AI-scored financial news and SEC Form 4 insider activity from AlphaAI"
+
+[[bin]]
+name = "alphai-tui"
+path = "src/main.rs"
 
 [dependencies]
 anyhow = "1.0.103"
