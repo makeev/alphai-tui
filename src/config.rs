@@ -16,6 +16,9 @@ pub struct Config {
     pub every: Option<u64>,
     pub range: Option<String>,
     pub interval: Option<String>,
+    /// Where Enter opens a news article: "alphai" (article page on
+    /// alphai.io, the default) or "original" (the source site).
+    pub news_open: Option<String>,
     pub keys: Keys,
 }
 
@@ -37,6 +40,12 @@ impl Config {
 
     pub fn alphai_key(&self) -> Option<String> {
         env_key("ALPHAI_API_KEY").or_else(|| self.keys.alphai.clone())
+    }
+
+    /// True when Enter on a news article should open the original source
+    /// instead of the alphai.io article page.
+    pub fn news_open_original(&self) -> bool {
+        self.news_open.as_deref() == Some("original")
     }
 
     /// Each half resolves independently (env > file, standard Alpaca SDK
@@ -127,6 +136,7 @@ mod tests {
             every: Some(30),
             range: Some("5d".into()),
             interval: Some("15m".into()),
+            news_open: Some("original".into()),
             keys: Keys {
                 finnhub: Some("fh-key".into()),
                 alphai: Some("ak_live_x".into()),

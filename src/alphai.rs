@@ -19,6 +19,9 @@ use crate::poller::SourceEvent;
 
 pub const DEFAULT_BASE_URL: &str = "https://api.alphai.io";
 
+/// The public site, for article page links (distinct from the API base).
+pub const SITE_URL: &str = "https://alphai.io";
+
 /// How long a fetched bundle stays fresh before a view triggers a re-fetch.
 pub const CACHE_TTL: Duration = Duration::from_secs(300);
 
@@ -231,6 +234,8 @@ pub struct Article {
 #[derive(Clone, Debug, Deserialize)]
 pub struct Original {
     #[serde(default)]
+    pub uid: String,
+    #[serde(default)]
     pub title: String,
     #[serde(default)]
     pub url: String,
@@ -313,6 +318,36 @@ impl Article {
     pub fn score(&self) -> i64 {
         self.enrichment.relevance_score.unwrap_or(0)
     }
+
+    /// The article's page on alphai.io: `/news/article/{MM-DD}/{uid}/{slug}`.
+    /// None when the feed item has no uid or the title slugifies to nothing;
+    /// callers fall back to the original source URL.
+    pub fn alphai_url(&self) -> Option<String> {
+        let uid = self.original.uid.trim();
+        if uid.is_empty() {
+            return None;
+        }
+        let date = self.published()?.format("%m-%d");
+        let slug = slugify(&self.original.title);
+        if slug.is_empty() {
+            return None;
+        }
+        Some(format!("{SITE_URL}/news/article/{date}/{uid}/{slug}"))
+    }
+}
+
+/// Mirror of the site's slugify: keep ASCII word chars, turn whitespace and
+/// hyphen runs into single hyphens, drop the rest. An imperfect match is
+/// harmless: the article page resolves by uid and 301s to the canonical slug.
+fn slugify(text: &str) -> String {
+    text.to_lowercase()
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-') || c.is_whitespace())
+        .map(|c| if c == '-' { ' ' } else { c })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join("-")
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -420,6 +455,33 @@ mod tests {
         assert_eq!(a.sentiment_for("nvda"), Some("positive"));
         assert_eq!(a.sentiment_for("AAPL"), None);
         assert!(a.published().is_some());
+    }
+
+    #[test]
+    fn builds_alphai_article_url() {
+        let page: NewsPage = serde_json::from_str(SAMPLE).unwrap();
+        let a = &page.results[0];
+        assert_eq!(a.original.uid, "788e477c66f3849b");
+        assert_eq!(
+            a.alphai_url().unwrap(),
+            "https://alphai.io/news/article/07-10/788e477c66f3849b/nvidia-beats-on-q2-earnings"
+        );
+
+        // No uid (or a title with no ASCII word chars) -> fall back to original.
+        let mut b = a.clone();
+        b.original.uid = String::new();
+        assert!(b.alphai_url().is_none());
+        let mut c = a.clone();
+        c.original.title = "Новости — заголовок кириллицей".into();
+        assert!(c.alphai_url().is_none());
+    }
+
+    #[test]
+    fn slugify_matches_site_convention() {
+        assert_eq!(slugify("NVIDIA beats on Q2 earnings"), "nvidia-beats-on-q2-earnings");
+        assert_eq!(slugify("Apple's Q2: beats!"), "apples-q2-beats");
+        assert_eq!(slugify("AI  -  the new   gold rush"), "ai-the-new-gold-rush");
+        assert_eq!(slugify("Привет"), "");
     }
 
     #[test]

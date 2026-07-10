@@ -107,7 +107,7 @@ fn render(app: &mut App) -> String {
 #[test]
 fn table_view_shows_quotes() {
     let mut app = fake_app();
-    app.view_idx = 0;
+    app.view_idx = 2; // Table
     let screen = render(&mut app);
     assert!(screen.contains("Watchlist"), "screen:\n{screen}");
     assert!(screen.contains("AAPL"), "screen:\n{screen}");
@@ -120,7 +120,7 @@ fn table_view_shows_quotes() {
 #[test]
 fn chart_view_shows_selected_symbol() {
     let mut app = fake_app();
-    app.view_idx = 1;
+    app.view_idx = 3; // Chart
     app.selected = 1;
     let screen = render(&mut app);
     assert!(screen.contains("MSFT"), "screen:\n{screen}");
@@ -133,15 +133,53 @@ fn chart_view_shows_selected_symbol() {
 }
 
 #[test]
-fn split_view_combines_table_and_chart() {
+fn split_view_combines_table_chart_and_news() {
     let mut app = fake_app();
-    app.view_idx = 2;
+    app.view_idx = ui::VIEW_SPLIT;
+    app.news.insert(
+        "AAPL".into(),
+        NewsBundle {
+            articles: vec![article("Apple beats expectations", "AAPL", 9, "positive")],
+            sentiment: None,
+            fetched: Instant::now(),
+        },
+    );
     let screen = render(&mut app);
     assert!(screen.contains("Watchlist"), "screen:\n{screen}");
     assert!(
         screen.chars().any(|c| ('\u{2800}'..='\u{28FF}').contains(&c)),
         "no chart in split view:\n{screen}"
     );
+    assert!(screen.contains("News · AAPL"), "screen:\n{screen}");
+    assert!(screen.contains("Apple beats expectations"), "screen:\n{screen}");
+}
+
+#[test]
+fn split_view_news_panel_without_key_shows_one_line_hint() {
+    let mut app = fake_app();
+    app.alphai_enabled = false;
+    app.view_idx = ui::VIEW_SPLIT;
+    let screen = render(&mut app);
+    assert!(screen.contains("alphai.io"), "screen:\n{screen}");
+    assert!(screen.contains("press s"), "screen:\n{screen}");
+}
+
+#[test]
+fn split_view_drops_news_panel_on_tiny_terminal() {
+    let mut app = fake_app();
+    app.view_idx = ui::VIEW_SPLIT;
+    let mut terminal = Terminal::new(TestBackend::new(100, 12)).unwrap();
+    terminal.draw(|f| ui::draw(f, &mut app)).unwrap();
+    let buffer = terminal.backend().buffer().clone();
+    let mut screen = String::new();
+    for y in 0..12 {
+        for x in 0..100 {
+            screen.push_str(buffer.cell((x, y)).unwrap().symbol());
+        }
+        screen.push('\n');
+    }
+    assert!(screen.contains("Watchlist"), "screen:\n{screen}");
+    assert!(!screen.contains("News ·"), "news strip should be hidden:\n{screen}");
 }
 
 #[test]
@@ -253,6 +291,8 @@ fn settings_overlay_masks_keys() {
     assert!(screen.contains("Settings"), "screen:\n{screen}");
     assert!(screen.contains("Price source"), "screen:\n{screen}");
     assert!(screen.contains("Alpaca secret"), "screen:\n{screen}");
+    assert!(screen.contains("News opens"), "screen:\n{screen}");
+    assert!(screen.contains("‹ alphai ›"), "screen:\n{screen}");
     assert!(screen.contains("ak_liv…1234"), "screen:\n{screen}");
     assert!(
         !screen.contains("ak_live_abcdefgh1234"),

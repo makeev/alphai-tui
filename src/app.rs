@@ -32,7 +32,7 @@ pub struct InsiderBundle {
 }
 
 /// State of the settings overlay. Field order (cursor): price source,
-/// finnhub key, alphai key, alpaca key id, alpaca secret, save.
+/// finnhub key, alphai key, alpaca key id, alpaca secret, news opens, save.
 #[derive(Default)]
 pub struct SettingsState {
     pub open: bool,
@@ -47,10 +47,12 @@ pub struct SettingsState {
     pub alphai_key: String,
     pub alpaca_key_id: String,
     pub alpaca_secret: String,
+    /// "alphai" (article page on alphai.io) or "original" (source site).
+    pub news_open_choice: String,
     pub message: Option<String>,
 }
 
-pub const SETTINGS_ROWS: usize = 6;
+pub const SETTINGS_ROWS: usize = 7;
 
 pub struct AppInit {
     pub symbols: Vec<String>,
@@ -224,7 +226,9 @@ impl App {
             return;
         }
         match self.view_idx {
-            ui::VIEW_NEWS => {
+            // The Split view embeds the compact news strip, so it drives the
+            // same demand-driven news fetch as the full News view.
+            ui::VIEW_NEWS | ui::VIEW_SPLIT => {
                 let key = self.news_cache_key();
                 let stale = self
                     .news
@@ -299,10 +303,10 @@ impl App {
                     .visible_articles()
                     .and_then(|list| list.get(self.news_selected))
                 {
-                    open_url(&a.original.url);
+                    open_url(&self.article_url(a));
                 }
             }
-            KeyCode::Char('f') if self.view_idx == ui::VIEW_NEWS => {
+            KeyCode::Char('f') if matches!(self.view_idx, ui::VIEW_NEWS | ui::VIEW_SPLIT) => {
                 self.news_market_wide = !self.news_market_wide;
                 self.news_selected = 0;
             }
@@ -313,6 +317,17 @@ impl App {
             _ => {}
         }
         false
+    }
+
+    /// URL Enter opens for an article. News items default to their alphai.io
+    /// article page (settings can flip this to the original source); insider
+    /// filings always open the original, which points at the SEC filing.
+    fn article_url(&self, a: &Article) -> String {
+        if self.view_idx == ui::VIEW_NEWS && !self.config.news_open_original() {
+            a.alphai_url().unwrap_or_else(|| a.original.url.clone())
+        } else {
+            a.original.url.clone()
+        }
     }
 
     fn switch_view(&mut self, idx: usize) {
@@ -327,7 +342,7 @@ impl App {
     fn manual_refresh(&mut self) {
         self.refresh.notify_one();
         match self.view_idx {
-            ui::VIEW_NEWS => {
+            ui::VIEW_NEWS | ui::VIEW_SPLIT => {
                 let key = self.news_cache_key();
                 self.news.remove(&key);
                 self.alphai_errors.remove(&key);
@@ -354,6 +369,11 @@ impl App {
         s.alphai_key = self.config.keys.alphai.clone().unwrap_or_default();
         s.alpaca_key_id = self.config.keys.alpaca_key_id.clone().unwrap_or_default();
         s.alpaca_secret = self.config.keys.alpaca_secret.clone().unwrap_or_default();
+        s.news_open_choice = if self.config.news_open_original() {
+            "original".to_string()
+        } else {
+            "alphai".to_string()
+        };
     }
 
     fn handle_settings_key(&mut self, key: KeyEvent) -> bool {
@@ -397,8 +417,14 @@ impl App {
             {
                 self.toggle_source_choice()
             }
+            KeyCode::Left | KeyCode::Right | KeyCode::Char(' ')
+                if self.settings.cursor == 5 =>
+            {
+                self.toggle_news_open_choice()
+            }
             KeyCode::Enter => match self.settings.cursor {
                 0 => self.toggle_source_choice(),
+                5 => self.toggle_news_open_choice(),
                 1..=4 => {
                     let s = &mut self.settings;
                     s.input = match s.cursor {
@@ -421,6 +447,15 @@ impl App {
         s.source_choice = next_source(&s.source_choice).to_string();
     }
 
+    fn toggle_news_open_choice(&mut self) {
+        let s = &mut self.settings;
+        s.news_open_choice = if s.news_open_choice == "original" {
+            "alphai".to_string()
+        } else {
+            "original".to_string()
+        };
+    }
+
     fn settings_save(&mut self) {
         let mut cfg = self.config.clone();
         cfg.source = Some(self.settings.source_choice.clone());
@@ -428,6 +463,7 @@ impl App {
         cfg.keys.alphai = non_empty(&self.settings.alphai_key);
         cfg.keys.alpaca_key_id = non_empty(&self.settings.alpaca_key_id);
         cfg.keys.alpaca_secret = non_empty(&self.settings.alpaca_secret);
+        cfg.news_open = Some(self.settings.news_open_choice.clone());
         // Saving persists the watchlist on screen, so a bare `alphai-tui`
         // reopens exactly this setup.
         cfg.watchlist = self.symbols.clone();

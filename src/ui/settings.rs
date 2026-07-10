@@ -10,7 +10,7 @@ use crate::config;
 /// Modal overlay drawn on top of whatever view is active.
 pub fn render(f: &mut Frame, app: &App) {
     let s = &app.settings;
-    let area = centered(f.area(), 74, if s.first_run { 21 } else { 16 });
+    let area = centered(f.area(), 74, if s.first_run { 22 } else { 17 });
     f.render_widget(Clear, area);
 
     let mut lines: Vec<Line> = Vec::new();
@@ -28,7 +28,7 @@ pub fn render(f: &mut Frame, app: &App) {
         lines.push(Line::from(""));
     }
 
-    let rows: [(&str, String, String); 5] = [
+    let rows: [(&str, String, String); 6] = [
         (
             "Price source",
             format!("‹ {} ›", s.source_choice),
@@ -54,6 +54,11 @@ pub fn render(f: &mut Frame, app: &App) {
             field_value(s, 4, &s.alpaca_secret),
             env_hint("APCA_API_SECRET_KEY"),
         ),
+        (
+            "News opens",
+            format!("‹ {} ›", s.news_open_choice),
+            news_open_hint(s.news_open_choice.as_str()),
+        ),
     ];
     for (i, (label, value, hint)) in rows.into_iter().enumerate() {
         let selected = s.cursor == i;
@@ -76,13 +81,13 @@ pub fn render(f: &mut Frame, app: &App) {
     }
 
     lines.push(Line::from(""));
-    let save_style = if s.cursor == 5 {
+    let save_style = if s.cursor == 6 {
         Style::new().add_modifier(Modifier::REVERSED)
     } else {
         Style::new()
     };
     lines.push(Line::from(vec![
-        Span::raw(if s.cursor == 5 { "▶ " } else { "  " }),
+        Span::raw(if s.cursor == 6 { "▶ " } else { "  " }),
         Span::styled("[ Save and close ]", save_style),
     ]));
 
@@ -136,6 +141,13 @@ fn source_hint(choice: &str) -> String {
         "finnhub" => "real-time quotes, needs a key (free at finnhub.io)".into(),
         "alpaca" => "realtime IEX quotes and real candle history, free keys at alpaca.markets".into(),
         _ => "no key needed, ~15 min delayed".into(),
+    }
+}
+
+fn news_open_hint(choice: &str) -> String {
+    match choice {
+        "original" => "enter opens the source site".into(),
+        _ => "enter opens the article page on alphai.io".into(),
     }
 }
 

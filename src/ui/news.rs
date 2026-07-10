@@ -1,4 +1,4 @@
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style, Stylize};
@@ -49,33 +49,10 @@ impl View for NewsView {
         let rows: Vec<Row> = bundle
             .articles
             .iter()
-            .map(|a| {
-                let mut cells = vec![
-                    Cell::from(a.age(now)).dim(),
-                    score_cell(a.score()),
-                ];
-                if app.news_market_wide {
-                    let tickers: Vec<&str> =
-                        a.enrichment.tickers.iter().take(2).map(String::as_str).collect();
-                    cells.push(Cell::from(tickers.join(",")).bold());
-                } else {
-                    cells.push(sentiment_cell(a.sentiment_for(app.selected_symbol())));
-                }
-                cells.push(Cell::from(short_category(a)).dim());
-                cells.push(Cell::from(a.original.title.clone()));
-                Row::new(cells)
-            })
+            .map(|a| article_row(a, app.news_market_wide, app.selected_symbol(), now))
             .collect();
 
-        let ticker_col = if app.news_market_wide { 12 } else { 2 };
-        let widths = [
-            Constraint::Length(4),
-            Constraint::Length(2),
-            Constraint::Length(ticker_col),
-            Constraint::Length(8),
-            Constraint::Min(20),
-        ];
-        let table = Table::new(rows, widths)
+        let table = Table::new(rows, article_widths(app.news_market_wide))
             .block(block)
             .row_highlight_style(Style::new().add_modifier(Modifier::REVERSED))
             .highlight_symbol("▶ ");
@@ -85,6 +62,73 @@ impl View for NewsView {
 
         render_detail(f, detail, bundle.articles.get(app.news_selected));
     }
+}
+
+/// Compact news strip for the Split view: the freshest articles for the
+/// current scope, read only. Selection, detail pane and article opening live
+/// in the full News view.
+pub fn render_panel(f: &mut Frame, area: Rect, app: &mut App) {
+    let key = app.news_cache_key();
+    let scope = if app.news_market_wide {
+        "market".to_string()
+    } else {
+        app.selected_symbol().to_string()
+    };
+    let block = Block::bordered().title(format!(" News · {scope} "));
+
+    if !app.alphai_enabled {
+        let line =
+            Line::from(" AI news needs a free AlphaAI key from https://alphai.io, press s to add it")
+                .dim();
+        f.render_widget(Paragraph::new(line).block(block), area);
+        return;
+    }
+    if render_gate(f, area, &block, app, &key) {
+        return;
+    }
+    let bundle = &app.news[&key];
+    if bundle.articles.is_empty() {
+        let msg = format!("no recent news for {scope} (relevance score 4 or higher)");
+        f.render_widget(Paragraph::new(Line::from(msg).dim()).block(block), area);
+        return;
+    }
+
+    let now = Utc::now();
+    let rows: Vec<Row> = bundle
+        .articles
+        .iter()
+        .map(|a| article_row(a, app.news_market_wide, app.selected_symbol(), now))
+        .collect();
+    f.render_widget(
+        Table::new(rows, article_widths(app.news_market_wide)).block(block),
+        area,
+    );
+}
+
+/// One article as a table row: age, score, sentiment (or tickers when
+/// market-wide), category, title. Shared by the News view and the Split strip.
+fn article_row(a: &Article, market_wide: bool, symbol: &str, now: DateTime<Utc>) -> Row<'static> {
+    let mut cells = vec![Cell::from(a.age(now)).dim(), score_cell(a.score())];
+    if market_wide {
+        let tickers: Vec<&str> = a.enrichment.tickers.iter().take(2).map(String::as_str).collect();
+        cells.push(Cell::from(tickers.join(",")).bold());
+    } else {
+        cells.push(sentiment_cell(a.sentiment_for(symbol)));
+    }
+    cells.push(Cell::from(short_category(a)).dim());
+    cells.push(Cell::from(a.original.title.clone()));
+    Row::new(cells)
+}
+
+fn article_widths(market_wide: bool) -> [Constraint; 5] {
+    let ticker_col = if market_wide { 12 } else { 2 };
+    [
+        Constraint::Length(4),
+        Constraint::Length(2),
+        Constraint::Length(ticker_col),
+        Constraint::Length(8),
+        Constraint::Min(20),
+    ]
 }
 
 fn head_line(app: &App, sentiment: Option<&crate::alphai::SentimentSummary>) -> Paragraph<'static> {

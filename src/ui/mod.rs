@@ -24,14 +24,15 @@ pub trait View: Sync {
 /// Register new display modes here. Order defines the 1..9 hotkeys and must
 /// match the VIEW_* constants below (app key handling branches on them).
 pub static VIEWS: [&dyn View; 5] = [
-    &table::TableView,
-    &chart::ChartView,
     &split::SplitView,
     &news::NewsView,
+    &table::TableView,
+    &chart::ChartView,
     &insider::InsiderView,
 ];
 
-pub const VIEW_NEWS: usize = 3;
+pub const VIEW_SPLIT: usize = 0;
+pub const VIEW_NEWS: usize = 1;
 pub const VIEW_INSIDER: usize = 4;
 
 pub fn draw(f: &mut Frame, app: &mut App) {
@@ -89,6 +90,7 @@ fn footer_line(app: &App) -> Paragraph<'static> {
         match app.view_idx {
             VIEW_NEWS => " q quit · tab/1-9 view · ↑↓ article · ←→ ticker · ⏎ open · f scope · r refresh · s settings",
             VIEW_INSIDER => " q quit · tab/1-9 view · ↑↓ article · ←→ ticker · ⏎ open · r refresh · s settings",
+            VIEW_SPLIT => " q quit · tab/1-9 view · ↑↓ select · f news scope · r refresh · s settings",
             _ => " q quit · tab/1-9 view · ↑↓ select · r refresh · s settings",
         }
     };

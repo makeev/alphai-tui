@@ -5,7 +5,7 @@ AI-scored financial news, sentiment and SEC Form 4 insider activity.
 Built in Rust with [ratatui](https://ratatui.rs).
 
 ```text
- alphai-tui · yahoo · 1d/5m  1:Table 2:Chart 3:Split 4:News 5:Insider · alphai ✓ · upd 18:40:12
+ alphai-tui · yahoo · 1d/5m  1:Split 2:News 3:Table 4:Chart 5:Insider · alphai ✓ · upd 18:40:12
  7d sentiment  ▲ 12 bullish · 5 neutral · ▼ 3 bearish  (20 scored)
 ┌ News · NVDA ──────────────────────────────────────────────────────────────────┐
 │▶ 2h   9  ▲  earnings  NVIDIA beats on Q2 data-center revenue                  │
@@ -22,17 +22,21 @@ Built in Rust with [ratatui](https://ratatui.rs).
 
 ## What you get
 
-- **Table**: watchlist with price, change, day range and unicode sparklines.
-- **Chart**: Braille line chart of the selected ticker with a previous-close
-  reference line. **Split** shows both side by side.
+- **Split** (the default view): watchlist and chart side by side in the top
+  half, the news feed in the bottom half (hidden on very small terminals).
 - **News**: enriched articles for the selected ticker (or the whole market,
   toggle with `f`), each with a 1 to 10 relevance score, category and a
   per-ticker AI sentiment call, plus a 7-day bullish/bearish rollup.
-  Enter opens the article in your browser.
+  Enter opens the article page on alphai.io; a settings toggle switches
+  that to the original source site.
+- **Table**: watchlist with price, change, day range and unicode sparklines.
+- **Chart**: Braille line chart of the selected ticker with a previous-close
+  reference line.
 - **Insider**: SEC Form 4 activity for the selected ticker. A 30-day rollup
   (buys vs sells, dollar volumes, share of pre-arranged 10b5-1 plan trades,
   most active insiders) above the stream of filing events.
-- In-app settings (`s`): pick the price source and paste API keys once.
+- In-app settings (`s`): pick the price source, paste API keys once and
+  choose where Enter opens news articles.
   Everything is saved to a config file, so after the first run a bare
   `alphai-tui` is enough.
 
@@ -94,7 +98,7 @@ defaults. API keys can also come from env vars, which win over the config:
 | `↑` `↓` / `j` `k` | news, insider | scroll articles |
 | `←` `→` / `h` `l` | news, insider | switch ticker |
 | `Enter` / `o` | news, insider | open article in browser |
-| `f` | news | toggle selected ticker / whole market |
+| `f` | news, split | toggle selected ticker / whole market |
 | `r` | everywhere | refresh prices and the visible news view |
 | `s` | everywhere | settings |
 | `q` / `Esc` / `Ctrl-C` | everywhere | quit |
@@ -158,6 +162,7 @@ watchlist = ["AAPL", "MSFT", "NVDA", "BTC-USD"]
 every = 15
 range = "1d"
 interval = "5m"
+news_open = "alphai"  # where enter opens news: "alphai" or "original"
 
 [keys]
 alphai = "ak_live_..."
