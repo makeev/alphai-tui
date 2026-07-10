@@ -3,6 +3,12 @@ name = "alphai-stock-tui-platform"
 version = "0.2.0"
 edition = "2024"
 description = "Terminal stock dashboard: live quotes and charts plus AI-scored financial news and SEC Form 4 insider activity from AlphaAI"
+license = "MIT"
+repository = "https://github.com/makeev/alphai-stock-tui-platform"
+homepage = "https://alphai.io"
+readme = "README.md"
+keywords = ["tui", "stocks", "finance", "news", "ratatui"]
+categories = ["command-line-utilities"]
 
 [[bin]]
 name = "alphai-tui"

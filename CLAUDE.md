@@ -1,7 +1,27 @@
-# tr-monitor
+# alphai-stock-tui-platform
 
-Terminal TUI for watching ticker prices (Rust, ratatui). Architecture and
-extension points: `README.md`. Roadmap: `PLAN.md`.
+Terminal TUI for watching ticker prices with AI-scored news and SEC Form 4
+insider activity from the AlphaAI API (Rust, ratatui; binary: `alphai-tui`).
+Architecture and extension points: `README.md`. Roadmap: `PLAN.md`.
+
+## Invariants
+
+- **This is a public open-source repo.** No secrets anywhere: no API keys in
+  code, tests, docs or issues/. Keys live only in env vars or the user's
+  `~/.config/alphai-tui/config.toml` (written 0600 by the settings screen)
+  and are masked when rendered (`ui/settings.rs::mask`).
+- **AlphaAI request budget.** The free tier is 20 req/min and 100 req/day, so
+  AlphaAI fetches are demand-driven only: the visible view's data, cached for
+  `alphai::CACHE_TTL` (300s), never fetched on the price-poll cadence, no
+  auto-retry on error (`r` retries). Keep this property when touching
+  `App::ensure_alphai_data` or the alphai task.
+- **The UI never talks to the network.** Background tasks (price poller,
+  alphai fetcher) push `SourceEvent`s over one mpsc channel into `App::apply`;
+  views are stateless renderers over `&mut App`.
+- **`ui::VIEWS` order must match the `VIEW_*` constants** in `ui/mod.rs`; app
+  key handling branches on them.
+- Public copy style (README, --help, in-app text): plain sentences, no em
+  dashes.
 
 ## Knowledge system (docs / issues / plan)
 

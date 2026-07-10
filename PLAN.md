@@ -1,7 +1,8 @@
 # PLAN.md — roadmap
 
-Phased roadmap for **tr-monitor** — a Rust/ratatui terminal TUI for watching
-ticker prices with pluggable data sources and pluggable views.
+Phased roadmap for **alphai-stock-tui-platform** (binary: `alphai-tui`) — a
+Rust/ratatui terminal TUI for watching ticker prices, AI-scored news and
+insider activity, with pluggable data sources and pluggable views.
 Status marks: ✅ shipped · 🔨 in progress · ⏳ planned · ❌ dropped.
 
 Details of a non-trivial phase live in a `docs/` plan file (frontmatter
@@ -10,8 +11,10 @@ here and **delete** its docs/ plan file — git history is the archive.
 
 ## Context for agents
 
-- Build/test: `cargo build`, `cargo test` (4 TestBackend rendering tests in
-  `src/ui/tests.rs`). Run: `cargo run --release -- AAPL MSFT NVDA`.
+- Build/test: `cargo build`, `cargo test` (21 tests: TestBackend rendering in
+  `src/ui/tests.rs`, DTO/config/format units; plus an ignored live-API smoke:
+  `ALPHAI_API_KEY=… cargo test live_api -- --ignored`).
+  Run: `cargo run --release -- AAPL MSFT NVDA`.
   Data-path smoke test without a TTY: `cargo run -- --once AAPL`.
 - Architecture and extension points (how to add a source / a view) are in
   `README.md`. Short version: a data source implements
@@ -76,6 +79,34 @@ Second polling source; proved the `DataSource` plugin contract.
 - Crypto needs exchange-prefixed symbols (`BINANCE:BTCUSDT`).
 - Unit tests for `push_tick` (dedupe + cap) in the module.
 
+## Phase 2.5 — AlphaAI news + insider + in-app settings ✅ (v0.2, 2026-07-10)
+
+The pivot that renamed the repo: the TUI joined the AlphaAI ecosystem
+(https://alphai.io) as its terminal client.
+
+- `src/alphai.rs`: client for the AlphaAI public REST API (`api.alphai.io`,
+  `Authorization: Bearer ak_live_…`): news feed (`/api/news/`), insider feed
+  (`/api/news/insider/`), 7d sentiment rollup, 30d insider rollup. Tolerant
+  serde DTOs (everything defaulted), readable 401/429 mapping.
+- Demand-driven background task, same mpsc channel as the price poller
+  (`SourceEvent::Alphai`). **Budget invariant** (free tier 20/min, 100/day):
+  fetch only the visible view's data, 300s TTL cache, no auto-retry on error;
+  `r` clears + retries. Documented in CLAUDE.md.
+- News view (hotkey 4): per-ticker or market-wide (`f`), age + relevance
+  score + per-ticker sentiment glyph + category columns, detail pane with the
+  AI summary, `Enter`/`o` opens the article in the browser.
+- Insider view (hotkey 5): 30d Form 4 rollup line (buys/sells with dollar
+  volumes via `fmt_usd`, 10b5-1 share, top insiders) over the filing-event
+  stream.
+- Settings overlay (`s`): price source toggle, Finnhub + AlphaAI key inputs
+  (masked render, raw only while editing), save applies live (source swap via
+  `SharedSource: Arc<RwLock<Arc<dyn DataSource>>>`, key swap via
+  `Cmd::SetKey` + cache clear) and persists.
+- First run (no config file) opens settings with a welcome prompt asking for
+  the AlphaAI key; empty is fine, news views then show a how-to-get-a-key
+  hint.
+- Phase 6 (config file) shipped early as part of this: see below.
+
 ## Phase 3 — Alpaca source ⏳
 
 Goal: the primary real-time source. Decision (July 2026): **IBKR dropped** —
@@ -120,18 +151,17 @@ Goal: proper OHLC candles; the domain model already carries the data.
 - Acceptance: a TestBackend test asserting candle glyphs render; view
   reachable via hotkey `4`.
 
-## Phase 6 — config file ⏳
+## Phase 6 — config file ✅ (2026-07-10, shipped early with Phase 2.5)
 
-Goal: run bare `tr-monitor` with a saved setup.
-
-- `~/.config/tr-monitor/config.toml` (`directories` or `dirs` crate): default
-  watchlist, source, `every`, `range`/`interval`, per-source blocks
-  (finnhub key, alpaca key id/secret) — env vars keep working and win over
-  the config file.
-- Precedence: CLI args > config > built-in defaults. Symbols on the CLI
-  replace the config watchlist entirely (no merging).
-- Acceptance: bare `tr-monitor` runs from config; `--once` still works with
-  no config file present.
+- `~/.config/alphai-tui/config.toml` (`dirs` crate, written 0600 because it
+  can hold keys): watchlist, source, `every`, `range`/`interval`,
+  `[keys]` finnhub/alphai. Env vars (`FINNHUB_API_KEY`, `ALPHAI_API_KEY`)
+  keep working and win over the file.
+- Precedence: CLI args > env (keys) > config > built-in defaults. Symbols on
+  the CLI replace the config watchlist entirely (no merging).
+- Bare `alphai-tui` runs from config (falls back to a sample watchlist);
+  `--once` works with no config file present and never opens the first-run
+  settings screen.
 
 ## Backlog (unordered ideas, promote to a phase when picked)
 
