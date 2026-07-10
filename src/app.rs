@@ -423,6 +423,9 @@ impl App {
         cfg.source = Some(self.settings.source_choice.clone());
         cfg.keys.finnhub = non_empty(&self.settings.finnhub_key);
         cfg.keys.alphai = non_empty(&self.settings.alphai_key);
+        // Saving persists the watchlist on screen, so a bare `alphai-tui`
+        // reopens exactly this setup.
+        cfg.watchlist = self.symbols.clone();
 
         let source_changed = !self
             .settings

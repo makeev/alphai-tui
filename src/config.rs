@@ -42,8 +42,18 @@ fn env_key(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|v| !v.trim().is_empty())
 }
 
+/// Unix (including macOS) follows the terminal-tool convention:
+/// `$XDG_CONFIG_HOME` or `~/.config`. Windows uses the platform config dir.
 pub fn path() -> Option<PathBuf> {
-    Some(dirs::config_dir()?.join("alphai-tui").join("config.toml"))
+    let base = if cfg!(windows) {
+        dirs::config_dir()?
+    } else {
+        std::env::var_os("XDG_CONFIG_HOME")
+            .map(PathBuf::from)
+            .filter(|p| p.is_absolute())
+            .unwrap_or(dirs::home_dir()?.join(".config"))
+    };
+    Some(base.join("alphai-tui").join("config.toml"))
 }
 
 /// Returns the config and whether a file existed. A missing file is a normal

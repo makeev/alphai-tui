@@ -51,7 +51,7 @@ impl DataSource for Finnhub {
             .context("request failed")?;
 
         if resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
-            bail!("finnhub rate limit hit (60 req/min free tier) — raise --every or drop tickers");
+            bail!("finnhub rate limit hit (60 req/min free tier), raise --every or drop tickers");
         }
         let resp = resp.error_for_status().context("finnhub returned an error status")?;
         let q: FhQuote = resp.json().await.context("bad JSON from finnhub")?;

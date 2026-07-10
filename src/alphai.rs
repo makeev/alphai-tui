@@ -56,7 +56,7 @@ impl Client {
 
         let status = resp.status();
         if status == reqwest::StatusCode::UNAUTHORIZED {
-            bail!("invalid AlphaAI API key — press s to update it (free keys: alphai.io)");
+            bail!("invalid AlphaAI API key, press s to update it (free keys: alphai.io)");
         }
         if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
             let wait = resp

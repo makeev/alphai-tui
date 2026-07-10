@@ -128,8 +128,9 @@ which is also what AlphaAI uses. Finnhub-specific symbols like
 
 ## Config file
 
-`~/.config/alphai-tui/config.toml` (created by the settings screen with
-mode 0600, since it can hold keys):
+`~/.config/alphai-tui/config.toml` on Linux and macOS (`%APPDATA%` on
+Windows), created by the settings screen with mode 0600 since it can hold
+keys. Saving the settings also persists the watchlist on screen:
 
 ```toml
 source = "yahoo"
