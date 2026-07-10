@@ -3,3 +3,7 @@
 .env.*
 *.local
 .DS_Store
+
+# local working docs, never published
+CLAUDE.md
+*_PLAN.md
