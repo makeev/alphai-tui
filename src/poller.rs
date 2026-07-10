@@ -6,7 +6,7 @@ use tokio::sync::mpsc::UnboundedSender;
 use tokio::task::JoinSet;
 
 use crate::alphai;
-use crate::domain::{Interval, Range, TickerData};
+use crate::domain::{Interval, Range, TickerData, fetch_range};
 use crate::source::DataSource;
 
 pub enum SourceEvent {
@@ -38,6 +38,9 @@ pub async fn run(
     loop {
         let current = source.read().unwrap().clone();
         let (range, interval) = *params.read().unwrap();
+        // Fetch wider than the visible range so indicators have their warm-up
+        // history; the chart trims rendering back to `range`.
+        let range = fetch_range(range, interval);
         let mut set = JoinSet::new();
         for symbol in &symbols {
             let source = current.clone();

@@ -2,6 +2,12 @@
 //! input: `out[i]` is the indicator value at candle `i`, `None` while the
 //! lookback window is still filling.
 
+/// SMA overlay periods used by the chart. The slow one also sizes the
+/// history warm-up that `domain::fetch_range` requests beyond the visible
+/// window, so the overlays have data from the very first visible candle.
+pub const SMA_FAST: usize = 20;
+pub const SMA_SLOW: usize = 100;
+
 /// Simple moving average. `None` until a full `period` window is available.
 pub fn sma(values: &[f64], period: usize) -> Vec<Option<f64>> {
     let mut out = vec![None; values.len()];

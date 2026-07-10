@@ -137,8 +137,8 @@ impl DataSource for Alpaca {
 
     async fn fetch(&self, symbol: &str, range: Range, interval: Interval) -> Result<TickerData> {
         let timeframe = timeframe(interval);
-        let start =
-            (Utc::now() - range_duration(range)).to_rfc3339_opts(SecondsFormat::Secs, true);
+        let start = (Utc::now() - chrono::Duration::seconds(range.secs()))
+            .to_rfc3339_opts(SecondsFormat::Secs, true);
         match crypto_pair(symbol) {
             Some(pair) => self.fetch_crypto(symbol, &pair, timeframe, &start).await,
             None => self.fetch_stock(symbol, timeframe, &start).await,
@@ -165,17 +165,6 @@ fn timeframe(interval: Interval) -> &'static str {
         Interval::M30 => "30Min",
         Interval::M60 => "1Hour",
         Interval::D1 => "1Day",
-    }
-}
-
-fn range_duration(range: Range) -> chrono::Duration {
-    match range {
-        Range::D1 => chrono::Duration::days(1),
-        Range::D5 => chrono::Duration::days(5),
-        Range::Mo1 => chrono::Duration::days(30),
-        Range::Mo3 => chrono::Duration::days(90),
-        Range::Mo6 => chrono::Duration::days(180),
-        Range::Y1 => chrono::Duration::days(365),
     }
 }
 
@@ -318,16 +307,6 @@ mod tests {
         assert_eq!(timeframe(Interval::M30), "30Min");
         assert_eq!(timeframe(Interval::M60), "1Hour");
         assert_eq!(timeframe(Interval::D1), "1Day");
-    }
-
-    #[test]
-    fn range_to_duration() {
-        assert_eq!(range_duration(Range::D1), chrono::Duration::days(1));
-        assert_eq!(range_duration(Range::D5), chrono::Duration::days(5));
-        assert_eq!(range_duration(Range::Mo1), chrono::Duration::days(30));
-        assert_eq!(range_duration(Range::Mo3), chrono::Duration::days(90));
-        assert_eq!(range_duration(Range::Mo6), chrono::Duration::days(180));
-        assert_eq!(range_duration(Range::Y1), chrono::Duration::days(365));
     }
 
     #[test]

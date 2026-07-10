@@ -68,11 +68,22 @@ impl DataSource for Yahoo {
             .or(last_close)
             .ok_or_else(|| anyhow!("no price data"))?;
 
+        // Daily responses never carry `previousClose`, and the
+        // `chartPreviousClose` fallback is the close before the fetched
+        // window, which the indicator warm-up over-fetch pushes months into
+        // the past. The bar before the last one is the real previous close.
+        let daily_prev = (interval == Interval::D1 && candles.len() >= 2)
+            .then(|| candles[candles.len() - 2].close);
+
         Ok(TickerData {
             quote: Quote {
                 symbol: result.meta.symbol.clone(),
                 price,
-                prev_close: result.meta.previous_close.or(result.meta.chart_previous_close),
+                prev_close: result
+                    .meta
+                    .previous_close
+                    .or(daily_prev)
+                    .or(result.meta.chart_previous_close),
                 currency: result.meta.currency.clone(),
             },
             candles,

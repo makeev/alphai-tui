@@ -20,6 +20,9 @@ Built in Rust with [ratatui](https://ratatui.rs).
   resolution, with a previous-close reference line, SMA 20/100 overlays and
   an RSI(14) panel. `c` switches to the classic Braille line chart, `m` and
   `i` toggle the indicators, `t` cycles interval presets on the fly.
+  The client quietly fetches extra history beyond the visible window, so
+  the SMA and RSI lines are fully drawn from the first candle on screen
+  instead of waiting a hundred candles to warm up.
 - **Insider**: SEC Form 4 activity for the selected ticker. A 30-day rollup
   (buys vs sells, dollar volumes, share of pre-arranged 10b5-1 plan trades,
   most active insiders) above the stream of filing events.
@@ -69,7 +72,7 @@ alphai-tui -s finnhub NVDA  # explicit source for one run
 |------|---------|---------|
 | `-s, --source` | `yahoo` | Price source: `yahoo`, `finnhub` or `alpaca` |
 | `-e, --every` | `15` | Poll interval, seconds |
-| `-r, --range` | `1d` | History window: `1d 5d 1mo 3mo 6mo 1y` |
+| `-r, --range` | `1d` | History window: `1d 5d 1mo 3mo 6mo 1y 2y` |
 | `-i, --interval` | `5m` | Candle size: `1m 2m 5m 15m 30m 60m 1d` |
 | `--once` | | Print quotes to stdout and exit |
 

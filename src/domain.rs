@@ -1,5 +1,7 @@
 use clap::ValueEnum;
 
+use crate::indicators;
+
 /// History window requested from a data source.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 pub enum Range {
@@ -15,7 +17,20 @@ pub enum Range {
     Mo6,
     #[value(name = "1y")]
     Y1,
+    #[value(name = "2y")]
+    Y2,
 }
+
+/// All ranges, shortest first; `fetch_range` picks the smallest that fits.
+const RANGES: [Range; 7] = [
+    Range::D1,
+    Range::D5,
+    Range::Mo1,
+    Range::Mo3,
+    Range::Mo6,
+    Range::Y1,
+    Range::Y2,
+];
 
 impl Range {
     pub fn as_str(&self) -> &'static str {
@@ -26,6 +41,22 @@ impl Range {
             Range::Mo3 => "3mo",
             Range::Mo6 => "6mo",
             Range::Y1 => "1y",
+            Range::Y2 => "2y",
+        }
+    }
+
+    /// Calendar seconds the range covers. `5d` means 5 trading days (Yahoo's
+    /// semantics), which is 7 calendar days.
+    pub fn secs(&self) -> i64 {
+        const DAY: i64 = 86_400;
+        match self {
+            Range::D1 => DAY,
+            Range::D5 => 7 * DAY,
+            Range::Mo1 => 30 * DAY,
+            Range::Mo3 => 90 * DAY,
+            Range::Mo6 => 180 * DAY,
+            Range::Y1 => 365 * DAY,
+            Range::Y2 => 730 * DAY,
         }
     }
 }
@@ -61,6 +92,41 @@ impl Interval {
             Interval::D1 => "1d",
         }
     }
+
+    pub fn secs(&self) -> i64 {
+        match self {
+            Interval::M1 => 60,
+            Interval::M2 => 120,
+            Interval::M5 => 300,
+            Interval::M15 => 900,
+            Interval::M30 => 1_800,
+            Interval::M60 => 3_600,
+            Interval::D1 => 86_400,
+        }
+    }
+}
+
+/// The range to actually request from a data source so that the slowest
+/// indicator (SMA100) has a full lookback window behind every candle of the
+/// visible `display` range. Candles only exist while the market trades, so
+/// the warm-up is scaled from market time to calendar time: ~6.5 trading
+/// hours per weekday for intraday bars (factor 6 with margin for holidays),
+/// 5 trading days per week for daily bars (factor 1.5). Picks the smallest
+/// range that covers display + warm-up; the UI trims rendering back to
+/// `display` (see `ui::chart`). Combos too big to warm up fully (e.g. 2y/1d)
+/// fall back to the largest range and degrade to an indented SMA, exactly
+/// like before.
+pub fn fetch_range(display: Range, interval: Interval) -> Range {
+    let bars = indicators::SMA_SLOW as i64;
+    let warmup = match interval {
+        Interval::D1 => bars * interval.secs() * 3 / 2,
+        _ => bars * interval.secs() * 6,
+    };
+    let need = display.secs() + warmup;
+    RANGES
+        .into_iter()
+        .find(|r| r.secs() >= need)
+        .unwrap_or(Range::Y2)
 }
 
 #[derive(Clone, Debug)]
@@ -106,5 +172,35 @@ pub fn fmt_price(p: f64) -> String {
         format!("{p:.2}")
     } else {
         format!("{p:.4}")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every `t`-cycle preset must fetch enough history for a full SMA100
+    /// warm-up behind its visible window.
+    #[test]
+    fn fetch_range_covers_presets() {
+        assert_eq!(fetch_range(Range::D1, Interval::M5), Range::D5);
+        assert_eq!(fetch_range(Range::D5, Interval::M15), Range::Mo1);
+        assert_eq!(fetch_range(Range::Mo1, Interval::M60), Range::Mo3);
+        assert_eq!(fetch_range(Range::Mo6, Interval::D1), Range::Y1);
+        assert_eq!(fetch_range(Range::Y1, Interval::D1), Range::Y2);
+    }
+
+    #[test]
+    fn fetch_range_odd_combos() {
+        // CLI-only combos still get the smallest range that fits.
+        assert_eq!(fetch_range(Range::D1, Interval::M1), Range::D5);
+        assert_eq!(fetch_range(Range::Mo3, Interval::M5), Range::Mo6);
+        // Nothing bigger than 2y exists: degrade gracefully.
+        assert_eq!(fetch_range(Range::Y2, Interval::D1), Range::Y2);
+    }
+
+    #[test]
+    fn range_secs_ascending() {
+        assert!(RANGES.windows(2).all(|w| w[0].secs() < w[1].secs()));
     }
 }

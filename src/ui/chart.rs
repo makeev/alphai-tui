@@ -7,8 +7,8 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Axis, Block, Chart, Dataset, GraphType, Paragraph};
 
 use crate::app::{App, ChartStyle};
-use crate::domain::{Candle, Quote, TickerData, fmt_price};
-use crate::indicators;
+use crate::domain::{Candle, Quote, Range, TickerData, fmt_price};
+use crate::indicators::{self, SMA_FAST, SMA_SLOW};
 use crate::ui::View;
 
 pub struct ChartView;
@@ -23,8 +23,6 @@ impl View for ChartView {
     }
 }
 
-const SMA_FAST: usize = 20;
-const SMA_SLOW: usize = 100;
 const SMA_FAST_COLOR: Color = Color::Yellow;
 const SMA_SLOW_COLOR: Color = Color::Magenta;
 const RSI_PERIOD: usize = 14;
@@ -68,13 +66,27 @@ pub fn render_chart(f: &mut Frame, area: Rect, app: &App) {
         (area, None)
     };
 
+    let cut = visible_from(&data.candles, app.range);
     match app.chart_style {
-        ChartStyle::Line => render_price_line(f, price_area, app, &symbol, data),
-        ChartStyle::Candles => render_price_candles(f, price_area, app, &symbol, data),
+        ChartStyle::Line => render_price_line(f, price_area, app, &symbol, data, cut),
+        ChartStyle::Candles => render_price_candles(f, price_area, app, &symbol, data, cut),
     }
     if let Some(r) = rsi_area {
-        render_rsi(f, r, data);
+        render_rsi(f, r, data, cut);
     }
+}
+
+/// Index of the first candle inside the visible window. Sources fetch extra
+/// history for indicator warm-up (`domain::fetch_range`); the chart renders
+/// only the trailing `range` worth, anchored on the newest candle so a
+/// closed market still shows the last session. Indicators keep the full
+/// series and are sliced with the same offset.
+fn visible_from(candles: &[Candle], range: Range) -> usize {
+    let Some(last) = candles.last() else { return 0 };
+    let cutoff = last.ts - range.secs();
+    let cut = candles.partition_point(|c| c.ts <= cutoff);
+    // Never trim below a drawable pair of candles.
+    cut.min(candles.len().saturating_sub(2))
 }
 
 fn dir_color(q: &Quote) -> Color {
@@ -85,7 +97,10 @@ fn dir_color(q: &Quote) -> Color {
     }
 }
 
-fn chart_title(symbol: &str, q: &Quote, show_sma: bool) -> Line<'static> {
+/// Legend labels appear only for SMA lines that actually have points on
+/// screen: an SMA needs `period` candles of history, which short series
+/// (finnhub's growing synthetic one, thin symbols) may not have yet.
+fn chart_title(symbol: &str, q: &Quote, data: &TickerData, show_sma: bool) -> Line<'static> {
     let change_str = match (q.change(), q.change_pct()) {
         (Some(c), Some(p)) => format!("{c:+.2} ({p:+.2}%)"),
         _ => "—".into(),
@@ -100,14 +115,11 @@ fn chart_title(symbol: &str, q: &Quote, show_sma: bool) -> Line<'static> {
         Span::styled(format!("{change_str} "), Style::new().fg(dir_color(q))),
     ];
     if show_sma {
-        spans.push(Span::styled(
-            format!("SMA{SMA_FAST} "),
-            Style::new().fg(SMA_FAST_COLOR),
-        ));
-        spans.push(Span::styled(
-            format!("SMA{SMA_SLOW} "),
-            Style::new().fg(SMA_SLOW_COLOR),
-        ));
+        for (period, color) in [(SMA_FAST, SMA_FAST_COLOR), (SMA_SLOW, SMA_SLOW_COLOR)] {
+            if data.candles.len() >= period {
+                spans.push(Span::styled(format!("SMA{period} "), Style::new().fg(color)));
+            }
+        }
     }
     Line::from(spans)
 }
@@ -126,10 +138,17 @@ fn time_label(ts: i64, fmt: &str) -> String {
 
 // -- line mode --------------------------------------------------------------
 
-fn render_price_line(f: &mut Frame, area: Rect, app: &App, symbol: &str, data: &TickerData) {
+fn render_price_line(
+    f: &mut Frame,
+    area: Rect,
+    app: &App,
+    symbol: &str,
+    data: &TickerData,
+    cut: usize,
+) {
     let q = &data.quote;
-    let points: Vec<(f64, f64)> = data
-        .candles
+    let visible = &data.candles[cut..];
+    let points: Vec<(f64, f64)> = visible
         .iter()
         .enumerate()
         .map(|(i, c)| (i as f64, c.close))
@@ -154,12 +173,15 @@ fn render_price_line(f: &mut Frame, area: Rect, app: &App, symbol: &str, data: &
         .map(|pc| vec![(0.0, pc), (x_hi, pc)])
         .unwrap_or_default();
 
+    // Indicators run over the full series (warm-up included), then shift to
+    // the visible window's x coordinates.
     let closes: Vec<f64> = data.candles.iter().map(|c| c.close).collect();
     let sma_points = |period: usize| -> Vec<(f64, f64)> {
         indicators::sma(&closes, period)
             .into_iter()
             .enumerate()
-            .filter_map(|(i, v)| v.map(|v| (i as f64, v)))
+            .skip(cut)
+            .filter_map(|(i, v)| v.map(|v| ((i - cut) as f64, v)))
             .collect()
     };
     let (sma_fast, sma_slow) = if app.show_sma {
@@ -197,12 +219,12 @@ fn render_price_line(f: &mut Frame, area: Rect, app: &App, symbol: &str, data: &
             .data(&points),
     );
 
-    let fmt = axis_time_fmt(data.candles[0].ts, data.candles.last().unwrap().ts);
-    let mid = data.candles.len() / 2;
+    let fmt = axis_time_fmt(visible[0].ts, visible.last().unwrap().ts);
+    let mid = visible.len() / 2;
     let x_labels = vec![
-        time_label(data.candles[0].ts, fmt),
-        time_label(data.candles[mid].ts, fmt),
-        time_label(data.candles.last().unwrap().ts, fmt),
+        time_label(visible[0].ts, fmt),
+        time_label(visible[mid].ts, fmt),
+        time_label(visible.last().unwrap().ts, fmt),
     ];
     let y_labels = vec![
         fmt_price(y_lo),
@@ -211,7 +233,7 @@ fn render_price_line(f: &mut Frame, area: Rect, app: &App, symbol: &str, data: &
     ];
 
     let chart = Chart::new(datasets)
-        .block(Block::bordered().title(chart_title(symbol, q, app.show_sma)))
+        .block(Block::bordered().title(chart_title(symbol, q, data, app.show_sma)))
         .x_axis(
             Axis::default()
                 .bounds([0.0, x_hi])
@@ -232,16 +254,23 @@ fn render_price_line(f: &mut Frame, area: Rect, app: &App, symbol: &str, data: &
 /// Hand-rolled candlestick renderer writing straight into the buffer at
 /// half-block resolution: two subrows per terminal row, body `█ ▀ ▄`, wick
 /// `│ ╵ ╷`. ratatui's Chart widget has no candle graph type.
-fn render_price_candles(f: &mut Frame, area: Rect, app: &App, symbol: &str, data: &TickerData) {
+fn render_price_candles(
+    f: &mut Frame,
+    area: Rect,
+    app: &App,
+    symbol: &str,
+    data: &TickerData,
+    cut: usize,
+) {
     let q = &data.quote;
-    let block = Block::bordered().title(chart_title(symbol, q, app.show_sma));
+    let visible = &data.candles[cut..];
+    let block = Block::bordered().title(chart_title(symbol, q, data, app.show_sma));
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    // Aggregation preserves the global low/high, so the y-range can be folded
-    // over the raw candles before the downsampling decision.
-    let (mut lo, mut hi) = data
-        .candles
+    // Aggregation preserves the visible low/high, so the y-range can be
+    // folded over the raw visible candles before the downsampling decision.
+    let (mut lo, mut hi) = visible
         .iter()
         .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), c| {
             (lo.min(c.low), hi.max(c.high))
@@ -270,14 +299,14 @@ fn render_price_candles(f: &mut Frame, area: Rect, app: &App, symbol: &str, data
     // even buckets.
     let max_cols = plot.width as usize;
     let max_candles = (max_cols / 2).max(1);
-    let (display, sample_idx): (Vec<Candle>, Vec<usize>) = if data.candles.len() > max_candles {
-        let ranges = bucket_ranges(data.candles.len(), max_candles);
+    let (display, sample_idx): (Vec<Candle>, Vec<usize>) = if visible.len() > max_candles {
+        let ranges = bucket_ranges(visible.len(), max_candles);
         (
-            ranges.iter().map(|r| aggregate(&data.candles[r.clone()])).collect(),
+            ranges.iter().map(|r| aggregate(&visible[r.clone()])).collect(),
             ranges.iter().map(|r| r.end - 1).collect(),
         )
     } else {
-        (data.candles.clone(), (0..data.candles.len()).collect())
+        (visible.to_vec(), (0..visible.len()).collect())
     };
     // With few candles widen each one instead of leaving the plot empty:
     // body up to 3 columns.
@@ -320,12 +349,18 @@ fn render_price_candles(f: &mut Frame, area: Rect, app: &App, symbol: &str, data
 
     // SMA overlay: one dot per column, threading between candles (bodies win
     // shared cells). Slow first so the fast line wins where they cross.
+    // Computed over the full series; `sample_idx` entries index into
+    // `visible`, hence the `cut` offset. Values pushed outside the visible
+    // y-range by warm-up history are skipped, not pinned to the edge.
     if app.show_sma {
         let closes: Vec<f64> = data.candles.iter().map(|c| c.close).collect();
         for (period, color) in [(SMA_SLOW, SMA_SLOW_COLOR), (SMA_FAST, SMA_FAST_COLOR)] {
             let line = indicators::sma(&closes, period);
             for (i, &raw) in sample_idx.iter().enumerate() {
-                let Some(v) = line[raw] else { continue };
+                let Some(v) = line[cut + raw] else { continue };
+                if v < y_lo || v > y_hi {
+                    continue;
+                }
                 let row = (scale(v, y_lo, y_hi, plot.height as usize * 2) / 2) as u16;
                 let x = slot_x(i) + (slot - body_w) + body_w / 2;
                 if let Some(cell) = buf.cell_mut((x, plot.y + row))
@@ -461,7 +496,7 @@ fn aggregate(chunk: &[Candle]) -> Candle {
 
 // -- RSI panel ----------------------------------------------------------------
 
-fn render_rsi(f: &mut Frame, area: Rect, data: &TickerData) {
+fn render_rsi(f: &mut Frame, area: Rect, data: &TickerData, cut: usize) {
     let closes: Vec<f64> = data.candles.iter().map(|c| c.close).collect();
     let rsi = indicators::rsi(&closes, RSI_PERIOD);
     let Some(last) = rsi.last().copied().flatten() else {
@@ -475,13 +510,15 @@ fn render_rsi(f: &mut Frame, area: Rect, data: &TickerData) {
         return;
     };
 
-    let x_hi = (closes.len() - 1) as f64;
+    // Same visible-window slicing as the price chart above it.
+    let x_hi = (closes.len() - 1 - cut) as f64;
     let ref30 = [(0.0, 30.0), (x_hi, 30.0)];
     let ref70 = [(0.0, 70.0), (x_hi, 70.0)];
     let points: Vec<(f64, f64)> = rsi
         .iter()
         .enumerate()
-        .filter_map(|(i, v)| v.map(|v| (i as f64, v)))
+        .skip(cut)
+        .filter_map(|(i, v)| v.map(|v| ((i - cut) as f64, v)))
         .collect();
 
     let mut datasets = Vec::new();
@@ -531,6 +568,34 @@ mod tests {
 
     fn candle(open: f64, high: f64, low: f64, close: f64) -> Candle {
         Candle { ts: 0, open, high, low, close, volume: None }
+    }
+
+    fn flat_series(n: usize, step_secs: i64) -> Vec<Candle> {
+        (0..n)
+            .map(|i| {
+                let mut c = candle(1.0, 1.0, 1.0, 1.0);
+                c.ts = i as i64 * step_secs;
+                c
+            })
+            .collect()
+    }
+
+    #[test]
+    fn visible_from_trims_to_the_trailing_range() {
+        // 3 days of gapless 5m candles, 1d window: only the last day shows.
+        let candles = flat_series(3 * 288, 300);
+        assert_eq!(visible_from(&candles, Range::D1), 2 * 288);
+        // Everything fits into the window: nothing to trim.
+        assert_eq!(visible_from(&candles[..10], Range::D1), 0);
+        assert_eq!(visible_from(&[], Range::D1), 0);
+    }
+
+    #[test]
+    fn visible_from_keeps_a_drawable_pair() {
+        // Candles sparser than the window (10 days apart, 1d range): the
+        // window alone would leave a single candle.
+        let candles = flat_series(5, 10 * 86_400);
+        assert_eq!(visible_from(&candles, Range::D1), 3);
     }
 
     #[test]

@@ -165,10 +165,40 @@ fn sma_toggle_hides_legend() {
     app.view_idx = ui::VIEW_CHART;
     let screen = render(&mut app);
     assert!(screen.contains("SMA20"), "screen:\n{screen}");
-    assert!(screen.contains("SMA100"), "screen:\n{screen}");
+    // The 30-candle fixture cannot produce an SMA100 line, so its legend
+    // label must not appear either.
+    assert!(!screen.contains("SMA100"), "screen:\n{screen}");
     press(&mut app, KeyCode::Char('m'));
     let screen = render(&mut app);
     assert!(!screen.contains("SMA20"), "screen:\n{screen}");
+}
+
+/// With warm-up history behind the visible window (fetch_range over-fetches
+/// for exactly this) the SMA100 legend appears; rendering also exercises the
+/// candle renderer and RSI panel with a non-zero visible-window offset.
+#[test]
+fn sma_slow_appears_with_warmup_history() {
+    let mut app = fake_app();
+    app.view_idx = ui::VIEW_CHART;
+    let candles: Vec<Candle> = (0..600)
+        .map(|i| {
+            let close = 200.0 + (i % 40) as f64 * 0.5;
+            Candle {
+                ts: 1_700_000_000 + i * 300,
+                open: close - 0.2,
+                high: close + 0.3,
+                low: close - 0.4,
+                close,
+                volume: Some(1000.0),
+            }
+        })
+        .collect();
+    app.data.get_mut("AAPL").unwrap().candles = candles;
+    let screen = render(&mut app);
+    assert!(screen.contains("SMA100"), "screen:\n{screen}");
+    press(&mut app, KeyCode::Char('c'));
+    let screen = render(&mut app);
+    assert!(screen.contains("SMA100"), "screen:\n{screen}");
 }
 
 #[test]
