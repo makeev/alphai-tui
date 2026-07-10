@@ -6,18 +6,27 @@ use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use tokio::sync::Notify;
 
-use crate::alphai::{Article, InsiderSummary, SentimentSummary};
-use crate::app::{App, AppInit, ChartStyle, InsiderBundle, NewsBundle};
+use crate::alphai::{self, Article, InsiderSummary, SentimentSummary, TRENDING_KEY};
+use crate::app::{App, AppInit, ChartStyle, InsiderBundle, NewsBundle, NewsLayout, NewsScope};
 use crate::config::Config;
 use crate::domain::{Candle, Interval, Quote, Range, TickerData};
 use crate::source::make_source;
 use crate::ui;
 
 fn empty_app(symbols: Vec<String>) -> App {
+    let (app, _rx) = empty_app_with_cmds(symbols);
+    app
+}
+
+/// Like `empty_app`, but keeps the AlphaAI command receiver alive so tests
+/// can assert which fetches the app requested.
+fn empty_app_with_cmds(
+    symbols: Vec<String>,
+) -> (App, tokio::sync::mpsc::UnboundedReceiver<alphai::Cmd>) {
     let (_tx, rx) = tokio::sync::mpsc::unbounded_channel();
-    let (alphai_tx, _alphai_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (alphai_tx, alphai_rx) = tokio::sync::mpsc::unbounded_channel();
     let source = make_source("yahoo", None, None).unwrap();
-    App::new(AppInit {
+    let app = App::new(AppInit {
         symbols,
         source: Arc::new(RwLock::new(source)),
         source_name: "yahoo",
@@ -30,7 +39,8 @@ fn empty_app(symbols: Vec<String>) -> App {
         config: Config::default(),
         alphai_enabled: true,
         first_run: false,
-    })
+    });
+    (app, alphai_rx)
 }
 
 fn press(app: &mut App, code: KeyCode) {
@@ -92,10 +102,59 @@ fn article(title: &str, ticker: &str, score: i64, sentiment: &str) -> Article {
             "relevance_score": {score},
             "ai_trading_insights": {{
               "ticker_analysis": [
-                {{"ticker": "{ticker}", "impact_analysis": {{"sentiment": "{sentiment}"}}}}
-              ]
+                {{"ticker": "{ticker}", "impact_analysis": {{
+                  "sentiment": "{sentiment}",
+                  "confidence": "high",
+                  "price_impact_prediction": "+2-4% near term",
+                  "summary": "Impact summary for {title}."
+                }}}}
+              ],
+              "news_trading_value": {{
+                "actionability_score": "high",
+                "information_novelty": 7,
+                "timing_relevance": "pre-market"
+              }},
+              "alternative_perspectives": {{
+                "contrarian_view": "Priced in already.",
+                "overlooked_factors": "Margins are thinning."
+              }}
+            }},
+            "news_context_enhancement": {{
+              "background_context": "Follows last quarter's beat.",
+              "key_entities": [
+                {{"name": "Acme", "type": "company", "description": "widget maker"}}
+              ],
+              "market_relevance_summary": "Read-through for the sector."
             }}
           }}
+        }}"#
+    ))
+    .unwrap()
+}
+
+/// A story-collapsed row as the market and trending feeds return them: two
+/// tickers and an outlet count.
+fn market_article(title: &str, sources: i64) -> Article {
+    let mut a = article(title, "AAPL", 8, "positive");
+    a.enrichment.tickers.push("MSFT".into());
+    a.sources_count = Some(sources);
+    a
+}
+
+/// A Form 4 row: templated title, ownership form, no AI enrichment (the
+/// sentiment glyph must come from the title fallback).
+fn filing(title: &str, form: &str) -> Article {
+    serde_json::from_str(&format!(
+        r#"{{
+          "original": {{
+            "title": "{title}",
+            "url": "https://example.com/f",
+            "time_published": "2026-07-10T12:00:00Z",
+            "summary": "Summary of {title}.",
+            "source_domain": "sec.gov",
+            "ownership_form": "{form}"
+          }},
+          "enrichment": {{"category": "insider", "tickers": ["AAPL"], "relevance_score": 7}}
         }}"#
     ))
     .unwrap()
@@ -248,11 +307,11 @@ fn range_switch_keeps_news_bundle() {
     app.view_idx = ui::VIEW_NEWS;
     app.news.insert(
         "AAPL".into(),
-        NewsBundle {
-            articles: vec![article("Apple beats expectations", "AAPL", 9, "positive")],
-            sentiment: None,
-            fetched: Instant::now(),
-        },
+        NewsBundle::new(
+            vec![article("Apple beats expectations", "AAPL", 9, "positive")],
+            None,
+            None,
+        ),
     );
     press(&mut app, KeyCode::Char('t'));
     assert!(app.news.contains_key("AAPL"), "range switch dropped the news bundle");
@@ -264,11 +323,11 @@ fn split_view_combines_table_chart_and_news() {
     app.view_idx = ui::VIEW_SPLIT;
     app.news.insert(
         "AAPL".into(),
-        NewsBundle {
-            articles: vec![article("Apple beats expectations", "AAPL", 9, "positive")],
-            sentiment: None,
-            fetched: Instant::now(),
-        },
+        NewsBundle::new(
+            vec![article("Apple beats expectations", "AAPL", 9, "positive")],
+            None,
+            None,
+        ),
     );
     let screen = render(&mut app);
     assert!(screen.contains("Watchlist"), "screen:\n{screen}");
@@ -325,31 +384,34 @@ fn news_view_lists_articles_and_sentiment() {
     app.view_idx = ui::VIEW_NEWS;
     app.news.insert(
         "AAPL".into(),
-        NewsBundle {
-            articles: vec![
+        NewsBundle::new(
+            vec![
                 article("Apple beats expectations", "AAPL", 9, "positive"),
                 article("Supplier note weighs on outlook", "AAPL", 6, "negative"),
             ],
-            sentiment: Some(SentimentSummary {
+            Some(SentimentSummary {
                 days: 7,
                 total: 20,
                 bullish: 12,
                 neutral: 5,
                 bearish: 3,
             }),
-            fetched: Instant::now(),
-        },
+            None,
+        ),
     );
     let screen = render(&mut app);
     assert!(screen.contains("News · AAPL"), "screen:\n{screen}");
     assert!(screen.contains("Apple beats expectations"), "screen:\n{screen}");
     assert!(screen.contains("12 bullish"), "screen:\n{screen}");
     assert!(screen.contains("▲"), "sentiment glyph missing:\n{screen}");
-    // detail pane shows the selected article's summary
+    // detail pane shows the selected article's summary and the AI meta calls
     assert!(
         screen.contains("Summary of Apple beats expectations"),
         "screen:\n{screen}"
     );
+    assert!(screen.contains("nov 7"), "novelty missing from meta:\n{screen}");
+    assert!(screen.contains("positive/high"), "sentiment/confidence missing:\n{screen}");
+    assert!(screen.contains("act high"), "actionability missing:\n{screen}");
 }
 
 #[test]
@@ -389,11 +451,11 @@ fn insider_view_shows_summary_and_filings() {
     .unwrap();
     app.insider.insert(
         "AAPL".into(),
-        InsiderBundle {
-            articles: vec![article("Apple insider sold $12.5M of stock", "AAPL", 7, "negative")],
-            summary: Some(summary),
-            fetched: Instant::now(),
-        },
+        InsiderBundle::new(
+            vec![filing("Apple insider sold $12.5M of stock", "direct")],
+            Some(summary),
+            None,
+        ),
     );
     let screen = render(&mut app);
     assert!(screen.contains("Insider · AAPL"), "screen:\n{screen}");
@@ -401,9 +463,319 @@ fn insider_view_shows_summary_and_filings() {
     assert!(screen.contains("$224.6M"), "screen:\n{screen}");
     assert!(screen.contains("85% under 10b5-1"), "screen:\n{screen}");
     assert!(screen.contains("COOK TIMOTHY"), "screen:\n{screen}");
+    assert!(screen.contains("×3"), "transaction count missing:\n{screen}");
+    // No AI enrichment on the filing: the sell glyph comes from the title
+    // fallback, and the ownership marker sits between glyph and title.
+    assert!(screen.contains("▼  D Apple insider sold"), "screen:\n{screen}");
+}
+
+#[test]
+fn news_scope_cycles_and_relabels() {
+    let mut app = fake_app();
+    app.view_idx = ui::VIEW_NEWS;
+    assert_eq!(app.news_cache_key(), "AAPL");
+    press(&mut app, KeyCode::Char('f'));
+    assert_eq!(app.news_scope, NewsScope::Market);
+    assert_eq!(app.news_cache_key(), "*");
+    assert!(render(&mut app).contains("News · market"));
+    press(&mut app, KeyCode::Char('f'));
+    assert_eq!(app.news_scope, NewsScope::Trending);
+    assert_eq!(app.news_cache_key(), TRENDING_KEY);
+    assert!(render(&mut app).contains("News · trending"));
+    press(&mut app, KeyCode::Char('f'));
+    assert_eq!(app.news_cache_key(), "AAPL");
+}
+
+#[test]
+fn market_scope_shows_tickers_and_sources_count() {
+    let mut app = fake_app();
+    app.view_idx = ui::VIEW_NEWS;
+    app.news_scope = NewsScope::Market;
+    app.news.insert(
+        "*".into(),
+        NewsBundle::new(
+            vec![market_article("Fed minutes move futures", 7)],
+            None,
+            None,
+        ),
+    );
+    let screen = render(&mut app);
+    assert!(screen.contains("AAPL,MSFT"), "ticker cell missing:\n{screen}");
+    assert!(screen.contains("×7"), "outlet count missing:\n{screen}");
+    assert!(screen.contains("reprints collapsed"), "head line missing:\n{screen}");
+}
+
+#[test]
+fn trending_view_lists_articles() {
+    let mut app = fake_app();
+    app.view_idx = ui::VIEW_NEWS;
+    app.news_scope = NewsScope::Trending;
+    app.news.insert(
+        TRENDING_KEY.into(),
+        NewsBundle::new(
+            vec![market_article("Chip stocks rally on export news", 5)],
+            None,
+            None,
+        ),
+    );
+    let screen = render(&mut app);
+    assert!(screen.contains("News · trending"), "screen:\n{screen}");
+    assert!(screen.contains("top 10 of the last 48h"), "screen:\n{screen}");
+    assert!(screen.contains("Chip stocks rally"), "screen:\n{screen}");
+    assert!(screen.contains("×5"), "outlet count missing:\n{screen}");
+}
+
+#[test]
+fn article_overlay_opens_scrolls_and_closes() {
+    let mut app = fake_app();
+    app.view_idx = ui::VIEW_NEWS;
+    app.news.insert(
+        "AAPL".into(),
+        NewsBundle::new(
+            vec![article("Apple beats expectations", "AAPL", 9, "positive")],
+            None,
+            None,
+        ),
+    );
+    press(&mut app, KeyCode::Char('v'));
+    assert!(app.article_overlay.open);
+    let screen = render(&mut app);
+    assert!(screen.contains("Article"), "overlay missing:\n{screen}");
+    assert!(screen.contains("price: +2-4% near term"), "impact missing:\n{screen}");
+    assert!(screen.contains("Trading value"), "screen:\n{screen}");
+    assert!(screen.contains("contrarian: Priced in already."), "screen:\n{screen}");
+    assert!(screen.contains("entities: Acme (company)"), "screen:\n{screen}");
+    press(&mut app, KeyCode::Char('j'));
+    assert_eq!(app.article_overlay.scroll, 1);
+    render(&mut app); // must not panic; the render pass clamps the scroll
+    press(&mut app, KeyCode::Esc);
+    assert!(!app.article_overlay.open);
+    // The card pane still shows the article; only the modal frame must go.
+    assert!(!render(&mut app).contains(" Article "), "overlay did not close");
+}
+
+#[test]
+fn overlay_steals_nav_keys() {
+    let mut app = fake_app();
+    app.view_idx = ui::VIEW_NEWS;
+    app.news.insert(
+        "AAPL".into(),
+        NewsBundle::new(
+            vec![
+                article("First", "AAPL", 9, "positive"),
+                article("Second", "AAPL", 8, "positive"),
+            ],
+            None,
+            None,
+        ),
+    );
+    press(&mut app, KeyCode::Char('v'));
+    press(&mut app, KeyCode::Char('j'));
+    press(&mut app, KeyCode::Char('l'));
+    assert_eq!(app.news_selected, 0, "overlay leaked j to the article list");
+    assert_eq!(app.selected, 0, "overlay leaked l to the ticker list");
+}
+
+#[test]
+fn overlay_works_from_insider_view() {
+    let mut app = fake_app();
+    app.view_idx = ui::VIEW_INSIDER;
+    app.insider.insert(
+        "AAPL".into(),
+        InsiderBundle::new(
+            vec![filing("Officer bought 10,000 shares", "indirect")],
+            None,
+            None,
+        ),
+    );
+    press(&mut app, KeyCode::Char('v'));
+    assert!(app.article_overlay.open);
+    let screen = render(&mut app);
+    assert!(screen.contains("Officer bought 10,000 shares"), "screen:\n{screen}");
+    assert!(screen.contains("Summary of Officer bought"), "screen:\n{screen}");
+}
+
+#[test]
+fn overlay_noop_when_no_articles() {
+    let mut app = fake_app();
+    app.view_idx = ui::VIEW_NEWS;
+    press(&mut app, KeyCode::Char('v'));
+    assert!(!app.article_overlay.open, "overlay opened with nothing to show");
+}
+
+#[test]
+fn news_card_pane_shown_by_default() {
+    let mut app = fake_app();
+    app.view_idx = ui::VIEW_NEWS;
+    app.news.insert(
+        "AAPL".into(),
+        NewsBundle::new(
+            vec![article("Apple beats expectations", "AAPL", 9, "positive")],
+            None,
+            None,
+        ),
+    );
+    let screen = render(&mut app);
+    // The full AI card sits next to the list without opening the overlay.
+    assert!(screen.contains(" card ·"), "card pane missing:\n{screen}");
+    assert!(screen.contains("Trading value"), "card content missing:\n{screen}");
+    assert!(screen.contains("contrarian: Priced in already."), "screen:\n{screen}");
+}
+
+#[test]
+fn x_cycles_news_layout() {
+    let mut app = fake_app();
+    app.view_idx = ui::VIEW_NEWS;
+    app.news.insert(
+        "AAPL".into(),
+        NewsBundle::new(
+            vec![article("Apple beats expectations", "AAPL", 9, "positive")],
+            None,
+            None,
+        ),
+    );
+    assert_eq!(app.news_layout, NewsLayout::Side);
+    press(&mut app, KeyCode::Char('x'));
+    assert_eq!(app.news_layout, NewsLayout::Stacked);
+    let screen = render(&mut app);
+    assert!(screen.contains(" card ·"), "card pane missing in stacked:\n{screen}");
+    press(&mut app, KeyCode::Char('x'));
+    assert_eq!(app.news_layout, NewsLayout::Side);
+}
+
+#[test]
+fn j_at_last_row_requests_next_page() {
+    let (mut app, mut cmds) = empty_app_with_cmds(vec!["AAPL".into()]);
+    app.view_idx = ui::VIEW_NEWS;
+    app.news.insert(
+        "AAPL".into(),
+        NewsBundle::new(
+            vec![article("Apple beats expectations", "AAPL", 9, "positive")],
+            None,
+            Some("cur1".into()),
+        ),
+    );
     assert!(
-        screen.contains("Apple insider sold $12.5M of stock"),
-        "screen:\n{screen}"
+        render(&mut app).contains("↓ load older articles"),
+        "load-more hint missing"
+    );
+    press(&mut app, KeyCode::Char('j'));
+    match cmds.try_recv() {
+        Ok(alphai::Cmd::FetchNews { symbol, cursor }) => {
+            assert_eq!(symbol.as_deref(), Some("AAPL"));
+            assert_eq!(cursor.as_deref(), Some("cur1"));
+        }
+        other => panic!("expected a page fetch, got {:?}", other.is_ok()),
+    }
+    // While the page is in flight the hint reports progress and a second j
+    // must not spend another request.
+    assert!(render(&mut app).contains("loading…"), "no in-flight feedback");
+    press(&mut app, KeyCode::Char('j'));
+    assert!(cmds.try_recv().is_err(), "duplicate page fetch sent");
+}
+
+#[test]
+fn insider_j_at_last_row_requests_next_page() {
+    let (mut app, mut cmds) = empty_app_with_cmds(vec!["AAPL".into()]);
+    app.view_idx = ui::VIEW_INSIDER;
+    app.insider.insert(
+        "AAPL".into(),
+        InsiderBundle::new(
+            vec![filing("Apple insider sold $12.5M of stock", "direct")],
+            None,
+            Some("cur9".into()),
+        ),
+    );
+    press(&mut app, KeyCode::Char('j'));
+    match cmds.try_recv() {
+        Ok(alphai::Cmd::FetchInsider { symbol, cursor }) => {
+            assert_eq!(symbol, "AAPL");
+            assert_eq!(cursor.as_deref(), Some("cur9"));
+        }
+        other => panic!("expected an insider page fetch, got {:?}", other.is_ok()),
+    }
+}
+
+#[test]
+fn page_append_extends_list_and_dedupes() {
+    fn uid_article(uid: &str, title: &str) -> Article {
+        serde_json::from_str(&format!(
+            r#"{{"original": {{"uid": "{uid}", "title": "{title}"}}}}"#
+        ))
+        .unwrap()
+    }
+    let mut app = empty_app(vec!["AAPL".into()]);
+    app.news.insert(
+        "AAPL".into(),
+        NewsBundle::new(vec![uid_article("aaa", "First")], None, Some("c1".into())),
+    );
+    app.apply_alphai(alphai::Event::News {
+        key: "AAPL".into(),
+        articles: vec![uid_article("aaa", "First reprint"), uid_article("bbb", "Second")],
+        sentiment: None,
+        next_cursor: Some("c2".into()),
+        append: true,
+    });
+    let b = &app.news["AAPL"];
+    assert_eq!(b.articles.len(), 2, "page boundary duplicate not dropped");
+    assert_eq!(b.articles[1].original.title, "Second");
+    assert_eq!(b.next_cursor.as_deref(), Some("c2"));
+}
+
+#[test]
+fn archive_gate_shows_upsell_and_stops_paging() {
+    let (mut app, mut cmds) = empty_app_with_cmds(vec!["AAPL".into()]);
+    app.view_idx = ui::VIEW_NEWS;
+    app.news.insert(
+        "AAPL".into(),
+        NewsBundle::new(
+            vec![article("Apple beats expectations", "AAPL", 9, "positive")],
+            None,
+            Some("cur1".into()),
+        ),
+    );
+    app.apply_alphai(alphai::Event::PageError {
+        key: "AAPL".into(),
+        error: alphai::ARCHIVE_GATE_MSG.into(),
+        gated: true,
+    });
+    let b = &app.news["AAPL"];
+    assert!(b.gated);
+    assert_eq!(b.next_cursor, None, "gated feed still offers a cursor");
+    // The list survives and the hint sells the upgrade instead of an error.
+    let screen = render(&mut app);
+    assert!(screen.contains("Apple beats expectations"), "list dropped:\n{screen}");
+    assert!(screen.contains("archive limit"), "upsell missing:\n{screen}");
+    press(&mut app, KeyCode::Char('j'));
+    assert!(cmds.try_recv().is_err(), "gated feed still paged");
+}
+
+#[test]
+fn ttl_refetch_waits_for_top_row() {
+    let (mut app, mut cmds) = empty_app_with_cmds(vec!["AAPL".into()]);
+    app.view_idx = ui::VIEW_NEWS;
+    app.news.insert(
+        "AAPL".into(),
+        NewsBundle::new(
+            vec![
+                article("First", "AAPL", 9, "positive"),
+                article("Second", "AAPL", 8, "positive"),
+            ],
+            None,
+            None,
+        ),
+    );
+    app.news.get_mut("AAPL").unwrap().fetched =
+        Instant::now() - std::time::Duration::from_secs(600);
+    // Reader is mid-list: a refetch would drop loaded pages, so hold off.
+    app.news_selected = 1;
+    app.ensure_alphai_data();
+    assert!(cmds.try_recv().is_err(), "refetched under the reader");
+    app.news_selected = 0;
+    app.ensure_alphai_data();
+    assert!(
+        matches!(cmds.try_recv(), Ok(alphai::Cmd::FetchNews { cursor: None, .. })),
+        "no refetch at the top row"
     );
 }
 

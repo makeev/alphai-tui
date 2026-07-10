@@ -10,11 +10,19 @@ Built in Rust with [ratatui](https://ratatui.rs).
 
 - **Split** (the default view): watchlist and chart side by side in the top
   half, the news feed in the bottom half (hidden on very small terminals).
-- **News**: enriched articles for the selected ticker (or the whole market,
-  toggle with `f`), each with a 1 to 10 relevance score, category and a
-  per-ticker AI sentiment call, plus a 7-day bullish/bearish rollup.
-  Enter opens the article page on alphai.io; a settings toggle switches
-  that to the original source site.
+- **News**: enriched articles for the selected ticker, the whole market or
+  the 48-hour trending top 10 (`f` cycles the three scopes), shown as a
+  list next to a full article card with the complete AI analysis: price
+  impact prediction with confidence, relevance and novelty scores,
+  actionability, background context, key entities and a contrarian view.
+  `x` flips the layout between side-by-side and list-over-card, `v` expands
+  the card to full screen, PgUp/PgDn scroll it. Pressing down on the last
+  row loads the next page of the feed; the page size adapts to your plan
+  automatically (10 per page, 50 on Pro keys). Market and trending scopes
+  collapse syndicated reprints to one row per story and show how many
+  outlets carry it (`×7`). Enter opens the article page on alphai.io; a
+  settings toggle switches that to the original source site. A 7-day
+  bullish/bearish rollup tops the ticker scope.
 - **Table**: watchlist with price, change, day range and unicode sparklines.
 - **Chart**: candlestick chart of the selected ticker at half-block
   resolution, with a previous-close reference line, SMA 20/100 overlays and
@@ -25,7 +33,10 @@ Built in Rust with [ratatui](https://ratatui.rs).
   instead of waiting a hundred candles to warm up.
 - **Insider**: SEC Form 4 activity for the selected ticker. A 30-day rollup
   (buys vs sells, dollar volumes, share of pre-arranged 10b5-1 plan trades,
-  most active insiders) above the stream of filing events.
+  most active insiders with their transaction counts) above the stream of
+  filing events. Each filing row carries a buy/sell glyph and a `D`/`I`
+  marker for direct or indirect ownership. The stream pages like the news
+  feed: down on the last row loads more.
 - In-app settings (`s`): pick the price source, paste API keys once and
   choose where Enter opens news articles.
   Everything is saved to a config file, so after the first run a bare
@@ -92,7 +103,11 @@ defaults. API keys can also come from env vars, which win over the config:
 | `↑` `↓` / `j` `k` | news, insider | scroll articles |
 | `←` `→` / `h` `l` | news, insider | switch ticker |
 | `Enter` / `o` | news, insider | open article in browser |
-| `f` | news, split | toggle selected ticker / whole market |
+| `v` | news, insider | fullscreen article card; scroll with `↑` `↓`, `Esc` closes |
+| `x` | news | flip the list/card layout: side-by-side or stacked |
+| `PgUp` `PgDn` | news | scroll the article card pane |
+| `↓` / `j` on the last row | news, insider | load the next page of the feed |
+| `f` | news, split | cycle news scope: selected ticker, whole market, trending |
 | `c` | chart, split | toggle candlestick / line chart |
 | `m` | chart, split | toggle SMA 20 and SMA 100 overlays |
 | `i` | chart, split | toggle the RSI(14) panel |
@@ -139,11 +154,17 @@ defaults. API keys can also come from env vars, which win over the config:
 
 - [AlphaAI](https://alphai.io): AI-enriched financial news feed. Every
   article carries validated tickers, a category, a deterministic 1 to 10
-  relevance score and per-ticker sentiment; insider rows are generated
+  relevance score and a full per-ticker AI analysis (sentiment, price
+  impact, confidence, novelty, actionability); insider rows are generated
   from SEC EDGAR Form 4 filings, one row per economic event. The free tier
   (no card) allows 20 requests/min and 100/day. The app is careful with
-  that budget: it fetches only what the visible view needs and caches each
-  response for 5 minutes. Full API reference:
+  that budget: it fetches only what the visible view needs (the trending
+  scope is one extra request), caches each response for 5 minutes, loads
+  further pages only when you ask for them, and the article card reuses
+  data already fetched with the list. Feeds page 10 articles at a time (50
+  on Pro keys, detected automatically). Paging back past your plan's
+  archive horizon (30 days on Free, 90 on Basic) shows an upgrade hint
+  instead of older articles. Full API reference:
   [alphai.io/developers](https://alphai.io/developers).
 
 Ticker forms follow the US/Yahoo convention (`AAPL`, `BTC-USD`, `VOD.L`),
@@ -191,6 +212,7 @@ src/
     split.rs     table + chart
     news.rs      article list + sentiment rollup + detail pane
     insider.rs   Form 4 rollup + filing list
+    article.rs   modal full-article card (AI analysis, context)
     settings.rs  modal settings overlay
 ```
 

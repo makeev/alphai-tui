@@ -1,3 +1,4 @@
+pub mod article;
 pub mod chart;
 pub mod insider;
 pub mod news;
@@ -44,8 +45,23 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     f.render_widget(header_line(app), header);
     VIEWS[app.view_idx].render(f, body, app);
     f.render_widget(footer_line(app), footer);
+    if app.article_overlay.open {
+        article::render(f, app);
+    }
     if app.settings.open {
         settings::render(f, app);
+    }
+}
+
+/// Centered modal rect used by the settings and article overlays.
+pub(crate) fn centered(r: Rect, width: u16, height: u16) -> Rect {
+    let w = width.min(r.width.saturating_sub(2));
+    let h = height.min(r.height.saturating_sub(2));
+    Rect {
+        x: r.x + (r.width.saturating_sub(w)) / 2,
+        y: r.y + (r.height.saturating_sub(h)) / 2,
+        width: w,
+        height: h,
     }
 }
 
@@ -82,10 +98,12 @@ mod tests;
 fn footer_line(app: &App) -> Paragraph<'static> {
     let hints = if app.settings.open {
         " ↑↓ move · enter edit/toggle/save · esc close"
+    } else if app.article_overlay.open {
+        " ↑↓/jk scroll · pgup/pgdn page · ⏎ open in browser · esc/v close"
     } else {
         match app.view_idx {
-            VIEW_NEWS => " q quit · tab/1-9 view · ↑↓ article · ←→ ticker · ⏎ open · f scope · r refresh · s settings",
-            VIEW_INSIDER => " q quit · tab/1-9 view · ↑↓ article · ←→ ticker · ⏎ open · r refresh · s settings",
+            VIEW_NEWS => " q quit · ↑↓ article · ←→ ticker · ⏎ open · v card · x layout · f scope · r refresh · s settings",
+            VIEW_INSIDER => " q quit · 1-9 view · ↑↓ article · ←→ ticker · ⏎ open · v card · r refresh · s settings",
             VIEW_SPLIT => " q quit · tab/1-9 view · ↑↓ select · f scope · c/m/i chart · t interval · r refresh · s settings",
             VIEW_CHART => " q quit · tab/1-9 view · ↑↓ select · c style · m sma · i rsi · t interval · r refresh · s settings",
             _ => " q quit · tab/1-9 view · ↑↓ select · t interval · r refresh · s settings",

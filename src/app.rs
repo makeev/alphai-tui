@@ -21,14 +21,57 @@ use crate::ui;
 pub struct NewsBundle {
     pub articles: Vec<Article>,
     pub sentiment: Option<SentimentSummary>,
+    /// Cursor for the next (older) page; None = end of the feed (or gated).
+    pub next_cursor: Option<String>,
+    /// Last load-more failure, shown under the list without dropping it.
+    pub page_error: Option<String>,
+    /// Paging hit the plan's archive horizon: stop offering more pages.
+    pub gated: bool,
     pub fetched: Instant,
+}
+
+impl NewsBundle {
+    pub fn new(
+        articles: Vec<Article>,
+        sentiment: Option<SentimentSummary>,
+        next_cursor: Option<String>,
+    ) -> Self {
+        Self {
+            articles,
+            sentiment,
+            next_cursor,
+            page_error: None,
+            gated: false,
+            fetched: Instant::now(),
+        }
+    }
 }
 
 /// Cached insider feed + 30d rollup for one symbol.
 pub struct InsiderBundle {
     pub articles: Vec<Article>,
     pub summary: Option<InsiderSummary>,
+    pub next_cursor: Option<String>,
+    pub page_error: Option<String>,
+    pub gated: bool,
     pub fetched: Instant,
+}
+
+impl InsiderBundle {
+    pub fn new(
+        articles: Vec<Article>,
+        summary: Option<InsiderSummary>,
+        next_cursor: Option<String>,
+    ) -> Self {
+        Self {
+            articles,
+            summary,
+            next_cursor,
+            page_error: None,
+            gated: false,
+            fetched: Instant::now(),
+        }
+    }
 }
 
 /// State of the settings overlay. Field order (cursor): price source,
@@ -59,6 +102,63 @@ pub const SETTINGS_ROWS: usize = 7;
 pub enum ChartStyle {
     Candles,
     Line,
+}
+
+/// News feed scope the f key cycles: the selected ticker, the whole market
+/// (story-collapsed), or the 48h trending top 10. Session-only, like the
+/// chart options.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum NewsScope {
+    #[default]
+    Ticker,
+    Market,
+    Trending,
+}
+
+impl NewsScope {
+    pub fn next(self) -> Self {
+        match self {
+            Self::Ticker => Self::Market,
+            Self::Market => Self::Trending,
+            Self::Trending => Self::Ticker,
+        }
+    }
+
+    /// Label for block titles and head lines.
+    pub fn label(self, symbol: &str) -> &str {
+        match self {
+            Self::Ticker => symbol,
+            Self::Market => "market",
+            Self::Trending => "trending",
+        }
+    }
+}
+
+/// State of the full-article card overlay (v in the News/Insider views).
+#[derive(Default)]
+pub struct ArticleOverlay {
+    pub open: bool,
+    pub scroll: u16,
+}
+
+/// Where the News view puts the article card pane relative to the list
+/// (x cycles). Session-only, like the chart options.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum NewsLayout {
+    /// List on the left, card on the right.
+    #[default]
+    Side,
+    /// List on top, card below.
+    Stacked,
+}
+
+impl NewsLayout {
+    pub fn next(self) -> Self {
+        match self {
+            Self::Side => Self::Stacked,
+            Self::Stacked => Self::Side,
+        }
+    }
 }
 
 /// The combos the t and T keys cycle through; wraps at the ends. A startup
@@ -117,8 +217,12 @@ pub struct App {
     pub alphai_errors: HashMap<String, String>,
     pub alphai_enabled: bool,
     pub news_selected: usize,
-    pub news_market_wide: bool,
+    pub news_scope: NewsScope,
+    pub news_layout: NewsLayout,
+    /// Scroll of the embedded card pane (News view); reset on selection moves.
+    pub card_scroll: u16,
     pub news_table_state: TableState,
+    pub article_overlay: ArticleOverlay,
     pub settings: SettingsState,
     pub config: Config,
     source: SharedSource,
@@ -150,8 +254,11 @@ impl App {
             alphai_errors: HashMap::new(),
             alphai_enabled: init.alphai_enabled,
             news_selected: 0,
-            news_market_wide: false,
+            news_scope: NewsScope::default(),
+            news_layout: NewsLayout::default(),
+            card_scroll: 0,
             news_table_state: TableState::default(),
+            article_overlay: ArticleOverlay::default(),
             settings: SettingsState::default(),
             config: init.config,
             source: init.source,
@@ -174,11 +281,17 @@ impl App {
 
     /// Cache key the News view is currently looking at.
     pub fn news_cache_key(&self) -> String {
-        if self.news_market_wide {
-            alphai::MARKET_KEY.to_string()
-        } else {
-            self.selected_symbol().to_string()
+        match self.news_scope {
+            NewsScope::Ticker => self.selected_symbol().to_string(),
+            NewsScope::Market => alphai::MARKET_KEY.to_string(),
+            NewsScope::Trending => alphai::TRENDING_KEY.to_string(),
         }
+    }
+
+    /// Whether a fetch for this cache key is in flight (drives the
+    /// "loading…" hint under the feed lists).
+    pub(crate) fn is_loading(&self, key: &str) -> bool {
+        self.inflight.contains(key)
     }
 
     /// Articles behind the current News/Insider view, if fetched.
@@ -228,24 +341,58 @@ impl App {
         }
     }
 
-    fn apply_alphai(&mut self, event: alphai::Event) {
+    pub(crate) fn apply_alphai(&mut self, event: alphai::Event) {
         match event {
-            alphai::Event::News { key, articles, sentiment } => {
+            alphai::Event::News { key, articles, sentiment, next_cursor, append } => {
                 self.inflight.remove(&key);
                 self.alphai_errors.remove(&key);
-                self.news.insert(
-                    key,
-                    NewsBundle { articles, sentiment, fetched: Instant::now() },
-                );
+                match self.news.get_mut(&key) {
+                    // A page extends the shown feed (sentiment stays from the
+                    // head fetch); a fresh fetch replaces the bundle.
+                    Some(b) if append => {
+                        b.next_cursor = next_cursor;
+                        b.page_error = None;
+                        append_page(&mut b.articles, articles);
+                    }
+                    _ => {
+                        self.news.insert(key, NewsBundle::new(articles, sentiment, next_cursor));
+                    }
+                }
             }
-            alphai::Event::Insider { symbol, articles, summary } => {
+            alphai::Event::Insider { symbol, articles, summary, next_cursor, append } => {
                 let key = alphai::insider_key(&symbol);
                 self.inflight.remove(&key);
                 self.alphai_errors.remove(&key);
-                self.insider.insert(
-                    symbol,
-                    InsiderBundle { articles, summary, fetched: Instant::now() },
-                );
+                match self.insider.get_mut(&symbol) {
+                    Some(b) if append => {
+                        b.next_cursor = next_cursor;
+                        b.page_error = None;
+                        append_page(&mut b.articles, articles);
+                    }
+                    _ => {
+                        self.insider
+                            .insert(symbol, InsiderBundle::new(articles, summary, next_cursor));
+                    }
+                }
+            }
+            alphai::Event::PageError { key, error, gated } => {
+                self.inflight.remove(&key);
+                let (page_error, bundle_gated, next_cursor) =
+                    match key.strip_prefix("ins:") {
+                        Some(symbol) => match self.insider.get_mut(symbol) {
+                            Some(b) => (&mut b.page_error, &mut b.gated, &mut b.next_cursor),
+                            None => return,
+                        },
+                        None => match self.news.get_mut(&key) {
+                            Some(b) => (&mut b.page_error, &mut b.gated, &mut b.next_cursor),
+                            None => return,
+                        },
+                    };
+                *page_error = Some(error);
+                if gated {
+                    *bundle_gated = true;
+                    *next_cursor = None;
+                }
             }
             alphai::Event::Error { key, error } => {
                 self.inflight.remove(&key);
@@ -258,42 +405,97 @@ impl App {
     /// only when missing or older than `CACHE_TTL`, never while a fetch for
     /// the same key is in flight, and never on top of an error (manual `r`
     /// clears the error and retries) — the free tier is 100 requests/day.
-    fn ensure_alphai_data(&mut self) {
-        if !self.alphai_enabled || self.settings.open || self.symbols.is_empty() {
+    pub(crate) fn ensure_alphai_data(&mut self) {
+        // The overlay gate also keeps a TTL refetch from swapping the article
+        // out from under the reader mid-scroll.
+        if !self.alphai_enabled
+            || self.settings.open
+            || self.article_overlay.open
+            || self.symbols.is_empty()
+        {
             return;
         }
+        // A TTL refetch replaces the whole bundle, dropping loaded pages, so
+        // it waits until the reader is back at the top row (missing bundles
+        // fetch regardless; the Split strip has no selection and stays at 0).
+        let at_top = self.news_selected == 0;
         match self.view_idx {
             // The Split view embeds the compact news strip, so it drives the
             // same demand-driven news fetch as the full News view.
             ui::VIEW_NEWS | ui::VIEW_SPLIT => {
                 let key = self.news_cache_key();
-                let stale = self
-                    .news
-                    .get(&key)
-                    .is_none_or(|b| b.fetched.elapsed() > alphai::CACHE_TTL);
+                let stale = match self.news.get(&key) {
+                    None => true,
+                    Some(b) => at_top && b.fetched.elapsed() > alphai::CACHE_TTL,
+                };
                 if stale && !self.inflight.contains(&key) && !self.alphai_errors.contains_key(&key)
                 {
                     self.inflight.insert(key);
-                    let symbol =
-                        (!self.news_market_wide).then(|| self.selected_symbol().to_string());
-                    let _ = self.alphai_tx.send(alphai::Cmd::FetchNews { symbol });
+                    let cmd = match self.news_scope {
+                        NewsScope::Ticker => alphai::Cmd::FetchNews {
+                            symbol: Some(self.selected_symbol().to_string()),
+                            cursor: None,
+                        },
+                        NewsScope::Market => {
+                            alphai::Cmd::FetchNews { symbol: None, cursor: None }
+                        }
+                        NewsScope::Trending => alphai::Cmd::FetchTrending,
+                    };
+                    let _ = self.alphai_tx.send(cmd);
                 }
             }
             ui::VIEW_INSIDER => {
                 let symbol = self.selected_symbol().to_string();
                 let key = alphai::insider_key(&symbol);
-                let stale = self
-                    .insider
-                    .get(&symbol)
-                    .is_none_or(|b| b.fetched.elapsed() > alphai::CACHE_TTL);
+                let stale = match self.insider.get(&symbol) {
+                    None => true,
+                    Some(b) => at_top && b.fetched.elapsed() > alphai::CACHE_TTL,
+                };
                 if stale && !self.inflight.contains(&key) && !self.alphai_errors.contains_key(&key)
                 {
                     self.inflight.insert(key);
-                    let _ = self.alphai_tx.send(alphai::Cmd::FetchInsider { symbol });
+                    let _ = self
+                        .alphai_tx
+                        .send(alphai::Cmd::FetchInsider { symbol, cursor: None });
                 }
             }
             _ => {}
         }
+    }
+
+    /// j at the last row: ask for the feed's next page (explicitly
+    /// user-driven, one request per keypress at most; the shared `inflight`
+    /// key also blocks a concurrent TTL refetch of the same feed).
+    fn request_more_articles(&mut self) {
+        let (key, cmd) = match self.view_idx {
+            ui::VIEW_NEWS => {
+                let key = self.news_cache_key();
+                let Some(cursor) = self.news.get(&key).and_then(|b| b.next_cursor.clone()) else {
+                    return;
+                };
+                let symbol = (self.news_scope == NewsScope::Ticker)
+                    .then(|| self.selected_symbol().to_string());
+                (key, alphai::Cmd::FetchNews { symbol, cursor: Some(cursor) })
+            }
+            ui::VIEW_INSIDER => {
+                let symbol = self.selected_symbol().to_string();
+                let key = alphai::insider_key(&symbol);
+                let Some(cursor) = self
+                    .insider
+                    .get(&symbol)
+                    .and_then(|b| b.next_cursor.clone())
+                else {
+                    return;
+                };
+                (key, alphai::Cmd::FetchInsider { symbol, cursor: Some(cursor) })
+            }
+            _ => return,
+        };
+        if self.inflight.contains(&key) {
+            return;
+        }
+        self.inflight.insert(key);
+        let _ = self.alphai_tx.send(cmd);
     }
 
     /// Returns true when the app should quit.
@@ -303,6 +505,9 @@ impl App {
         }
         if self.settings.open {
             return self.handle_settings_key(key);
+        }
+        if self.article_overlay.open {
+            return self.handle_overlay_key(key);
         }
         let news_view = matches!(self.view_idx, ui::VIEW_NEWS | ui::VIEW_INSIDER);
         let chart_view = matches!(self.view_idx, ui::VIEW_CHART | ui::VIEW_SPLIT);
@@ -322,19 +527,39 @@ impl App {
             KeyCode::Char('r') => self.manual_refresh(),
             // News/Insider: up/down scroll articles, left/right switch ticker.
             KeyCode::Up | KeyCode::Char('k') if news_view => {
-                self.news_selected = self.news_selected.saturating_sub(1)
+                self.news_selected = self.news_selected.saturating_sub(1);
+                self.card_scroll = 0;
             }
             KeyCode::Down | KeyCode::Char('j') if news_view => {
                 let max = self.visible_articles().map_or(0, <[Article]>::len);
-                self.news_selected = (self.news_selected + 1).min(max.saturating_sub(1));
+                if self.news_selected + 1 < max {
+                    self.news_selected += 1;
+                    self.card_scroll = 0;
+                } else {
+                    // Already on the last row: page the feed instead.
+                    self.request_more_articles();
+                }
             }
             KeyCode::Left | KeyCode::Char('h') if news_view => {
                 self.selected = self.selected.saturating_sub(1);
                 self.news_selected = 0;
+                self.card_scroll = 0;
             }
             KeyCode::Right | KeyCode::Char('l') if news_view => {
                 self.selected = (self.selected + 1).min(self.symbols.len() - 1);
                 self.news_selected = 0;
+                self.card_scroll = 0;
+            }
+            // Card pane scrolling (the list keeps ↑↓/jk).
+            KeyCode::PageUp if self.view_idx == ui::VIEW_NEWS => {
+                self.card_scroll = self.card_scroll.saturating_sub(10)
+            }
+            KeyCode::PageDown if self.view_idx == ui::VIEW_NEWS => {
+                self.card_scroll = self.card_scroll.saturating_add(10)
+            }
+            KeyCode::Char('x') if self.view_idx == ui::VIEW_NEWS => {
+                self.news_layout = self.news_layout.next();
+                self.card_scroll = 0;
             }
             KeyCode::Enter | KeyCode::Char('o') if news_view => {
                 if let Some(a) = self
@@ -344,9 +569,15 @@ impl App {
                     open_url(&self.article_url(a));
                 }
             }
+            KeyCode::Char('v')
+                if news_view && self.visible_articles().is_some_and(|list| !list.is_empty()) =>
+            {
+                self.article_overlay = ArticleOverlay { open: true, scroll: 0 };
+            }
             KeyCode::Char('f') if matches!(self.view_idx, ui::VIEW_NEWS | ui::VIEW_SPLIT) => {
-                self.news_market_wide = !self.news_market_wide;
+                self.news_scope = self.news_scope.next();
                 self.news_selected = 0;
+                self.card_scroll = 0;
             }
             KeyCode::Char('c') if chart_view => {
                 self.chart_style = match self.chart_style {
@@ -361,6 +592,38 @@ impl App {
             KeyCode::Up | KeyCode::Char('k') => self.selected = self.selected.saturating_sub(1),
             KeyCode::Down | KeyCode::Char('j') => {
                 self.selected = (self.selected + 1).min(self.symbols.len() - 1)
+            }
+            _ => {}
+        }
+        false
+    }
+
+    /// Keys while the article card overlay is open; it swallows everything so
+    /// list navigation does not shift under the reader.
+    fn handle_overlay_key(&mut self, key: KeyEvent) -> bool {
+        match key.code {
+            KeyCode::Char('q') => return true,
+            KeyCode::Esc | KeyCode::Char('v') => self.article_overlay = ArticleOverlay::default(),
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.article_overlay.scroll = self.article_overlay.scroll.saturating_sub(1)
+            }
+            // The render pass clamps the scroll to the card's real height.
+            KeyCode::Down | KeyCode::Char('j') => {
+                self.article_overlay.scroll = self.article_overlay.scroll.saturating_add(1)
+            }
+            KeyCode::PageUp => {
+                self.article_overlay.scroll = self.article_overlay.scroll.saturating_sub(10)
+            }
+            KeyCode::PageDown => {
+                self.article_overlay.scroll = self.article_overlay.scroll.saturating_add(10)
+            }
+            KeyCode::Enter | KeyCode::Char('o') => {
+                if let Some(a) = self
+                    .visible_articles()
+                    .and_then(|list| list.get(self.news_selected))
+                {
+                    open_url(&self.article_url(a));
+                }
             }
             _ => {}
         }
@@ -383,6 +646,7 @@ impl App {
         if idx != self.view_idx {
             self.view_idx = idx;
             self.news_selected = 0;
+            self.card_scroll = 0;
         }
     }
 
@@ -582,6 +846,21 @@ impl App {
             }
         }
     }
+}
+
+/// Extend a feed with the next page, dropping rows already shown (a fresh
+/// article can shift the window between requests and repeat on the page
+/// boundary). Rows without a uid cannot be matched and are kept.
+fn append_page(articles: &mut Vec<Article>, page: Vec<Article>) {
+    let seen: HashSet<String> = articles
+        .iter()
+        .map(|a| a.original.uid.clone())
+        .filter(|uid| !uid.is_empty())
+        .collect();
+    articles.extend(
+        page.into_iter()
+            .filter(|a| a.original.uid.is_empty() || !seen.contains(&a.original.uid)),
+    );
 }
 
 /// Settings source toggle cycle: yahoo -> finnhub -> alpaca -> yahoo.

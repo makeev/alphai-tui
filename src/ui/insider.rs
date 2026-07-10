@@ -5,10 +5,10 @@ use ratatui::style::{Color, Modifier, Style, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Cell, Paragraph, Row, Table};
 
-use crate::alphai::{InsiderSummary, fmt_usd, insider_key};
+use crate::alphai::{Article, InsiderSummary, fmt_usd, insider_key};
 use crate::app::App;
 use crate::ui::View;
-use crate::ui::news::{render_detail, render_gate, score_cell};
+use crate::ui::news::{feed_bottom_hint, render_detail, render_gate, score_cell, sentiment_cell};
 
 pub struct InsiderView;
 
@@ -20,12 +20,22 @@ impl View for InsiderView {
     fn render(&self, f: &mut Frame, area: Rect, app: &mut App) {
         let symbol = app.selected_symbol().to_string();
         let key = insider_key(&symbol);
-        let block = Block::bordered().title(format!(" Insider · {symbol} (SEC Form 4) "));
+        let mut block = Block::bordered().title(format!(" Insider · {symbol} (SEC Form 4) "));
 
         if render_gate(f, area, &block, app, &key) {
             return;
         }
         let bundle = &app.insider[&symbol];
+        let at_edge = app.news_selected + 1 >= bundle.articles.len();
+        if let Some(hint) = feed_bottom_hint(
+            bundle.gated,
+            bundle.page_error.as_deref(),
+            bundle.next_cursor.is_some(),
+            app.is_loading(&key),
+            at_edge,
+        ) {
+            block = block.title_bottom(hint);
+        }
 
         let [head, list_area, detail] = Layout::vertical([
             Constraint::Length(2),
@@ -46,17 +56,13 @@ impl View for InsiderView {
         let rows: Vec<Row> = bundle
             .articles
             .iter()
-            .map(|a| {
-                Row::new(vec![
-                    Cell::from(a.age(now)).dim(),
-                    score_cell(a.score()),
-                    Cell::from(a.original.title.clone()),
-                ])
-            })
+            .map(|a| filing_row(a, &symbol, now))
             .collect();
         let widths = [
             Constraint::Length(4),
             Constraint::Length(2),
+            Constraint::Length(2),
+            Constraint::Length(1),
             Constraint::Min(20),
         ];
         let table = Table::new(rows, widths)
@@ -67,7 +73,53 @@ impl View for InsiderView {
         app.news_table_state.select(Some(app.news_selected));
         f.render_stateful_widget(table, list_area, &mut app.news_table_state);
 
-        render_detail(f, detail, bundle.articles.get(app.news_selected));
+        render_detail(f, detail, bundle.articles.get(app.news_selected), &symbol);
+    }
+}
+
+/// One Form 4 filing as a row: age, score, buy/sell glyph, direct/indirect
+/// marker, title colored by trade side when known. The glyph reports the
+/// trade direction, so the deterministic title template wins over the AI
+/// sentiment call (which can rate a routine sale as neutral).
+fn filing_row(a: &Article, symbol: &str, now: chrono::DateTime<Utc>) -> Row<'static> {
+    let side = side_from_title(&a.original.title)
+        .or_else(|| a.sentiment_for(symbol).map(str::to_string));
+    let title_style = match side.as_deref() {
+        Some("positive") => Style::new().fg(Color::Green),
+        Some("negative") => Style::new().fg(Color::Red),
+        _ => Style::new(),
+    };
+    Row::new(vec![
+        Cell::from(a.age(now)).dim(),
+        score_cell(a.score()),
+        sentiment_cell(side.as_deref()),
+        ownership_cell(a.original.ownership_form.as_deref()),
+        Cell::from(a.original.title.clone()).style(title_style),
+    ])
+}
+
+/// Trade side from the deterministic Form 4 row template, for rows whose
+/// enrichment carries no per-ticker sentiment. Tied to the current wording;
+/// if the templates change it degrades to an uncolored row, nothing worse.
+fn side_from_title(title: &str) -> Option<String> {
+    let t = title.to_lowercase();
+    if t.contains("sold") || t.contains("sale") {
+        Some("negative".to_string())
+    } else if t.contains("bought") || t.contains("purchase") || t.contains("buy")
+        || t.contains("acquired")
+    {
+        Some("positive".to_string())
+    } else {
+        None
+    }
+}
+
+/// Which holding pool the filing touched: dim "D" (direct) / "I" (indirect).
+fn ownership_cell(form: Option<&str>) -> Cell<'static> {
+    match form {
+        Some("direct") => Cell::from("D").dim(),
+        Some("indirect") => Cell::from("I").dim(),
+        _ => Cell::from(" "),
     }
 }
 
@@ -114,7 +166,12 @@ fn summary_lines(summary: Option<&InsiderSummary>) -> Paragraph<'static> {
                 .as_deref()
                 .map(|v| format!(" {}", fmt_usd(v)))
                 .unwrap_or_default();
-            format!("{}{title}{net}", t.name)
+            let count = if t.transaction_count > 0 {
+                format!(" ×{}", t.transaction_count)
+            } else {
+                String::new()
+            };
+            format!("{}{title}{net}{count}", t.name)
         })
         .collect();
     let top_line = if top.is_empty() {

@@ -1,11 +1,11 @@
 use ratatui::Frame;
-use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Clear, Paragraph, Wrap};
 
 use crate::app::App;
 use crate::config;
+use crate::ui::centered;
 
 /// Modal overlay drawn on top of whatever view is active.
 pub fn render(f: &mut Frame, app: &App) {
@@ -163,17 +163,6 @@ fn tilde(path: &str) -> String {
     match dirs::home_dir() {
         Some(h) => path.replacen(&h.display().to_string(), "~", 1),
         None => path.to_string(),
-    }
-}
-
-fn centered(r: Rect, width: u16, height: u16) -> Rect {
-    let w = width.min(r.width.saturating_sub(2));
-    let h = height.min(r.height.saturating_sub(2));
-    Rect {
-        x: r.x + (r.width.saturating_sub(w)) / 2,
-        y: r.y + (r.height.saturating_sub(h)) / 2,
-        width: w,
-        height: h,
     }
 }
 
