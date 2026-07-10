@@ -36,14 +36,14 @@ use the [AlphaAI](https://alphai.io) API and need a free key.
 With a Rust toolchain (1.85+):
 
 ```sh
-cargo install --git https://github.com/makeev/alphai-stock-tui-platform
+cargo install --git https://github.com/makeev/alphai-tui
 ```
 
 Or from a clone:
 
 ```sh
-git clone https://github.com/makeev/alphai-stock-tui-platform
-cd alphai-stock-tui-platform
+git clone https://github.com/makeev/alphai-tui
+cd alphai-tui
 cargo run --release -- AAPL MSFT NVDA BTC-USD
 ```
 

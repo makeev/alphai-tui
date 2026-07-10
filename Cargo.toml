@@ -1,18 +1,15 @@
 [package]
-name = "alphai-stock-tui-platform"
+name = "alphai-tui"
 version = "0.4.0"
 edition = "2024"
+rust-version = "1.85"
 description = "Terminal stock dashboard: live quotes and charts plus AI-scored financial news and SEC Form 4 insider activity from AlphaAI"
 license = "MIT"
-repository = "https://github.com/makeev/alphai-stock-tui-platform"
+repository = "https://github.com/makeev/alphai-tui"
 homepage = "https://alphai.io"
 readme = "README.md"
 keywords = ["tui", "stocks", "finance", "news", "ratatui"]
-categories = ["command-line-utilities"]
-
-[[bin]]
-name = "alphai-tui"
-path = "src/main.rs"
+categories = ["command-line-utilities", "finance"]
 
 [dependencies]
 anyhow = "1.0.103"
