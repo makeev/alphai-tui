@@ -371,11 +371,12 @@ impl App {
     /// article page (settings can flip this to the original source); insider
     /// filings always open the original, which points at the SEC filing.
     fn article_url(&self, a: &Article) -> String {
-        if self.view_idx == ui::VIEW_NEWS && !self.config.news_open_original() {
+        let url = if self.view_idx == ui::VIEW_NEWS && !self.config.news_open_original() {
             a.alphai_url().unwrap_or_else(|| a.original.url.clone())
         } else {
             a.original.url.clone()
-        }
+        };
+        with_utm(&url)
     }
 
     fn switch_view(&mut self, idx: usize) {
@@ -597,6 +598,25 @@ fn non_empty(v: &str) -> Option<String> {
     (!v.is_empty()).then(|| v.to_string())
 }
 
+/// Tag an outgoing article link with this client as the traffic source, so
+/// alphai.io and original publishers can attribute the referral. Left as-is
+/// when the URL already carries a utm_source (never clobber the feed's own
+/// attribution); the fragment, if any, stays at the end where it belongs.
+fn with_utm(url: &str) -> String {
+    if url.contains("utm_source=") {
+        return url.to_string();
+    }
+    let (base, frag) = match url.split_once('#') {
+        Some((base, frag)) => (base, Some(frag)),
+        None => (url, None),
+    };
+    let sep = if base.contains('?') { '&' } else { '?' };
+    match frag {
+        Some(frag) => format!("{base}{sep}utm_source=alphai-tui#{frag}"),
+        None => format!("{base}{sep}utm_source=alphai-tui"),
+    }
+}
+
 /// Open a URL with the platform handler; failures are ignored (worst case the
 /// article just does not open — never crash the TUI over it).
 pub fn open_url(url: &str) {
@@ -623,7 +643,7 @@ pub fn open_url(url: &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::{RANGE_PRESETS, next_preset, next_source};
+    use super::{RANGE_PRESETS, next_preset, next_source, with_utm};
     use crate::domain::{Interval, Range};
 
     #[test]
@@ -642,6 +662,30 @@ mod tests {
         assert_eq!(next_preset(first, 1), RANGE_PRESETS[1]);
         assert_eq!(next_preset(last, 1), first);
         assert_eq!(next_preset(first, -1), last);
+    }
+
+    #[test]
+    fn utm_tag_appended_to_plain_and_query_urls() {
+        assert_eq!(
+            with_utm("https://alphai.io/news/article/07-10/abc/slug"),
+            "https://alphai.io/news/article/07-10/abc/slug?utm_source=alphai-tui"
+        );
+        assert_eq!(
+            with_utm("https://example.com/story?id=7"),
+            "https://example.com/story?id=7&utm_source=alphai-tui"
+        );
+    }
+
+    #[test]
+    fn utm_tag_respects_existing_source_and_fragment() {
+        // A feed URL that already attributes its source is left untouched.
+        let tagged = "https://example.com/story?utm_source=newsletter";
+        assert_eq!(with_utm(tagged), tagged);
+        // The fragment stays terminal, the query lands before it.
+        assert_eq!(
+            with_utm("https://example.com/story#section"),
+            "https://example.com/story?utm_source=alphai-tui#section"
+        );
     }
 
     #[test]
