@@ -1,4 +1,7 @@
 pub mod chart;
+pub mod insider;
+pub mod news;
+pub mod settings;
 pub mod split;
 pub mod table;
 
@@ -18,8 +21,18 @@ pub trait View: Sync {
     fn render(&self, f: &mut Frame, area: Rect, app: &mut App);
 }
 
-/// Register new display modes here. Order defines the 1..9 hotkeys.
-pub static VIEWS: [&dyn View; 3] = [&table::TableView, &chart::ChartView, &split::SplitView];
+/// Register new display modes here. Order defines the 1..9 hotkeys and must
+/// match the VIEW_* constants below (app key handling branches on them).
+pub static VIEWS: [&dyn View; 5] = [
+    &table::TableView,
+    &chart::ChartView,
+    &split::SplitView,
+    &news::NewsView,
+    &insider::InsiderView,
+];
+
+pub const VIEW_NEWS: usize = 3;
+pub const VIEW_INSIDER: usize = 4;
 
 pub fn draw(f: &mut Frame, app: &mut App) {
     let [header, body, footer] =
@@ -29,6 +42,9 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     f.render_widget(header_line(app), header);
     VIEWS[app.view_idx].render(f, body, app);
     f.render_widget(footer_line(app), footer);
+    if app.settings.open {
+        settings::render(f, app);
+    }
 }
 
 fn header_line(app: &App) -> Paragraph<'static> {
@@ -50,6 +66,11 @@ fn header_line(app: &App) -> Paragraph<'static> {
         };
         spans.push(Span::styled(format!(" {}:{} ", i + 1, view.title()), style));
     }
+    if app.alphai_enabled {
+        spans.push(Span::raw(" · alphai ✓").dim());
+    } else {
+        spans.push(Span::raw(" · alphai: no key (s)").dim());
+    }
     if let Some(ts) = app.last_update {
         spans.push(Span::raw(format!(" · upd {}", ts.format("%H:%M:%S"))).dim());
     } else {
@@ -62,9 +83,16 @@ fn header_line(app: &App) -> Paragraph<'static> {
 mod tests;
 
 fn footer_line(app: &App) -> Paragraph<'static> {
-    let mut spans = vec![
-        Span::raw(" q quit · tab/1-9 view · ↑↓ select · r refresh").dim(),
-    ];
+    let hints = if app.settings.open {
+        " ↑↓ move · enter edit/toggle/save · esc close"
+    } else {
+        match app.view_idx {
+            VIEW_NEWS => " q quit · tab/1-9 view · ↑↓ article · ←→ ticker · ⏎ open · f scope · r refresh · s settings",
+            VIEW_INSIDER => " q quit · tab/1-9 view · ↑↓ article · ←→ ticker · ⏎ open · r refresh · s settings",
+            _ => " q quit · tab/1-9 view · ↑↓ select · r refresh · s settings",
+        }
+    };
+    let mut spans = vec![Span::raw(hints).dim()];
     if let Some((symbol, error)) = app.errors.iter().next() {
         let mut msg = format!("  {symbol}: {error}");
         msg.truncate(120);

@@ -22,16 +22,20 @@ pub trait DataSource: Send + Sync {
     async fn fetch(&self, symbol: &str, range: Range, interval: Interval) -> Result<TickerData>;
 }
 
-pub fn make_source(name: &str) -> Result<Arc<dyn DataSource>> {
+/// `finnhub_key` is the already-resolved key (env var wins over the config
+/// file; the caller does that layering via `Config::finnhub_key`).
+pub fn make_source(name: &str, finnhub_key: Option<&str>) -> Result<Arc<dyn DataSource>> {
     match name.to_lowercase().as_str() {
         "yahoo" | "yf" | "yfinance" => Ok(Arc::new(yahoo::Yahoo::new()?)),
         "finnhub" | "fh" => {
-            let token = std::env::var("FINNHUB_API_KEY")
-                .ok()
-                .filter(|t| !t.is_empty())
-                .ok_or_else(|| {
-                    anyhow::anyhow!("finnhub needs an API key: export FINNHUB_API_KEY=<key>")
-                })?;
+            let token = finnhub_key.map(str::to_string).filter(|t| !t.is_empty()).ok_or_else(
+                || {
+                    anyhow::anyhow!(
+                        "finnhub needs an API key: set it in the settings screen (s) \
+                         or export FINNHUB_API_KEY=<key>"
+                    )
+                },
+            )?;
             Ok(Arc::new(finnhub::Finnhub::new(token)?))
         }
         other => bail!("unknown data source '{other}' (available: yahoo, finnhub)"),
