@@ -10,7 +10,7 @@ use crate::config;
 /// Modal overlay drawn on top of whatever view is active.
 pub fn render(f: &mut Frame, app: &App) {
     let s = &app.settings;
-    let area = centered(f.area(), 74, if s.first_run { 19 } else { 14 });
+    let area = centered(f.area(), 74, if s.first_run { 21 } else { 16 });
     f.render_widget(Clear, area);
 
     let mut lines: Vec<Line> = Vec::new();
@@ -28,7 +28,7 @@ pub fn render(f: &mut Frame, app: &App) {
         lines.push(Line::from(""));
     }
 
-    let rows: [(&str, String, String); 3] = [
+    let rows: [(&str, String, String); 5] = [
         (
             "Price source",
             format!("‹ {} ›", s.source_choice),
@@ -43,6 +43,16 @@ pub fn render(f: &mut Frame, app: &App) {
             "AlphaAI key",
             field_value(s, 2, &s.alphai_key),
             env_hint("ALPHAI_API_KEY"),
+        ),
+        (
+            "Alpaca key ID",
+            field_value(s, 3, &s.alpaca_key_id),
+            env_hint("APCA_API_KEY_ID"),
+        ),
+        (
+            "Alpaca secret",
+            field_value(s, 4, &s.alpaca_secret),
+            env_hint("APCA_API_SECRET_KEY"),
         ),
     ];
     for (i, (label, value, hint)) in rows.into_iter().enumerate() {
@@ -66,13 +76,13 @@ pub fn render(f: &mut Frame, app: &App) {
     }
 
     lines.push(Line::from(""));
-    let save_style = if s.cursor == 3 {
+    let save_style = if s.cursor == 5 {
         Style::new().add_modifier(Modifier::REVERSED)
     } else {
         Style::new()
     };
     lines.push(Line::from(vec![
-        Span::raw(if s.cursor == 3 { "▶ " } else { "  " }),
+        Span::raw(if s.cursor == 5 { "▶ " } else { "  " }),
         Span::styled("[ Save and close ]", save_style),
     ]));
 
@@ -124,6 +134,7 @@ pub fn mask(key: &str) -> String {
 fn source_hint(choice: &str) -> String {
     match choice {
         "finnhub" => "real-time quotes, needs a key (free at finnhub.io)".into(),
+        "alpaca" => "realtime IEX quotes and real candle history, free keys at alpaca.markets".into(),
         _ => "no key needed, ~15 min delayed".into(),
     }
 }

@@ -24,6 +24,8 @@ pub struct Config {
 pub struct Keys {
     pub finnhub: Option<String>,
     pub alphai: Option<String>,
+    pub alpaca_key_id: Option<String>,
+    pub alpaca_secret: Option<String>,
 }
 
 impl Config {
@@ -35,6 +37,15 @@ impl Config {
 
     pub fn alphai_key(&self) -> Option<String> {
         env_key("ALPHAI_API_KEY").or_else(|| self.keys.alphai.clone())
+    }
+
+    /// Each half resolves independently (env > file, standard Alpaca SDK
+    /// var names); Some only when both the key id and the secret are set.
+    pub fn alpaca_keys(&self) -> Option<(String, String)> {
+        let file_key = |v: &Option<String>| v.clone().filter(|k| !k.trim().is_empty());
+        let id = env_key("APCA_API_KEY_ID").or_else(|| file_key(&self.keys.alpaca_key_id))?;
+        let secret = env_key("APCA_API_SECRET_KEY").or_else(|| file_key(&self.keys.alpaca_secret))?;
+        Some((id, secret))
     }
 }
 
@@ -119,6 +130,8 @@ mod tests {
             keys: Keys {
                 finnhub: Some("fh-key".into()),
                 alphai: Some("ak_live_x".into()),
+                alpaca_key_id: Some("PKTEST123".into()),
+                alpaca_secret: Some("alpaca-secret-x".into()),
             },
         };
         save_to(&p, &cfg).unwrap();

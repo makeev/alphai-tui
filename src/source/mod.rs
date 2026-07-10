@@ -1,3 +1,4 @@
+pub mod alpaca;
 pub mod finnhub;
 pub mod yahoo;
 
@@ -22,9 +23,14 @@ pub trait DataSource: Send + Sync {
     async fn fetch(&self, symbol: &str, range: Range, interval: Interval) -> Result<TickerData>;
 }
 
-/// `finnhub_key` is the already-resolved key (env var wins over the config
-/// file; the caller does that layering via `Config::finnhub_key`).
-pub fn make_source(name: &str, finnhub_key: Option<&str>) -> Result<Arc<dyn DataSource>> {
+/// `finnhub_key` and `alpaca_keys` (key id, secret) are already resolved
+/// (env var wins over the config file; the caller does that layering via
+/// `Config::finnhub_key` / `Config::alpaca_keys`).
+pub fn make_source(
+    name: &str,
+    finnhub_key: Option<&str>,
+    alpaca_keys: Option<(String, String)>,
+) -> Result<Arc<dyn DataSource>> {
     match name.to_lowercase().as_str() {
         "yahoo" | "yf" | "yfinance" => Ok(Arc::new(yahoo::Yahoo::new()?)),
         "finnhub" | "fh" => {
@@ -38,6 +44,15 @@ pub fn make_source(name: &str, finnhub_key: Option<&str>) -> Result<Arc<dyn Data
             )?;
             Ok(Arc::new(finnhub::Finnhub::new(token)?))
         }
-        other => bail!("unknown data source '{other}' (available: yahoo, finnhub)"),
+        "alpaca" | "alpc" => {
+            let (id, secret) = alpaca_keys.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "alpaca needs an API key id and secret: set them in the settings \
+                     screen (s) or export APCA_API_KEY_ID / APCA_API_SECRET_KEY"
+                )
+            })?;
+            Ok(Arc::new(alpaca::Alpaca::new(id, secret)?))
+        }
+        other => bail!("unknown data source '{other}' (available: yahoo, finnhub, alpaca)"),
     }
 }

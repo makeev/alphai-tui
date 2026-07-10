@@ -1,6 +1,6 @@
 [package]
 name = "alphai-stock-tui-platform"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 description = "Terminal stock dashboard: live quotes and charts plus AI-scored financial news and SEC Form 4 insider activity from AlphaAI"
 license = "MIT"

@@ -32,7 +32,7 @@ pub struct InsiderBundle {
 }
 
 /// State of the settings overlay. Field order (cursor): price source,
-/// finnhub key, alphai key, save.
+/// finnhub key, alphai key, alpaca key id, alpaca secret, save.
 #[derive(Default)]
 pub struct SettingsState {
     pub open: bool,
@@ -45,10 +45,12 @@ pub struct SettingsState {
     pub source_choice: String,
     pub finnhub_key: String,
     pub alphai_key: String,
+    pub alpaca_key_id: String,
+    pub alpaca_secret: String,
     pub message: Option<String>,
 }
 
-pub const SETTINGS_ROWS: usize = 4;
+pub const SETTINGS_ROWS: usize = 6;
 
 pub struct AppInit {
     pub symbols: Vec<String>,
@@ -350,6 +352,8 @@ impl App {
         s.source_choice = self.source_name.to_string();
         s.finnhub_key = self.config.keys.finnhub.clone().unwrap_or_default();
         s.alphai_key = self.config.keys.alphai.clone().unwrap_or_default();
+        s.alpaca_key_id = self.config.keys.alpaca_key_id.clone().unwrap_or_default();
+        s.alpaca_secret = self.config.keys.alpaca_secret.clone().unwrap_or_default();
     }
 
     fn handle_settings_key(&mut self, key: KeyEvent) -> bool {
@@ -361,6 +365,8 @@ impl App {
                     match s.cursor {
                         1 => s.finnhub_key = value,
                         2 => s.alphai_key = value,
+                        3 => s.alpaca_key_id = value,
+                        4 => s.alpaca_secret = value,
                         _ => {}
                     }
                     s.editing = false;
@@ -393,12 +399,13 @@ impl App {
             }
             KeyCode::Enter => match self.settings.cursor {
                 0 => self.toggle_source_choice(),
-                1 | 2 => {
+                1..=4 => {
                     let s = &mut self.settings;
-                    s.input = if s.cursor == 1 {
-                        s.finnhub_key.clone()
-                    } else {
-                        s.alphai_key.clone()
+                    s.input = match s.cursor {
+                        1 => s.finnhub_key.clone(),
+                        2 => s.alphai_key.clone(),
+                        3 => s.alpaca_key_id.clone(),
+                        _ => s.alpaca_secret.clone(),
                     };
                     s.editing = true;
                 }
@@ -411,11 +418,7 @@ impl App {
 
     fn toggle_source_choice(&mut self) {
         let s = &mut self.settings;
-        s.source_choice = if s.source_choice == "finnhub" {
-            "yahoo".into()
-        } else {
-            "finnhub".into()
-        };
+        s.source_choice = next_source(&s.source_choice).to_string();
     }
 
     fn settings_save(&mut self) {
@@ -423,6 +426,8 @@ impl App {
         cfg.source = Some(self.settings.source_choice.clone());
         cfg.keys.finnhub = non_empty(&self.settings.finnhub_key);
         cfg.keys.alphai = non_empty(&self.settings.alphai_key);
+        cfg.keys.alpaca_key_id = non_empty(&self.settings.alpaca_key_id);
+        cfg.keys.alpaca_secret = non_empty(&self.settings.alpaca_secret);
         // Saving persists the watchlist on screen, so a bare `alphai-tui`
         // reopens exactly this setup.
         cfg.watchlist = self.symbols.clone();
@@ -432,9 +437,16 @@ impl App {
             .source_choice
             .eq_ignore_ascii_case(self.source_name)
             || (self.settings.source_choice == "finnhub"
-                && cfg.keys.finnhub != self.config.keys.finnhub);
+                && cfg.keys.finnhub != self.config.keys.finnhub)
+            || (self.settings.source_choice == "alpaca"
+                && (cfg.keys.alpaca_key_id != self.config.keys.alpaca_key_id
+                    || cfg.keys.alpaca_secret != self.config.keys.alpaca_secret));
         if source_changed {
-            match make_source(&self.settings.source_choice, cfg.finnhub_key().as_deref()) {
+            match make_source(
+                &self.settings.source_choice,
+                cfg.finnhub_key().as_deref(),
+                cfg.alpaca_keys(),
+            ) {
                 Ok(src) => {
                     self.source_name = src.name();
                     *self.source.write().unwrap() = src;
@@ -475,6 +487,15 @@ impl App {
     }
 }
 
+/// Settings source toggle cycle: yahoo -> finnhub -> alpaca -> yahoo.
+fn next_source(cur: &str) -> &'static str {
+    match cur {
+        "yahoo" => "finnhub",
+        "finnhub" => "alpaca",
+        _ => "yahoo",
+    }
+}
+
 fn non_empty(v: &str) -> Option<String> {
     let v = v.trim();
     (!v.is_empty()).then(|| v.to_string())
@@ -502,4 +523,18 @@ pub fn open_url(url: &str) {
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::next_source;
+
+    #[test]
+    fn source_cycle_covers_all_and_wraps() {
+        assert_eq!(next_source("yahoo"), "finnhub");
+        assert_eq!(next_source("finnhub"), "alpaca");
+        assert_eq!(next_source("alpaca"), "yahoo");
+        // Anything unexpected resets to the keyless default.
+        assert_eq!(next_source("weird"), "yahoo");
+    }
 }

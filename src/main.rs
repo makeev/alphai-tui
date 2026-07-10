@@ -28,7 +28,7 @@ struct Args {
     /// Ticker symbols to watch, e.g. AAPL MSFT NVDA BTC-USD (default: saved watchlist)
     symbols: Vec<String>,
 
-    /// Price source: yahoo (keyless) or finnhub (needs a key)
+    /// Price source: yahoo (keyless), finnhub or alpaca (need a key)
     #[arg(short, long)]
     source: Option<String>,
 
@@ -66,7 +66,7 @@ fn main() -> Result<()> {
         .clone()
         .or_else(|| cfg.source.clone())
         .unwrap_or_else(|| "yahoo".to_string());
-    let source = source::make_source(&source_name, cfg.finnhub_key().as_deref())?;
+    let source = source::make_source(&source_name, cfg.finnhub_key().as_deref(), cfg.alpaca_keys())?;
     let every = args.every.or(cfg.every).unwrap_or(15);
     let range = args
         .range

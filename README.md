@@ -75,7 +75,7 @@ alphai-tui -s finnhub NVDA  # explicit source for one run
 
 | Flag | Default | Meaning |
 |------|---------|---------|
-| `-s, --source` | `yahoo` | Price source: `yahoo` or `finnhub` |
+| `-s, --source` | `yahoo` | Price source: `yahoo`, `finnhub` or `alpaca` |
 | `-e, --every` | `15` | Poll interval, seconds |
 | `-r, --range` | `1d` | History window: `1d 5d 1mo 3mo 6mo 1y` |
 | `-i, --interval` | `5m` | Candle size: `1m 2m 5m 15m 30m 60m 1d` |
@@ -83,7 +83,7 @@ alphai-tui -s finnhub NVDA  # explicit source for one run
 
 CLI arguments win over the config file; the config file wins over built-in
 defaults. API keys can also come from env vars, which win over the config:
-`ALPHAI_API_KEY`, `FINNHUB_API_KEY`.
+`ALPHAI_API_KEY`, `FINNHUB_API_KEY`, `APCA_API_KEY_ID`, `APCA_API_SECRET_KEY`.
 
 ## Keys
 
@@ -110,6 +110,26 @@ defaults. API keys can also come from env vars, which win over the config:
   build up from quotes collected during the session and reset on restart.
   Free tier is 60 req/min: keep `tickers x (60 / --every)` under 60.
   Crypto needs exchange-prefixed symbols (`BINANCE:BTCUSDT`).
+- `alpaca`: needs a key id and secret (free at
+  [alpaca.markets](https://alpaca.markets)). Realtime quotes from the IEX
+  feed plus real historical bars, so charts are complete right after start
+  instead of growing over the session. Crypto works in the usual `BTC-USD`
+  form. Getting free keys:
+  1. Sign up at [alpaca.markets](https://alpaca.markets). Email is enough;
+     market data and paper trading need no KYC.
+  2. The free Basic data plan is enabled by default.
+  3. In the dashboard switch the environment to Paper (fine for data), then
+     Home > API Keys > Generate. Copy the Key ID and the Secret; the secret
+     is shown only once.
+  4. Paste both in the settings screen (`s`) or export `APCA_API_KEY_ID`
+     and `APCA_API_SECRET_KEY`.
+
+  Free plan notes: the IEX feed is realtime but thin (roughly 2 to 3 percent
+  of market volume, so charts of illiquid names can be sparse), and the API
+  allows 200 requests/min. The app makes 2 requests per ticker per poll:
+  keep `tickers x 2 x (60 / --every)` under 200. `ALPACA_FEED=sip` needs a
+  paid data plan; `ALPACA_FEED=delayed_sip` gives the full market with a
+  15 minute delay.
 
 **News, sentiment, insider**
 
@@ -142,6 +162,8 @@ interval = "5m"
 [keys]
 alphai = "ak_live_..."
 finnhub = ""
+alpaca_key_id = ""
+alpaca_secret = ""
 ```
 
 ## Architecture
@@ -153,6 +175,7 @@ src/
   source/        DataSource trait + implementations
     yahoo.rs     Yahoo v8 chart endpoint (quote + history in one call)
     finnhub.rs   Finnhub /quote with synthetic session history
+    alpaca.rs    snapshot + real historical bars (IEX/SIP feeds, crypto)
   alphai.rs      AlphaAI API client + demand-driven fetch task (TTL cache)
   poller.rs      fetches all symbols concurrently on a timer -> mpsc channel
   app.rs         App state + key handling + event loop + settings logic

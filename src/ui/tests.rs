@@ -15,7 +15,7 @@ use crate::ui;
 fn empty_app(symbols: Vec<String>) -> App {
     let (_tx, rx) = tokio::sync::mpsc::unbounded_channel();
     let (alphai_tx, _alphai_rx) = tokio::sync::mpsc::unbounded_channel();
-    let source = make_source("yahoo", None).unwrap();
+    let source = make_source("yahoo", None, None).unwrap();
     App::new(AppInit {
         symbols,
         source: Arc::new(RwLock::new(source)),
@@ -247,14 +247,21 @@ fn insider_view_shows_summary_and_filings() {
 fn settings_overlay_masks_keys() {
     let mut app = fake_app();
     app.config.keys.alphai = Some("ak_live_abcdefgh1234".into());
+    app.config.keys.alpaca_secret = Some("alpaca-secret-abcd9876".into());
     app.open_settings();
     let screen = render(&mut app);
     assert!(screen.contains("Settings"), "screen:\n{screen}");
     assert!(screen.contains("Price source"), "screen:\n{screen}");
+    assert!(screen.contains("Alpaca secret"), "screen:\n{screen}");
     assert!(screen.contains("ak_liv…1234"), "screen:\n{screen}");
     assert!(
         !screen.contains("ak_live_abcdefgh1234"),
         "raw key leaked to screen:\n{screen}"
+    );
+    assert!(screen.contains("alpaca…9876"), "screen:\n{screen}");
+    assert!(
+        !screen.contains("alpaca-secret-abcd9876"),
+        "raw alpaca secret leaked to screen:\n{screen}"
     );
 }
 
@@ -262,7 +269,7 @@ fn settings_overlay_masks_keys() {
 fn first_run_opens_settings_with_welcome() {
     let (_tx, rx) = tokio::sync::mpsc::unbounded_channel();
     let (alphai_tx, _alphai_rx) = tokio::sync::mpsc::unbounded_channel();
-    let source = make_source("yahoo", None).unwrap();
+    let source = make_source("yahoo", None, None).unwrap();
     let mut app = App::new(AppInit {
         symbols: vec!["AAPL".into()],
         source: Arc::new(RwLock::new(source)),
