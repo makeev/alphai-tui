@@ -5,7 +5,7 @@ AI-scored financial news, sentiment and SEC Form 4 insider activity.
 Built in Rust with [ratatui](https://ratatui.rs).
 
 ```text
- alphai-tui · yahoo · 1d/5m  1:Split 2:News 3:Table 4:Chart 5:Insider · alphai ✓ · upd 18:40:12
+ alphai-tui · yahoo  1:Split 2:News 3:Table 4:Chart 5:Insider · alphai ✓ · upd 18:40:12 · 5m
  7d sentiment  ▲ 12 bullish · 5 neutral · ▼ 3 bearish  (20 scored)
 ┌ News · NVDA ──────────────────────────────────────────────────────────────────┐
 │▶ 2h   9  ▲  earnings  NVIDIA beats on Q2 data-center revenue                  │
@@ -33,7 +33,7 @@ Built in Rust with [ratatui](https://ratatui.rs).
 - **Chart**: candlestick chart of the selected ticker at half-block
   resolution, with a previous-close reference line, SMA 20/100 overlays and
   an RSI(14) panel. `c` switches to the classic Braille line chart, `m` and
-  `i` toggle the indicators, `t` cycles range presets on the fly.
+  `i` toggle the indicators, `t` cycles interval presets on the fly.
 - **Insider**: SEC Form 4 activity for the selected ticker. A 30-day rollup
   (buys vs sells, dollar volumes, share of pre-arranged 10b5-1 plan trades,
   most active insiders) above the stream of filing events.
@@ -107,7 +107,7 @@ defaults. API keys can also come from env vars, which win over the config:
 | `c` | chart, split | toggle candlestick / line chart |
 | `m` | chart, split | toggle SMA 20 and SMA 100 overlays |
 | `i` | chart, split | toggle the RSI(14) panel |
-| `t` / `T` | everywhere | cycle range/interval presets forward / back (`1d/5m` `5d/15m` `1mo/60m` `6mo/1d` `1y/1d`) |
+| `t` / `T` | everywhere | cycle candle interval presets forward / back (`5m` `15m` `60m` `1d`, each with a matching history window) |
 | `r` | everywhere | refresh prices and the visible news view |
 | `s` | everywhere | settings |
 | `q` / `Esc` / `Ctrl-C` | everywhere | quit |

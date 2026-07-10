@@ -52,13 +52,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 fn header_line(app: &App) -> Paragraph<'static> {
     let mut spans = vec![
         Span::styled(" alphai-tui ", Style::new().bold().fg(Color::Cyan)),
-        Span::raw(format!(
-            "· {} · {}/{} ",
-            app.source_name,
-            app.range.as_str(),
-            app.interval.as_str()
-        ))
-        .dim(),
+        Span::raw(format!("· {} ", app.source_name)).dim(),
     ];
     for (i, view) in VIEWS.iter().enumerate() {
         let style = if i == app.view_idx {
@@ -78,6 +72,7 @@ fn header_line(app: &App) -> Paragraph<'static> {
     } else {
         spans.push(Span::raw(" · loading…").dim());
     }
+    spans.push(Span::raw(format!(" · {}", app.interval.as_str())).dim());
     Paragraph::new(Line::from(spans))
 }
 
@@ -91,9 +86,9 @@ fn footer_line(app: &App) -> Paragraph<'static> {
         match app.view_idx {
             VIEW_NEWS => " q quit · tab/1-9 view · ↑↓ article · ←→ ticker · ⏎ open · f scope · r refresh · s settings",
             VIEW_INSIDER => " q quit · tab/1-9 view · ↑↓ article · ←→ ticker · ⏎ open · r refresh · s settings",
-            VIEW_SPLIT => " q quit · tab/1-9 view · ↑↓ select · f scope · c/m/i chart · t range · r refresh · s settings",
-            VIEW_CHART => " q quit · tab/1-9 view · ↑↓ select · c style · m sma · i rsi · t range · r refresh · s settings",
-            _ => " q quit · tab/1-9 view · ↑↓ select · t range · r refresh · s settings",
+            VIEW_SPLIT => " q quit · tab/1-9 view · ↑↓ select · f scope · c/m/i chart · t interval · r refresh · s settings",
+            VIEW_CHART => " q quit · tab/1-9 view · ↑↓ select · c style · m sma · i rsi · t interval · r refresh · s settings",
+            _ => " q quit · tab/1-9 view · ↑↓ select · t interval · r refresh · s settings",
         }
     };
     let mut spans = vec![Span::raw(hints).dim()];

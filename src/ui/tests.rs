@@ -199,12 +199,12 @@ fn range_keys_cycle_presets_and_update_header() {
     press(&mut app, KeyCode::Char('t'));
     assert_eq!((app.range, app.interval), (Range::D5, Interval::M15));
     let screen = render(&mut app);
-    assert!(screen.contains("5d/15m"), "screen:\n{screen}");
+    assert!(screen.contains("· 15m"), "screen:\n{screen}");
     // Wrap backwards past the first preset.
     press(&mut app, KeyCode::Char('T'));
     press(&mut app, KeyCode::Char('T'));
     assert_eq!((app.range, app.interval), (Range::Y1, Interval::D1));
-    assert!(render(&mut app).contains("1y/1d"));
+    assert!(render(&mut app).contains("· 1d"));
     // Old data stays on screen until the poller answers.
     assert!(app.data.contains_key("AAPL"));
 }
