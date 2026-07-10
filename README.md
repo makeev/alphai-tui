@@ -188,7 +188,6 @@ cargo run -- --once AAPL             # network smoke test without a TTY
 ALPHAI_API_KEY=ak_live_... cargo test live_api -- --ignored   # live API smoke
 ```
 
-The roadmap lives in `PLAN.md` (streaming sources, Alpaca, candlestick view).
 Issues and PRs are welcome.
 
 ## License
