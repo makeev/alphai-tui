@@ -60,48 +60,42 @@ Gotchas discovered (also in `issues/` if they recur):
 - A pty from `script(1)` has zero window size — the TUI renders nothing there.
   Verify rendering via the `TestBackend` tests, not via `script`.
 
-## Phase 2 — Alpha Vantage source ⏳
+## Phase 2 — Finnhub source ✅ (2026-07-10)
 
-Goal: second polling source to prove the `DataSource` abstraction; useful for
-tickers/fields Yahoo lacks.
+Second polling source; proved the `DataSource` plugin contract.
 
-- New module `src/source/alphavantage.rs`, register as
-  `"alphavantage" | "av"` in `make_source`.
-- API key from `ALPHAVANTAGE_API_KEY` env (later: config file, Phase 6).
-  Missing key → hard error at startup with a clear message.
-- Endpoints: `GLOBAL_QUOTE` (price + prev close) and `TIME_SERIES_INTRADAY`
-  (candles; intervals 1/5/15/30/60min) or `TIME_SERIES_DAILY` for
-  `Interval::D1`. Two HTTP calls per symbol per cycle — mind the mapping in
-  one `fetch`.
-- **Rate limits are the design constraint**: free tier is 25 requests/day.
-  Fetch history once at startup and only poll `GLOBAL_QUOTE` afterwards;
-  enforce a minimum poll interval (e.g. refuse `--every < 60` for this
-  source, or auto-clamp with a footer warning). Surface remaining-quota
-  errors (AV returns them as JSON "Note"/"Information" fields with HTTP 200 —
-  must be detected in the body, not the status code).
-- Acceptance: `cargo run -- --once -s av AAPL` prints a quote; TUI shows data
-  with `-s av`; a bogus key shows a readable error, not a JSON parse failure.
+- `src/source/finnhub.rs`, registered as `"finnhub" | "fh"`; API key from
+  `FINNHUB_API_KEY` env (never in the repo).
+- Free tier reality: `/quote` is real-time-ish and free (60 req/min), but
+  **historical candles are premium-only** (`/stock/candle` → 403). So the
+  source synthesizes history: each poll appends a tick-candle to an in-memory
+  per-symbol series (`push_tick`, capped at 600, same-timestamp ticks update
+  the last candle). Charts grow over the session, reset on restart.
+- Unknown symbols come back as HTTP 200 with all-zero fields — detected and
+  turned into a readable error. 429 → readable rate-limit hint.
+- Crypto needs exchange-prefixed symbols (`BINANCE:BTCUSDT`).
+- Unit tests for `push_tick` (dedupe + cap) in the module.
 
-## Phase 3 — IBKR source ⏳
+## Phase 3 — Alpaca source ⏳
 
-Goal: realtime-quality data from Interactive Brokers via a running
-TWS/IB Gateway.
+Goal: the primary real-time source. Decision (July 2026): **IBKR dropped** —
+TWS/Gateway must stay running and the session drops on phone login; Alpaca
+free tier gives real-time IEX websocket + REST with just an API key from a
+paper account, no running terminal. (Polygon/"Massive" starts at ~$79/mo —
+only if historical data becomes a need.)
 
-- Candidate crate: `ibapi` (evaluate current state first; fallback is the
-  Client Portal Web API over plain HTTPS, which would reuse reqwest).
-- Polling first (fits the existing `fetch` contract): snapshot market data +
-  historical bars mapped to `Range`/`Interval`.
-- Connection params (host, port 7496 live / 7497 paper, client id) — CLI
-  flags now, config file later (Phase 6).
-- Requires market-data subscriptions on the IBKR account; errors from missing
-  subscriptions must render readably in the footer.
-- Acceptance: with Gateway running, `-s ibkr` shows live quotes; with Gateway
-  down, a clear "cannot connect to TWS/Gateway at host:port" error.
+- REST first (fits the `fetch` contract): latest trade/quote + bars
+  (`/v2/stocks/{symbol}/bars`) mapped to `Range`/`Interval` — unlike Finnhub,
+  Alpaca's free tier does include historical bars (IEX feed).
+- Keys from `ALPACA_API_KEY_ID` / `ALPACA_API_SECRET_KEY` env.
+- Register as `"alpaca"`; data feed param must be `iex` (free) not `sip`.
+- Acceptance: `--once -s alpaca AAPL` prints a quote; TUI charts show real
+  history; missing keys → readable startup error.
 
 ## Phase 4 — streaming ⏳ (after Phase 3)
 
-Goal: push-based updates for sources that support them (IBKR), without
-touching the UI.
+Goal: push-based updates for sources that support them (Alpaca IEX websocket;
+later crypto exchange websockets), without touching the UI.
 
 - Extend `DataSource` with a default-None method, e.g.
   `fn watch(&self, symbols) -> Option<BoxStream<SourceEvent>>`.
@@ -132,7 +126,8 @@ Goal: run bare `tr-monitor` with a saved setup.
 
 - `~/.config/tr-monitor/config.toml` (`directories` or `dirs` crate): default
   watchlist, source, `every`, `range`/`interval`, per-source blocks
-  (alphavantage key, ibkr host/port/client-id).
+  (finnhub key, alpaca key id/secret) — env vars keep working and win over
+  the config file.
 - Precedence: CLI args > config > built-in defaults. Symbols on the CLI
   replace the config watchlist entirely (no merging).
 - Acceptance: bare `tr-monitor` runs from config; `--once` still works with
@@ -140,6 +135,11 @@ Goal: run bare `tr-monitor` with a saved setup.
 
 ## Backlog (unordered ideas, promote to a phase when picked)
 
+- Crypto via free exchange websockets (Binance/Coinbase) as a separate
+  source — decided direction for crypto tickers, promote when picked.
+- Alpha Vantage source — demoted from the original Phase 2: free tier is
+  25 req/day (unusable for monitoring) and Finnhub already proved the
+  plugin contract. Only worth it if some AV-specific data is needed.
 - Multi-chart grid view (small chart per ticker).
 - Runtime watchlist editing (`a` to add / `d` to remove a ticker).
 - Table sorting (by Δ%, by symbol).
