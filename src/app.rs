@@ -13,7 +13,7 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use crate::alphai::{self, Article, InsiderSummary, SentimentSummary};
 use crate::config::{self, Config};
 use crate::domain::{Interval, Range, TickerData};
-use crate::poller::{SharedSource, SourceEvent};
+use crate::poller::{SharedParams, SharedSource, SourceEvent};
 use crate::source::make_source;
 use crate::ui;
 
@@ -54,12 +54,40 @@ pub struct SettingsState {
 
 pub const SETTINGS_ROWS: usize = 7;
 
+/// How the price chart draws history: candlesticks or the classic close line.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChartStyle {
+    Candles,
+    Line,
+}
+
+/// The combos the [ and ] keys cycle through; wraps at the ends. A startup
+/// combo not in the table (e.g. -r 3mo) jumps to the first preset on ] and
+/// to the last on [.
+pub const RANGE_PRESETS: [(Range, Interval); 5] = [
+    (Range::D1, Interval::M5),
+    (Range::D5, Interval::M15),
+    (Range::Mo1, Interval::M60),
+    (Range::Mo6, Interval::D1),
+    (Range::Y1, Interval::D1),
+];
+
+fn next_preset(cur: (Range, Interval), dir: isize) -> (Range, Interval) {
+    let n = RANGE_PRESETS.len() as isize;
+    match RANGE_PRESETS.iter().position(|&p| p == cur) {
+        Some(i) => RANGE_PRESETS[((i as isize + dir).rem_euclid(n)) as usize],
+        None if dir > 0 => RANGE_PRESETS[0],
+        None => RANGE_PRESETS[RANGE_PRESETS.len() - 1],
+    }
+}
+
 pub struct AppInit {
     pub symbols: Vec<String>,
     pub source: SharedSource,
     pub source_name: &'static str,
     pub range: Range,
     pub interval: Interval,
+    pub params: SharedParams,
     pub rx: UnboundedReceiver<SourceEvent>,
     pub refresh: Arc<Notify>,
     pub alphai_tx: UnboundedSender<alphai::Cmd>,
@@ -79,6 +107,10 @@ pub struct App {
     pub interval: Interval,
     pub last_update: Option<DateTime<Local>>,
     pub table_state: TableState,
+    // Chart options (session-only, deliberately not persisted)
+    pub chart_style: ChartStyle,
+    pub show_sma: bool,
+    pub show_rsi: bool,
     // AlphaAI news + insider state
     pub news: HashMap<String, NewsBundle>,
     pub insider: HashMap<String, InsiderBundle>,
@@ -90,6 +122,7 @@ pub struct App {
     pub settings: SettingsState,
     pub config: Config,
     source: SharedSource,
+    params: SharedParams,
     inflight: HashSet<String>,
     alphai_tx: UnboundedSender<alphai::Cmd>,
     rx: UnboundedReceiver<SourceEvent>,
@@ -109,6 +142,9 @@ impl App {
             interval: init.interval,
             last_update: None,
             table_state: TableState::default(),
+            chart_style: ChartStyle::Candles,
+            show_sma: true,
+            show_rsi: true,
             news: HashMap::new(),
             insider: HashMap::new(),
             alphai_errors: HashMap::new(),
@@ -119,6 +155,7 @@ impl App {
             settings: SettingsState::default(),
             config: init.config,
             source: init.source,
+            params: init.params,
             inflight: HashSet::new(),
             alphai_tx: init.alphai_tx,
             rx: init.rx,
@@ -260,7 +297,7 @@ impl App {
     }
 
     /// Returns true when the app should quit.
-    fn handle_key(&mut self, key: KeyEvent) -> bool {
+    pub(crate) fn handle_key(&mut self, key: KeyEvent) -> bool {
         if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
             return true;
         }
@@ -268,6 +305,7 @@ impl App {
             return self.handle_settings_key(key);
         }
         let news_view = matches!(self.view_idx, ui::VIEW_NEWS | ui::VIEW_INSIDER);
+        let chart_view = matches!(self.view_idx, ui::VIEW_CHART | ui::VIEW_SPLIT);
         match key.code {
             KeyCode::Char('q') | KeyCode::Esc => return true,
             KeyCode::Tab => self.switch_view((self.view_idx + 1) % ui::VIEWS.len()),
@@ -310,6 +348,16 @@ impl App {
                 self.news_market_wide = !self.news_market_wide;
                 self.news_selected = 0;
             }
+            KeyCode::Char('c') if chart_view => {
+                self.chart_style = match self.chart_style {
+                    ChartStyle::Candles => ChartStyle::Line,
+                    ChartStyle::Line => ChartStyle::Candles,
+                }
+            }
+            KeyCode::Char('m') if chart_view => self.show_sma = !self.show_sma,
+            KeyCode::Char('i') if chart_view => self.show_rsi = !self.show_rsi,
+            KeyCode::Char('[') => self.cycle_range(-1),
+            KeyCode::Char(']') => self.cycle_range(1),
             KeyCode::Up | KeyCode::Char('k') => self.selected = self.selected.saturating_sub(1),
             KeyCode::Down | KeyCode::Char('j') => {
                 self.selected = (self.selected + 1).min(self.symbols.len() - 1)
@@ -335,6 +383,18 @@ impl App {
             self.view_idx = idx;
             self.news_selected = 0;
         }
+    }
+
+    /// [ / ]: jump to the next range/interval preset and wake the price
+    /// poller. Only `refresh.notify_one()` here: `manual_refresh()` would
+    /// also drop the visible AlphaAI bundle and burn a request from its
+    /// budget for what is purely a price-history change.
+    fn cycle_range(&mut self, dir: isize) {
+        let (range, interval) = next_preset((self.range, self.interval), dir);
+        self.range = range;
+        self.interval = interval;
+        *self.params.write().unwrap() = (range, interval);
+        self.refresh.notify_one();
     }
 
     /// `r`: immediate price cycle, plus drop the visible AlphaAI bundle (and
@@ -563,7 +623,8 @@ pub fn open_url(url: &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::next_source;
+    use super::{RANGE_PRESETS, next_preset, next_source};
+    use crate::domain::{Interval, Range};
 
     #[test]
     fn source_cycle_covers_all_and_wraps() {
@@ -572,5 +633,22 @@ mod tests {
         assert_eq!(next_source("alpaca"), "yahoo");
         // Anything unexpected resets to the keyless default.
         assert_eq!(next_source("weird"), "yahoo");
+    }
+
+    #[test]
+    fn range_presets_wrap_both_ways() {
+        let first = RANGE_PRESETS[0];
+        let last = RANGE_PRESETS[RANGE_PRESETS.len() - 1];
+        assert_eq!(next_preset(first, 1), RANGE_PRESETS[1]);
+        assert_eq!(next_preset(last, 1), first);
+        assert_eq!(next_preset(first, -1), last);
+    }
+
+    #[test]
+    fn range_presets_absorb_unknown_startup_combo() {
+        // A CLI combo outside the table joins the cycle at the nearest edge.
+        let odd = (Range::Mo3, Interval::M5);
+        assert_eq!(next_preset(odd, 1), RANGE_PRESETS[0]);
+        assert_eq!(next_preset(odd, -1), RANGE_PRESETS[RANGE_PRESETS.len() - 1]);
     }
 }

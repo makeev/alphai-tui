@@ -20,20 +20,24 @@ pub enum SourceEvent {
 /// The poller re-reads it at the top of every cycle.
 pub type SharedSource = Arc<RwLock<Arc<dyn DataSource>>>;
 
+/// The history window and granularity, swappable at runtime with the [ and ]
+/// keys. Same pattern as `SharedSource`: re-read at the top of every cycle.
+pub type SharedParams = Arc<RwLock<(Range, Interval)>>;
+
 /// Polls every symbol concurrently, then sleeps until the next cycle or a
 /// manual refresh. Streaming sources will bypass this and push straight into
 /// the same channel.
 pub async fn run(
     source: SharedSource,
     symbols: Vec<String>,
-    range: Range,
-    interval: Interval,
+    params: SharedParams,
     every: Duration,
     tx: UnboundedSender<SourceEvent>,
     refresh: Arc<Notify>,
 ) {
     loop {
         let current = source.read().unwrap().clone();
+        let (range, interval) = *params.read().unwrap();
         let mut set = JoinSet::new();
         for symbol in &symbols {
             let source = current.clone();

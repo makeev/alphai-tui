@@ -2,6 +2,7 @@ mod alphai;
 mod app;
 mod config;
 mod domain;
+mod indicators;
 mod poller;
 mod source;
 mod ui;
@@ -85,11 +86,11 @@ fn main() -> Result<()> {
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
     let refresh = Arc::new(tokio::sync::Notify::new());
     let shared: poller::SharedSource = Arc::new(RwLock::new(source.clone()));
+    let params: poller::SharedParams = Arc::new(RwLock::new((range, interval)));
     rt.spawn(poller::run(
         shared.clone(),
         symbols.clone(),
-        range,
-        interval,
+        params.clone(),
         Duration::from_secs(every.max(2)),
         tx.clone(),
         refresh.clone(),
@@ -106,6 +107,7 @@ fn main() -> Result<()> {
         source_name: source.name(),
         range,
         interval,
+        params,
         rx,
         refresh,
         alphai_tx,

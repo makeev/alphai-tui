@@ -61,10 +61,6 @@ impl Interval {
             Interval::D1 => "1d",
         }
     }
-
-    pub fn is_intraday(&self) -> bool {
-        !matches!(self, Interval::D1)
-    }
 }
 
 #[derive(Clone, Debug)]
@@ -87,8 +83,7 @@ impl Quote {
     }
 }
 
-// open/high/low/volume are unused until a candlestick view lands.
-#[allow(dead_code)]
+/// One OHLCV bar; `ts` is epoch seconds.
 #[derive(Clone, Copy, Debug)]
 pub struct Candle {
     pub ts: i64,

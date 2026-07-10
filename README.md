@@ -30,8 +30,10 @@ Built in Rust with [ratatui](https://ratatui.rs).
   Enter opens the article page on alphai.io; a settings toggle switches
   that to the original source site.
 - **Table**: watchlist with price, change, day range and unicode sparklines.
-- **Chart**: Braille line chart of the selected ticker with a previous-close
-  reference line.
+- **Chart**: candlestick chart of the selected ticker at half-block
+  resolution, with a previous-close reference line, SMA 20/100 overlays and
+  an RSI(14) panel. `c` switches to the classic Braille line chart, `m` and
+  `i` toggle the indicators, `[` and `]` cycle range presets on the fly.
 - **Insider**: SEC Form 4 activity for the selected ticker. A 30-day rollup
   (buys vs sells, dollar volumes, share of pre-arranged 10b5-1 plan trades,
   most active insiders) above the stream of filing events.
@@ -85,6 +87,9 @@ alphai-tui -s finnhub NVDA  # explicit source for one run
 | `-i, --interval` | `5m` | Candle size: `1m 2m 5m 15m 30m 60m 1d` |
 | `--once` | | Print quotes to stdout and exit |
 
+`-r` and `-i` set the startup window; the `[` and `]` keys cycle preset
+combinations for the session without persisting them.
+
 CLI arguments win over the config file; the config file wins over built-in
 defaults. API keys can also come from env vars, which win over the config:
 `ALPHAI_API_KEY`, `FINNHUB_API_KEY`, `APCA_API_KEY_ID`, `APCA_API_SECRET_KEY`.
@@ -99,6 +104,10 @@ defaults. API keys can also come from env vars, which win over the config:
 | `←` `→` / `h` `l` | news, insider | switch ticker |
 | `Enter` / `o` | news, insider | open article in browser |
 | `f` | news, split | toggle selected ticker / whole market |
+| `c` | chart, split | toggle candlestick / line chart |
+| `m` | chart, split | toggle SMA 20 and SMA 100 overlays |
+| `i` | chart, split | toggle the RSI(14) panel |
+| `[` `]` | everywhere | cycle range/interval presets (`1d/5m` `5d/15m` `1mo/60m` `6mo/1d` `1y/1d`) |
 | `r` | everywhere | refresh prices and the visible news view |
 | `s` | everywhere | settings |
 | `q` / `Esc` / `Ctrl-C` | everywhere | quit |
@@ -112,6 +121,8 @@ defaults. API keys can also come from env vars, which win over the config:
 - `finnhub`: needs a key (free at [finnhub.io](https://finnhub.io)).
   Real-time-ish quotes; historical candles are premium-only there, so charts
   build up from quotes collected during the session and reset on restart.
+  Range/interval switching with `[` `]` does not apply to that synthetic
+  history, and candles degrade to flat marks.
   Free tier is 60 req/min: keep `tickers x (60 / --every)` under 60.
   Crypto needs exchange-prefixed symbols (`BINANCE:BTCUSDT`).
 - `alpaca`: needs a key id and secret (free at
@@ -182,11 +193,12 @@ src/
     finnhub.rs   Finnhub /quote with synthetic session history
     alpaca.rs    snapshot + real historical bars (IEX/SIP feeds, crypto)
   alphai.rs      AlphaAI API client + demand-driven fetch task (TTL cache)
+  indicators.rs  SMA and RSI (Wilder smoothing)
   poller.rs      fetches all symbols concurrently on a timer -> mpsc channel
   app.rs         App state + key handling + event loop + settings logic
   ui/            View trait + implementations
     table.rs     watchlist table
-    chart.rs     line chart
+    chart.rs     candlestick + line chart, SMA overlays, RSI panel
     split.rs     table + chart
     news.rs      article list + sentiment rollup + detail pane
     insider.rs   Form 4 rollup + filing list

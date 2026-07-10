@@ -1,12 +1,13 @@
 use std::sync::{Arc, RwLock};
 use std::time::Instant;
 
+use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use tokio::sync::Notify;
 
 use crate::alphai::{Article, InsiderSummary, SentimentSummary};
-use crate::app::{App, AppInit, InsiderBundle, NewsBundle};
+use crate::app::{App, AppInit, ChartStyle, InsiderBundle, NewsBundle};
 use crate::config::Config;
 use crate::domain::{Candle, Interval, Quote, Range, TickerData};
 use crate::source::make_source;
@@ -22,6 +23,7 @@ fn empty_app(symbols: Vec<String>) -> App {
         source_name: "yahoo",
         range: Range::D1,
         interval: Interval::M5,
+        params: Arc::new(RwLock::new((Range::D1, Interval::M5))),
         rx,
         refresh: Arc::new(Notify::new()),
         alphai_tx,
@@ -29,6 +31,16 @@ fn empty_app(symbols: Vec<String>) -> App {
         alphai_enabled: true,
         first_run: false,
     })
+}
+
+fn press(app: &mut App, code: KeyCode) {
+    app.handle_key(KeyEvent::from(code));
+}
+
+/// A cell only candlesticks produce: the upper half block is not part of the
+/// table sparkline glyph ramp, and the line chart is pure Braille.
+fn has_candles(screen: &str) -> bool {
+    screen.contains('▀') || screen.contains('▄') || screen.contains('█')
 }
 
 fn fake_app() -> App {
@@ -90,7 +102,11 @@ fn article(title: &str, ticker: &str, score: i64, sentiment: &str) -> Article {
 }
 
 fn render(app: &mut App) -> String {
-    let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
+    render_sized(app, 100, 30)
+}
+
+fn render_sized(app: &mut App, width: u16, height: u16) -> String {
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
     terminal.draw(|f| ui::draw(f, app)).unwrap();
     let buffer = terminal.backend().buffer().clone();
     let area = buffer.area;
@@ -120,16 +136,96 @@ fn table_view_shows_quotes() {
 #[test]
 fn chart_view_shows_selected_symbol() {
     let mut app = fake_app();
-    app.view_idx = 3; // Chart
+    app.view_idx = ui::VIEW_CHART;
     app.selected = 1;
     let screen = render(&mut app);
     assert!(screen.contains("MSFT"), "screen:\n{screen}");
     assert!(screen.contains("414.50"), "screen:\n{screen}");
-    // Braille line-chart cells must be present
+    assert!(has_candles(&screen), "no candle cells rendered:\n{screen}");
+}
+
+#[test]
+fn chart_toggles_to_line_mode() {
+    let mut app = fake_app();
+    app.view_idx = ui::VIEW_CHART;
+    press(&mut app, KeyCode::Char('c'));
+    assert_eq!(app.chart_style, ChartStyle::Line);
+    let screen = render(&mut app);
     assert!(
         screen.chars().any(|c| ('\u{2800}'..='\u{28FF}').contains(&c)),
-        "no chart dots rendered:\n{screen}"
+        "no Braille line in line mode:\n{screen}"
     );
+    press(&mut app, KeyCode::Char('c'));
+    assert_eq!(app.chart_style, ChartStyle::Candles);
+}
+
+#[test]
+fn sma_toggle_hides_legend() {
+    let mut app = fake_app();
+    app.view_idx = ui::VIEW_CHART;
+    let screen = render(&mut app);
+    assert!(screen.contains("SMA20"), "screen:\n{screen}");
+    assert!(screen.contains("SMA100"), "screen:\n{screen}");
+    press(&mut app, KeyCode::Char('m'));
+    let screen = render(&mut app);
+    assert!(!screen.contains("SMA20"), "screen:\n{screen}");
+}
+
+#[test]
+fn rsi_toggle_hides_panel() {
+    let mut app = fake_app();
+    app.view_idx = ui::VIEW_CHART;
+    let screen = render(&mut app);
+    assert!(screen.contains("RSI(14)"), "screen:\n{screen}");
+    press(&mut app, KeyCode::Char('i'));
+    let screen = render(&mut app);
+    assert!(!screen.contains("RSI(14)"), "screen:\n{screen}");
+}
+
+#[test]
+fn rsi_panel_hidden_on_short_terminal() {
+    let mut app = fake_app();
+    app.view_idx = ui::VIEW_CHART;
+    // Body height 16 is below the RSI threshold: price chart keeps it all.
+    let screen = render_sized(&mut app, 100, 18);
+    assert!(!screen.contains("RSI(14)"), "screen:\n{screen}");
+    assert!(has_candles(&screen), "screen:\n{screen}");
+}
+
+#[test]
+fn range_keys_cycle_presets_and_update_header() {
+    let mut app = fake_app();
+    app.view_idx = ui::VIEW_CHART;
+    press(&mut app, KeyCode::Char(']'));
+    assert_eq!((app.range, app.interval), (Range::D5, Interval::M15));
+    let screen = render(&mut app);
+    assert!(screen.contains("5d/15m"), "screen:\n{screen}");
+    // Wrap backwards past the first preset.
+    press(&mut app, KeyCode::Char('['));
+    press(&mut app, KeyCode::Char('['));
+    assert_eq!((app.range, app.interval), (Range::Y1, Interval::D1));
+    assert!(render(&mut app).contains("1y/1d"));
+    // Old data stays on screen until the poller answers.
+    assert!(app.data.contains_key("AAPL"));
+}
+
+/// Budget invariant: a range switch must wake only the price poller. The
+/// visible AlphaAI bundle stays cached (manual_refresh would drop it and
+/// trigger a refetch on the next draw).
+#[test]
+fn range_switch_keeps_news_bundle() {
+    let mut app = fake_app();
+    app.view_idx = ui::VIEW_NEWS;
+    app.news.insert(
+        "AAPL".into(),
+        NewsBundle {
+            articles: vec![article("Apple beats expectations", "AAPL", 9, "positive")],
+            sentiment: None,
+            fetched: Instant::now(),
+        },
+    );
+    press(&mut app, KeyCode::Char(']'));
+    assert!(app.news.contains_key("AAPL"), "range switch dropped the news bundle");
 }
 
 #[test]
@@ -147,8 +243,8 @@ fn split_view_combines_table_chart_and_news() {
     let screen = render(&mut app);
     assert!(screen.contains("Watchlist"), "screen:\n{screen}");
     assert!(
-        screen.chars().any(|c| ('\u{2800}'..='\u{28FF}').contains(&c)),
-        "no chart in split view:\n{screen}"
+        screen.contains('▀'),
+        "no candle chart in split view:\n{screen}"
     );
     assert!(screen.contains("News · AAPL"), "screen:\n{screen}");
     assert!(screen.contains("Apple beats expectations"), "screen:\n{screen}");
@@ -316,6 +412,7 @@ fn first_run_opens_settings_with_welcome() {
         source_name: "yahoo",
         range: Range::D1,
         interval: Interval::M5,
+        params: Arc::new(RwLock::new((Range::D1, Interval::M5))),
         rx,
         refresh: Arc::new(Notify::new()),
         alphai_tx,

@@ -1,13 +1,14 @@
 use chrono::{DateTime, Local};
 use ratatui::Frame;
-use ratatui::layout::Rect;
+use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Style, Stylize};
 use ratatui::symbols;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Axis, Block, Chart, Dataset, GraphType, Paragraph};
 
-use crate::app::App;
-use crate::domain::fmt_price;
+use crate::app::{App, ChartStyle};
+use crate::domain::{Candle, Quote, TickerData, fmt_price};
+use crate::indicators;
 use crate::ui::View;
 
 pub struct ChartView;
@@ -22,11 +23,21 @@ impl View for ChartView {
     }
 }
 
-/// Line chart of closes for the selected symbol. Shared by ChartView and
-/// SplitView.
+const SMA_FAST: usize = 20;
+const SMA_SLOW: usize = 100;
+const SMA_FAST_COLOR: Color = Color::Yellow;
+const SMA_SLOW_COLOR: Color = Color::Magenta;
+const RSI_PERIOD: usize = 14;
+const RSI_PANEL_HEIGHT: u16 = 8;
+/// Below this total height the RSI panel is dropped so the price chart keeps
+/// usable space (same graceful degradation as the split view's news half).
+const RSI_MIN_CHART_HEIGHT: u16 = 20;
+
+/// Price chart of the selected symbol: candlesticks by default, the classic
+/// close line via the `c` toggle, optional SMA 20/100 overlays (`m`) and an
+/// RSI(14) panel (`i`). Shared by ChartView and SplitView.
 pub fn render_chart(f: &mut Frame, area: Rect, app: &App) {
     let symbol = app.selected_symbol().to_string();
-    let block = Block::bordered();
 
     let Some(data) = app.data.get(&symbol) else {
         let msg = match app.errors.get(&symbol) {
@@ -34,7 +45,7 @@ pub fn render_chart(f: &mut Frame, area: Rect, app: &App) {
             None => Line::from(format!("{symbol}: loading…")).dim(),
         };
         f.render_widget(
-            Paragraph::new(msg).block(block.title(format!(" {symbol} "))),
+            Paragraph::new(msg).block(Block::bordered().title(format!(" {symbol} "))),
             area,
         );
         return;
@@ -42,12 +53,80 @@ pub fn render_chart(f: &mut Frame, area: Rect, app: &App) {
     if data.candles.len() < 2 {
         f.render_widget(
             Paragraph::new(Line::from("not enough history for a chart").dim())
-                .block(block.title(format!(" {symbol} "))),
+                .block(Block::bordered().title(format!(" {symbol} "))),
             area,
         );
         return;
     }
 
+    let (price_area, rsi_area) = if app.show_rsi && area.height >= RSI_MIN_CHART_HEIGHT {
+        let [p, r] =
+            Layout::vertical([Constraint::Min(0), Constraint::Length(RSI_PANEL_HEIGHT)])
+                .areas(area);
+        (p, Some(r))
+    } else {
+        (area, None)
+    };
+
+    match app.chart_style {
+        ChartStyle::Line => render_price_line(f, price_area, app, &symbol, data),
+        ChartStyle::Candles => render_price_candles(f, price_area, app, &symbol, data),
+    }
+    if let Some(r) = rsi_area {
+        render_rsi(f, r, data);
+    }
+}
+
+fn dir_color(q: &Quote) -> Color {
+    match q.change() {
+        Some(c) if c < 0.0 => Color::Red,
+        Some(_) => Color::Green,
+        None => Color::Gray,
+    }
+}
+
+fn chart_title(symbol: &str, q: &Quote, show_sma: bool) -> Line<'static> {
+    let change_str = match (q.change(), q.change_pct()) {
+        (Some(c), Some(p)) => format!("{c:+.2} ({p:+.2}%)"),
+        _ => "—".into(),
+    };
+    let mut spans = vec![
+        Span::styled(format!(" {symbol} "), Style::new().bold()),
+        Span::raw(format!(
+            "{} {} ",
+            fmt_price(q.price),
+            q.currency.as_deref().unwrap_or("")
+        )),
+        Span::styled(format!("{change_str} "), Style::new().fg(dir_color(q))),
+    ];
+    if show_sma {
+        spans.push(Span::styled(
+            format!("SMA{SMA_FAST} "),
+            Style::new().fg(SMA_FAST_COLOR),
+        ));
+        spans.push(Span::styled(
+            format!("SMA{SMA_SLOW} "),
+            Style::new().fg(SMA_SLOW_COLOR),
+        ));
+    }
+    Line::from(spans)
+}
+
+/// Clock labels inside a ~day, dates beyond: "19:00" is ambiguous once the
+/// window spans several days (e.g. the 1mo/60m preset).
+fn axis_time_fmt(first_ts: i64, last_ts: i64) -> &'static str {
+    if last_ts - first_ts <= 2 * 86_400 { "%H:%M" } else { "%d %b" }
+}
+
+fn time_label(ts: i64, fmt: &str) -> String {
+    DateTime::from_timestamp(ts, 0)
+        .map(|t| t.with_timezone(&Local).format(fmt).to_string())
+        .unwrap_or_default()
+}
+
+// -- line mode --------------------------------------------------------------
+
+fn render_price_line(f: &mut Frame, area: Rect, app: &App, symbol: &str, data: &TickerData) {
     let q = &data.quote;
     let points: Vec<(f64, f64)> = data
         .candles
@@ -70,16 +149,24 @@ pub fn render_chart(f: &mut Frame, area: Rect, app: &App) {
     let (y_lo, y_hi) = (lo - pad, hi + pad);
     let x_hi = (points.len() - 1) as f64;
 
-    let dir_color = match q.change() {
-        Some(c) if c < 0.0 => Color::Red,
-        Some(_) => Color::Green,
-        None => Color::Gray,
-    };
-
     let prev_close_points: Vec<(f64, f64)> = q
         .prev_close
         .map(|pc| vec![(0.0, pc), (x_hi, pc)])
         .unwrap_or_default();
+
+    let closes: Vec<f64> = data.candles.iter().map(|c| c.close).collect();
+    let sma_points = |period: usize| -> Vec<(f64, f64)> {
+        indicators::sma(&closes, period)
+            .into_iter()
+            .enumerate()
+            .filter_map(|(i, v)| v.map(|v| (i as f64, v)))
+            .collect()
+    };
+    let (sma_fast, sma_slow) = if app.show_sma {
+        (sma_points(SMA_FAST), sma_points(SMA_SLOW))
+    } else {
+        (Vec::new(), Vec::new())
+    };
 
     let mut datasets = Vec::new();
     if !prev_close_points.is_empty() {
@@ -91,25 +178,31 @@ pub fn render_chart(f: &mut Frame, area: Rect, app: &App) {
                 .data(&prev_close_points),
         );
     }
+    for (pts, color) in [(&sma_slow, SMA_SLOW_COLOR), (&sma_fast, SMA_FAST_COLOR)] {
+        if !pts.is_empty() {
+            datasets.push(
+                Dataset::default()
+                    .marker(symbols::Marker::Braille)
+                    .graph_type(GraphType::Line)
+                    .style(Style::new().fg(color))
+                    .data(pts),
+            );
+        }
+    }
     datasets.push(
         Dataset::default()
             .marker(symbols::Marker::Braille)
             .graph_type(GraphType::Line)
-            .style(Style::new().fg(dir_color))
+            .style(Style::new().fg(dir_color(q)))
             .data(&points),
     );
 
-    let time_fmt = if app.interval.is_intraday() { "%H:%M" } else { "%d %b" };
-    let ts_label = |c: &crate::domain::Candle| -> String {
-        DateTime::from_timestamp(c.ts, 0)
-            .map(|t| t.with_timezone(&Local).format(time_fmt).to_string())
-            .unwrap_or_default()
-    };
+    let fmt = axis_time_fmt(data.candles[0].ts, data.candles.last().unwrap().ts);
     let mid = data.candles.len() / 2;
     let x_labels = vec![
-        ts_label(&data.candles[0]),
-        ts_label(&data.candles[mid]),
-        ts_label(data.candles.last().unwrap()),
+        time_label(data.candles[0].ts, fmt),
+        time_label(data.candles[mid].ts, fmt),
+        time_label(data.candles.last().unwrap().ts, fmt),
     ];
     let y_labels = vec![
         fmt_price(y_lo),
@@ -117,22 +210,8 @@ pub fn render_chart(f: &mut Frame, area: Rect, app: &App) {
         fmt_price(y_hi),
     ];
 
-    let change_str = match (q.change(), q.change_pct()) {
-        (Some(c), Some(p)) => format!("{c:+.2} ({p:+.2}%)"),
-        _ => "—".into(),
-    };
-    let title = Line::from(vec![
-        Span::styled(format!(" {symbol} "), Style::new().bold()),
-        Span::raw(format!(
-            "{} {} ",
-            fmt_price(q.price),
-            q.currency.as_deref().unwrap_or("")
-        )),
-        Span::styled(format!("{change_str} "), Style::new().fg(dir_color)),
-    ]);
-
     let chart = Chart::new(datasets)
-        .block(block.title(title))
+        .block(Block::bordered().title(chart_title(symbol, q, app.show_sma)))
         .x_axis(
             Axis::default()
                 .bounds([0.0, x_hi])
@@ -146,4 +225,355 @@ pub fn render_chart(f: &mut Frame, area: Rect, app: &App) {
                 .style(Style::new().dim()),
         );
     f.render_widget(chart, area);
+}
+
+// -- candle mode --------------------------------------------------------------
+
+/// Hand-rolled candlestick renderer writing straight into the buffer at
+/// half-block resolution: two subrows per terminal row, body `█ ▀ ▄`, wick
+/// `│ ╵ ╷`. ratatui's Chart widget has no candle graph type.
+fn render_price_candles(f: &mut Frame, area: Rect, app: &App, symbol: &str, data: &TickerData) {
+    let q = &data.quote;
+    let block = Block::bordered().title(chart_title(symbol, q, app.show_sma));
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    // Aggregation preserves the global low/high, so the y-range can be folded
+    // over the raw candles before the downsampling decision.
+    let (mut lo, mut hi) = data
+        .candles
+        .iter()
+        .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), c| {
+            (lo.min(c.low), hi.max(c.high))
+        });
+    if let Some(pc) = q.prev_close {
+        lo = lo.min(pc);
+        hi = hi.max(pc);
+    }
+    let pad = ((hi - lo) * 0.05).max(hi.abs() * 0.0005).max(1e-9);
+    let (y_lo, y_hi) = (lo - pad, hi + pad);
+
+    let y_labels = [fmt_price(y_hi), fmt_price((y_lo + y_hi) / 2.0), fmt_price(y_lo)];
+    let gutter = y_labels.iter().map(|s| s.chars().count()).max().unwrap() as u16 + 1;
+    if inner.width <= gutter + 2 || inner.height <= 2 {
+        return; // too small: leave the bare block
+    }
+    let plot = Rect {
+        x: inner.x + gutter,
+        y: inner.y,
+        width: inner.width - gutter,
+        height: inner.height - 1, // bottom row = time axis
+    };
+
+    // One candle per column at most; aggregate right-aligned buckets beyond
+    // that so the newest candle always sits at the right edge.
+    let max_cols = plot.width as usize;
+    let (display, sample_idx): (Vec<Candle>, Vec<usize>) = if data.candles.len() > max_cols {
+        let ranges = bucket_ranges(data.candles.len(), max_cols);
+        (
+            ranges.iter().map(|r| aggregate(&data.candles[r.clone()])).collect(),
+            ranges.iter().map(|r| r.end - 1).collect(),
+        )
+    } else {
+        (data.candles.clone(), (0..data.candles.len()).collect())
+    };
+    // With few candles widen each one instead of leaving the plot empty:
+    // slot = body (up to 3 cols) + 1 col gap.
+    let n = display.len();
+    let slot = (max_cols / n).clamp(1, 4) as u16;
+    let body_w = if slot == 1 { 1 } else { slot - 1 };
+    let slot_x = |i: usize| plot.x + plot.width - (n - i) as u16 * slot;
+
+    let buf = f.buffer_mut();
+
+    // Previous-close reference first; candles draw over it.
+    if let Some(pc) = q.prev_close {
+        let row = (scale(pc, y_lo, y_hi, plot.height as usize * 2) / 2) as u16;
+        for x in (plot.x..plot.x + plot.width).step_by(2) {
+            if let Some(cell) = buf.cell_mut((x, plot.y + row)) {
+                cell.set_char('╌').set_fg(Color::DarkGray);
+            }
+        }
+    }
+
+    for (i, c) in display.iter().enumerate() {
+        let prev_close = (i > 0).then(|| display[i - 1].close);
+        let color = candle_color(c, prev_close);
+        let body_x = slot_x(i) + (slot - body_w);
+        let wick_x = body_x + body_w / 2;
+        for (row, ch) in candle_column(c, y_lo, y_hi, plot.height) {
+            for x in body_x..body_x + body_w {
+                // Wick glyphs only in the center column; the rest of the body
+                // width shows body halves alone.
+                let ch = if x == wick_x { ch } else { body_only(ch) };
+                if ch == ' ' {
+                    continue;
+                }
+                if let Some(cell) = buf.cell_mut((x, plot.y + row)) {
+                    cell.set_char(ch).set_fg(color);
+                }
+            }
+        }
+    }
+
+    // SMA overlay: one dot per column, threading between candles (bodies win
+    // shared cells). Slow first so the fast line wins where they cross.
+    if app.show_sma {
+        let closes: Vec<f64> = data.candles.iter().map(|c| c.close).collect();
+        for (period, color) in [(SMA_SLOW, SMA_SLOW_COLOR), (SMA_FAST, SMA_FAST_COLOR)] {
+            let line = indicators::sma(&closes, period);
+            for (i, &raw) in sample_idx.iter().enumerate() {
+                let Some(v) = line[raw] else { continue };
+                let row = (scale(v, y_lo, y_hi, plot.height as usize * 2) / 2) as u16;
+                let x = slot_x(i) + (slot - body_w) + body_w / 2;
+                if let Some(cell) = buf.cell_mut((x, plot.y + row))
+                    && matches!(cell.symbol(), " " | "│" | "╵" | "╷" | "╌" | "·")
+                {
+                    cell.set_char('·').set_fg(color);
+                }
+            }
+        }
+    }
+
+    // Axes: price labels right-aligned in the gutter, three time labels below.
+    let dim = Style::new().dim();
+    let label_ys = [plot.y, plot.y + plot.height / 2, plot.y + plot.height - 1];
+    for (label, y) in y_labels.iter().zip(label_ys) {
+        let x = plot.x - 1 - label.chars().count() as u16;
+        buf.set_string(x, y, label, dim);
+    }
+    let axis_y = plot.y + plot.height;
+    let fmt = axis_time_fmt(display[0].ts, display[n - 1].ts);
+    let first = time_label(display[0].ts, fmt);
+    let last = time_label(display[n - 1].ts, fmt);
+    buf.set_string(plot.x, axis_y, &first, dim);
+    let last_x = plot.x + plot.width - last.chars().count() as u16;
+    buf.set_string(last_x, axis_y, &last, dim);
+    if plot.width >= 30 {
+        let mid = time_label(display[n / 2].ts, fmt);
+        let mid_x = plot.x + (plot.width - mid.chars().count() as u16) / 2;
+        buf.set_string(mid_x, axis_y, &mid, dim);
+    }
+}
+
+/// Price -> subrow index in `[0, sub_rows)`, 0 = top.
+fn scale(v: f64, y_lo: f64, y_hi: f64, sub_rows: usize) -> usize {
+    (((y_hi - v) / (y_hi - y_lo) * sub_rows as f64) as usize).min(sub_rows - 1)
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Half {
+    Body,
+    Wick,
+    Empty,
+}
+
+/// The glyphs of one candle's wick column, as (row offset, char) pairs.
+/// Each terminal row covers subrows 2r and 2r+1; the body spans
+/// [scale(max(o,c)), scale(min(o,c))] inclusive, so a doji still occupies
+/// one subrow and every candle stays visible.
+fn candle_column(c: &Candle, y_lo: f64, y_hi: f64, rows: u16) -> Vec<(u16, char)> {
+    let sub_rows = rows as usize * 2;
+    let body_top = scale(c.open.max(c.close), y_lo, y_hi, sub_rows);
+    let body_bot = scale(c.open.min(c.close), y_lo, y_hi, sub_rows);
+    let wick_top = scale(c.high, y_lo, y_hi, sub_rows);
+    let wick_bot = scale(c.low, y_lo, y_hi, sub_rows);
+    let half = |sub: usize| {
+        if (body_top..=body_bot).contains(&sub) {
+            Half::Body
+        } else if (wick_top..=wick_bot).contains(&sub) {
+            Half::Wick
+        } else {
+            Half::Empty
+        }
+    };
+    (0..rows)
+        .filter_map(|row| {
+            let ch = match (half(row as usize * 2), half(row as usize * 2 + 1)) {
+                (Half::Body, Half::Body) => '█',
+                (Half::Body, _) => '▀',
+                (_, Half::Body) => '▄',
+                (Half::Wick, Half::Wick) => '│',
+                (Half::Wick, Half::Empty) => '╵',
+                (Half::Empty, Half::Wick) => '╷',
+                (Half::Empty, Half::Empty) => return None,
+            };
+            Some((row, ch))
+        })
+        .collect()
+}
+
+/// Body columns beside the wick column keep only the body halves.
+fn body_only(ch: char) -> char {
+    match ch {
+        '█' | '▀' | '▄' => ch,
+        _ => ' ',
+    }
+}
+
+/// Finnhub synthesizes flat o=h=l=c candles, so a doji falls back to the
+/// direction against the previous candle's close.
+fn candle_color(c: &Candle, prev_close: Option<f64>) -> Color {
+    if c.close > c.open {
+        Color::Green
+    } else if c.close < c.open {
+        Color::Red
+    } else {
+        match prev_close {
+            Some(p) if c.close < p => Color::Red,
+            Some(_) => Color::Green,
+            None => Color::Gray,
+        }
+    }
+}
+
+/// Candles spread evenly over the columns (bucket sizes differ by at most
+/// one), so the plot always fills its full width and the newest candle ends
+/// the last bucket.
+fn bucket_ranges(len: usize, max_cols: usize) -> Vec<std::ops::Range<usize>> {
+    let cols = max_cols.min(len);
+    (0..cols)
+        .map(|i| (i * len / cols)..((i + 1) * len / cols))
+        .collect()
+}
+
+fn aggregate(chunk: &[Candle]) -> Candle {
+    let mut volume = None;
+    let (mut high, mut low) = (f64::NEG_INFINITY, f64::INFINITY);
+    for c in chunk {
+        high = high.max(c.high);
+        low = low.min(c.low);
+        if let Some(v) = c.volume {
+            volume = Some(volume.unwrap_or(0.0) + v);
+        }
+    }
+    Candle {
+        ts: chunk[0].ts,
+        open: chunk[0].open,
+        high,
+        low,
+        close: chunk[chunk.len() - 1].close,
+        volume,
+    }
+}
+
+// -- RSI panel ----------------------------------------------------------------
+
+fn render_rsi(f: &mut Frame, area: Rect, data: &TickerData) {
+    let closes: Vec<f64> = data.candles.iter().map(|c| c.close).collect();
+    let rsi = indicators::rsi(&closes, RSI_PERIOD);
+    let Some(last) = rsi.last().copied().flatten() else {
+        f.render_widget(
+            Paragraph::new(
+                Line::from(format!("not enough history for RSI({RSI_PERIOD})")).dim(),
+            )
+            .block(Block::bordered().title(format!(" RSI({RSI_PERIOD}) "))),
+            area,
+        );
+        return;
+    };
+
+    let x_hi = (closes.len() - 1) as f64;
+    let ref30 = [(0.0, 30.0), (x_hi, 30.0)];
+    let ref70 = [(0.0, 70.0), (x_hi, 70.0)];
+    let points: Vec<(f64, f64)> = rsi
+        .iter()
+        .enumerate()
+        .filter_map(|(i, v)| v.map(|v| (i as f64, v)))
+        .collect();
+
+    let mut datasets = Vec::new();
+    for refline in [&ref30[..], &ref70[..]] {
+        datasets.push(
+            Dataset::default()
+                .marker(symbols::Marker::Dot)
+                .graph_type(GraphType::Line)
+                .style(Style::new().fg(Color::DarkGray))
+                .data(refline),
+        );
+    }
+    datasets.push(
+        Dataset::default()
+            .marker(symbols::Marker::Braille)
+            .graph_type(GraphType::Line)
+            .style(Style::new().fg(Color::Cyan))
+            .data(&points),
+    );
+
+    let val_color = if last >= 70.0 {
+        Color::Red
+    } else if last <= 30.0 {
+        Color::Green
+    } else {
+        Color::Gray
+    };
+    let title = Line::from(vec![
+        Span::styled(format!(" RSI({RSI_PERIOD}) "), Style::new().bold()),
+        Span::styled(format!("{last:.1} "), Style::new().fg(val_color)),
+    ]);
+    let chart = Chart::new(datasets)
+        .block(Block::bordered().title(title))
+        .x_axis(Axis::default().bounds([0.0, x_hi]))
+        .y_axis(
+            Axis::default()
+                .bounds([0.0, 100.0])
+                .labels(["0", "50", "100"])
+                .style(Style::new().dim()),
+        );
+    f.render_widget(chart, area);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn candle(open: f64, high: f64, low: f64, close: f64) -> Candle {
+        Candle { ts: 0, open, high, low, close, volume: None }
+    }
+
+    #[test]
+    fn candle_column_worked_example() {
+        let cols = candle_column(&candle(2.0, 9.0, 1.0, 6.0), 0.0, 10.0, 5);
+        assert_eq!(cols, vec![(0, '╷'), (1, '│'), (2, '█'), (3, '█'), (4, '▀')]);
+    }
+
+    #[test]
+    fn doji_is_always_visible() {
+        let cols = candle_column(&candle(5.0, 5.0, 5.0, 5.0), 0.0, 10.0, 5);
+        assert_eq!(cols.len(), 1);
+        assert!(matches!(cols[0].1, '▀' | '▄'));
+    }
+
+    #[test]
+    fn bucket_ranges_fill_all_columns() {
+        assert_eq!(bucket_ranges(10, 4), vec![0..2, 2..5, 5..7, 7..10]);
+        assert_eq!(bucket_ranges(130, 108).len(), 108);
+        // Fewer candles than columns: identity buckets.
+        assert_eq!(bucket_ranges(5, 10), (0..5).map(|i| i..i + 1).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn aggregate_merges_ohlcv() {
+        let mut a = candle(10.0, 12.0, 9.0, 11.0);
+        a.volume = Some(100.0);
+        let mut b = candle(11.0, 15.0, 10.5, 14.0);
+        b.volume = Some(50.0);
+        let m = aggregate(&[a, b]);
+        assert_eq!((m.open, m.high, m.low, m.close), (10.0, 15.0, 9.0, 14.0));
+        assert_eq!(m.volume, Some(150.0));
+
+        let m = aggregate(&[candle(1.0, 2.0, 0.5, 1.5)]);
+        assert_eq!(m.volume, None);
+    }
+
+    #[test]
+    fn candle_colors() {
+        assert_eq!(candle_color(&candle(1.0, 2.0, 1.0, 2.0), None), Color::Green);
+        assert_eq!(candle_color(&candle(2.0, 2.0, 1.0, 1.0), None), Color::Red);
+        // Doji: direction against the previous close, gray without one.
+        let doji = candle(5.0, 5.0, 5.0, 5.0);
+        assert_eq!(candle_color(&doji, Some(6.0)), Color::Red);
+        assert_eq!(candle_color(&doji, Some(4.0)), Color::Green);
+        assert_eq!(candle_color(&doji, None), Color::Gray);
+    }
 }
