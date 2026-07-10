@@ -1,5 +1,8 @@
 # alphai-tui
 
+[![crates.io](https://img.shields.io/crates/v/alphai-tui.svg)](https://crates.io/crates/alphai-tui)
+[![license](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/makeev/alphai-tui/blob/main/LICENSE)
+
 Terminal dashboard for watching stocks: live quotes and charts next to
 AI-scored financial news, sentiment and SEC Form 4 insider activity.
 Built in Rust with [ratatui](https://ratatui.rs).
@@ -54,6 +57,12 @@ use the [AlphaAI](https://alphai.io) API and need a free key.
 ## Install
 
 With a Rust toolchain (1.85+):
+
+```sh
+cargo install alphai-tui
+```
+
+Or straight from the repository:
 
 ```sh
 cargo install --git https://github.com/makeev/alphai-tui

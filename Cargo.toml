@@ -10,6 +10,7 @@ homepage = "https://alphai.io"
 readme = "README.md"
 keywords = ["tui", "stocks", "finance", "news", "ratatui"]
 categories = ["command-line-utilities", "finance"]
+exclude = ["assets/*", "demo.tape"]
 
 [dependencies]
 anyhow = "1.0.103"
