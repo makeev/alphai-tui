@@ -265,11 +265,13 @@ fn render_price_candles(f: &mut Frame, area: Rect, app: &App, symbol: &str, data
         height: inner.height - 1, // bottom row = time axis
     };
 
-    // One candle per column at most; aggregate right-aligned buckets beyond
-    // that so the newest candle always sits at the right edge.
+    // Every candle gets a slot of body + 1 column of gap so neighbours never
+    // fuse into a solid mass; history beyond width/2 candles aggregates into
+    // even buckets.
     let max_cols = plot.width as usize;
-    let (display, sample_idx): (Vec<Candle>, Vec<usize>) = if data.candles.len() > max_cols {
-        let ranges = bucket_ranges(data.candles.len(), max_cols);
+    let max_candles = (max_cols / 2).max(1);
+    let (display, sample_idx): (Vec<Candle>, Vec<usize>) = if data.candles.len() > max_candles {
+        let ranges = bucket_ranges(data.candles.len(), max_candles);
         (
             ranges.iter().map(|r| aggregate(&data.candles[r.clone()])).collect(),
             ranges.iter().map(|r| r.end - 1).collect(),
@@ -278,10 +280,10 @@ fn render_price_candles(f: &mut Frame, area: Rect, app: &App, symbol: &str, data
         (data.candles.clone(), (0..data.candles.len()).collect())
     };
     // With few candles widen each one instead of leaving the plot empty:
-    // slot = body (up to 3 cols) + 1 col gap.
+    // body up to 3 columns.
     let n = display.len();
-    let slot = (max_cols / n).clamp(1, 4) as u16;
-    let body_w = if slot == 1 { 1 } else { slot - 1 };
+    let slot = (max_cols / n).clamp(2, 4) as u16;
+    let body_w = slot - 1;
     let slot_x = |i: usize| plot.x + plot.width - (n - i) as u16 * slot;
 
     let buf = f.buffer_mut();
