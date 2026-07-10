@@ -4,7 +4,7 @@ Terminal dashboard for watching stocks: live quotes and charts next to
 AI-scored financial news, sentiment and SEC Form 4 insider activity.
 Built in Rust with [ratatui](https://ratatui.rs).
 
-![alphai-tui split view: watchlist with sparklines, candlestick chart with SMA 20/100 and RSI(14), AI-scored news feed](assets/screenshot.png)
+![alphai-tui split view: watchlist with sparklines, candlestick chart with SMA 20/100 and RSI(14), AI-scored news feed](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/split.png)
 
 ## What you get
 
@@ -23,6 +23,9 @@ Built in Rust with [ratatui](https://ratatui.rs).
   outlets carry it (`×7`). Enter opens the article page on alphai.io; a
   settings toggle switches that to the original source site. A 7-day
   bullish/bearish rollup tops the ticker scope.
+
+  ![alphai-tui news view: article list next to the full AI analysis card with price impact, trading value, context and a contrarian view](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/news.png)
+
 - **Table**: watchlist with price, change, day range and unicode sparklines.
 - **Chart**: candlestick chart of the selected ticker at half-block
   resolution, with a previous-close reference line, SMA 20/100 overlays and
@@ -37,6 +40,9 @@ Built in Rust with [ratatui](https://ratatui.rs).
   filing events. Each filing row carries a buy/sell glyph and a `D`/`I`
   marker for direct or indirect ownership. The stream pages like the news
   feed: down on the last row loads more.
+
+  ![alphai-tui insider view: 30-day Form 4 rollup with top insiders above the filing stream, article card open on a 10b5-1 plan sale](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/insider.png)
+
 - In-app settings (`s`): pick the price source, paste API keys once and
   choose where Enter opens news articles.
   Everything is saved to a config file, so after the first run a bare
