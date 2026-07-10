@@ -196,13 +196,13 @@ fn rsi_panel_hidden_on_short_terminal() {
 fn range_keys_cycle_presets_and_update_header() {
     let mut app = fake_app();
     app.view_idx = ui::VIEW_CHART;
-    press(&mut app, KeyCode::Char(']'));
+    press(&mut app, KeyCode::Char('t'));
     assert_eq!((app.range, app.interval), (Range::D5, Interval::M15));
     let screen = render(&mut app);
     assert!(screen.contains("5d/15m"), "screen:\n{screen}");
     // Wrap backwards past the first preset.
-    press(&mut app, KeyCode::Char('['));
-    press(&mut app, KeyCode::Char('['));
+    press(&mut app, KeyCode::Char('T'));
+    press(&mut app, KeyCode::Char('T'));
     assert_eq!((app.range, app.interval), (Range::Y1, Interval::D1));
     assert!(render(&mut app).contains("1y/1d"));
     // Old data stays on screen until the poller answers.
@@ -224,7 +224,7 @@ fn range_switch_keeps_news_bundle() {
             fetched: Instant::now(),
         },
     );
-    press(&mut app, KeyCode::Char(']'));
+    press(&mut app, KeyCode::Char('t'));
     assert!(app.news.contains_key("AAPL"), "range switch dropped the news bundle");
 }
 

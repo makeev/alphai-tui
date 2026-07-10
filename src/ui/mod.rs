@@ -91,9 +91,9 @@ fn footer_line(app: &App) -> Paragraph<'static> {
         match app.view_idx {
             VIEW_NEWS => " q quit · tab/1-9 view · ↑↓ article · ←→ ticker · ⏎ open · f scope · r refresh · s settings",
             VIEW_INSIDER => " q quit · tab/1-9 view · ↑↓ article · ←→ ticker · ⏎ open · r refresh · s settings",
-            VIEW_SPLIT => " q quit · tab/1-9 view · ↑↓ select · f scope · c/m/i chart · [/] range · r refresh · s settings",
-            VIEW_CHART => " q quit · tab/1-9 view · ↑↓ select · c style · m sma · i rsi · [/] range · r refresh · s settings",
-            _ => " q quit · tab/1-9 view · ↑↓ select · [/] range · r refresh · s settings",
+            VIEW_SPLIT => " q quit · tab/1-9 view · ↑↓ select · f scope · c/m/i chart · t range · r refresh · s settings",
+            VIEW_CHART => " q quit · tab/1-9 view · ↑↓ select · c style · m sma · i rsi · t range · r refresh · s settings",
+            _ => " q quit · tab/1-9 view · ↑↓ select · t range · r refresh · s settings",
         }
     };
     let mut spans = vec![Span::raw(hints).dim()];

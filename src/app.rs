@@ -61,9 +61,9 @@ pub enum ChartStyle {
     Line,
 }
 
-/// The combos the [ and ] keys cycle through; wraps at the ends. A startup
-/// combo not in the table (e.g. -r 3mo) jumps to the first preset on ] and
-/// to the last on [.
+/// The combos the t and T keys cycle through; wraps at the ends. A startup
+/// combo not in the table (e.g. -r 3mo) jumps to the first preset on t and
+/// to the last on T.
 pub const RANGE_PRESETS: [(Range, Interval); 5] = [
     (Range::D1, Interval::M5),
     (Range::D5, Interval::M15),
@@ -356,8 +356,8 @@ impl App {
             }
             KeyCode::Char('m') if chart_view => self.show_sma = !self.show_sma,
             KeyCode::Char('i') if chart_view => self.show_rsi = !self.show_rsi,
-            KeyCode::Char('[') => self.cycle_range(-1),
-            KeyCode::Char(']') => self.cycle_range(1),
+            KeyCode::Char('t') => self.cycle_range(1),
+            KeyCode::Char('T') => self.cycle_range(-1),
             KeyCode::Up | KeyCode::Char('k') => self.selected = self.selected.saturating_sub(1),
             KeyCode::Down | KeyCode::Char('j') => {
                 self.selected = (self.selected + 1).min(self.symbols.len() - 1)
@@ -385,10 +385,10 @@ impl App {
         }
     }
 
-    /// [ / ]: jump to the next range/interval preset and wake the price
-    /// poller. Only `refresh.notify_one()` here: `manual_refresh()` would
-    /// also drop the visible AlphaAI bundle and burn a request from its
-    /// budget for what is purely a price-history change.
+    /// t / T: jump to the next/previous range/interval preset and wake the
+    /// price poller. Only `refresh.notify_one()` here: `manual_refresh()`
+    /// would also drop the visible AlphaAI bundle and burn a request from
+    /// its budget for what is purely a price-history change.
     fn cycle_range(&mut self, dir: isize) {
         let (range, interval) = next_preset((self.range, self.interval), dir);
         self.range = range;
