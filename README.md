@@ -4,21 +4,7 @@ Terminal dashboard for watching stocks: live quotes and charts next to
 AI-scored financial news, sentiment and SEC Form 4 insider activity.
 Built in Rust with [ratatui](https://ratatui.rs).
 
-```text
- alphai-tui · yahoo  1:Split 2:News 3:Table 4:Chart 5:Insider · alphai ✓ · upd 18:40:12 · 5m
- 7d sentiment  ▲ 12 bullish · 5 neutral · ▼ 3 bearish  (20 scored)
-┌ News · NVDA ──────────────────────────────────────────────────────────────────┐
-│▶ 2h   9  ▲  earnings  NVIDIA beats on Q2 data-center revenue                  │
-│  5h   7  ▲  tech      Hyperscaler capex guidance lifts AI supply chain        │
-│  1d   6  ·  movers    Chip names drift lower into the print                   │
-└───────────────────────────────────────────────────────────────────────────────┘
-┌ article · ⏎ open in browser ──────────────────────────────────────────────────┐
-│ NVIDIA beats on Q2 data-center revenue                                        │
-│ example.com · 2h ago · earnings · score 9 · NVDA                              │
-│ Data-center revenue grew again as cloud buildouts continue...                 │
-└───────────────────────────────────────────────────────────────────────────────┘
- q quit · tab/1-9 view · ↑↓ article · ←→ ticker · ⏎ open · f scope · r refresh · s settings
-```
+![alphai-tui split view: watchlist with sparklines, candlestick chart with SMA 20/100 and RSI(14), AI-scored news feed](assets/screenshot.png)
 
 ## What you get
 
