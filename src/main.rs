@@ -29,8 +29,7 @@ struct Args {
     /// Ticker symbols to watch, e.g. AAPL MSFT NVDA BTC-USD (default: saved watchlist)
     symbols: Vec<String>,
 
-    /// Price source: yahoo (keyless), finnhub or alpaca (need a key)
-    #[arg(short, long)]
+    #[arg(short, long, help = source::registry::cli_source_help())]
     source: Option<String>,
 
     /// Poll interval in seconds [default: 15]
@@ -66,8 +65,8 @@ fn main() -> Result<()> {
         .source
         .clone()
         .or_else(|| cfg.source.clone())
-        .unwrap_or_else(|| "yahoo".to_string());
-    let source = source::make_source(&source_name, cfg.finnhub_key().as_deref(), cfg.alpaca_keys())?;
+        .unwrap_or_else(|| source::registry::SOURCES[0].id.to_string());
+    let source = source::make_source(&source_name, &cfg)?;
     let every = args.every.or(cfg.every).unwrap_or(15);
     let range = args
         .range

@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -5,6 +6,25 @@ use serde::{Deserialize, Serialize};
 
 /// Used when neither the CLI nor the config file provides symbols.
 pub const DEFAULT_WATCHLIST: [&str; 4] = ["AAPL", "MSFT", "NVDA", "BTC-USD"];
+
+/// One credential a price source (or the app itself) needs. `config_name`
+/// is the field name inside `[keys]` in config.toml; existing names are
+/// frozen, renaming one would orphan the key in users' files. The env var
+/// wins over the file at resolution time.
+pub struct KeyField {
+    pub config_name: &'static str,
+    pub env_var: &'static str,
+    /// Row label in the settings screen.
+    pub label: &'static str,
+}
+
+/// The AlphaAI news key: app-level rather than a price source, but it lives
+/// in the same `[keys]` table and the same settings list.
+pub const ALPHAI_KEY_FIELD: KeyField = KeyField {
+    config_name: "alphai",
+    env_var: "ALPHAI_API_KEY",
+    label: "AlphaAI key",
+};
 
 /// Persisted app settings. Precedence at use time: CLI args > env vars
 /// (for API keys) > this file > built-in defaults.
@@ -19,42 +39,33 @@ pub struct Config {
     /// Where Enter opens a news article: "alphai" (article page on
     /// alphai.io, the default) or "original" (the source site).
     pub news_open: Option<String>,
-    pub keys: Keys,
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
-pub struct Keys {
-    pub finnhub: Option<String>,
-    pub alphai: Option<String>,
-    pub alpaca_key_id: Option<String>,
-    pub alpaca_secret: Option<String>,
+    /// API keys by `KeyField::config_name`. A map rather than a struct so a
+    /// key this binary does not know (say, a config written by a newer
+    /// version) survives a load -> save round trip instead of being dropped.
+    pub keys: BTreeMap<String, String>,
 }
 
 impl Config {
-    /// Env var wins so a shell-exported key keeps working after a config
-    /// file appears.
-    pub fn finnhub_key(&self) -> Option<String> {
-        env_key("FINNHUB_API_KEY").or_else(|| self.keys.finnhub.clone())
+    /// Resolved credential for one key field: the env var wins so a
+    /// shell-exported key keeps working after a config file appears; blank
+    /// values count as unset.
+    pub fn key_value(&self, field: &KeyField) -> Option<String> {
+        env_key(field.env_var).or_else(|| {
+            self.keys
+                .get(field.config_name)
+                .map(|v| v.trim().to_string())
+                .filter(|v| !v.is_empty())
+        })
     }
 
     pub fn alphai_key(&self) -> Option<String> {
-        env_key("ALPHAI_API_KEY").or_else(|| self.keys.alphai.clone())
+        self.key_value(&ALPHAI_KEY_FIELD)
     }
 
     /// True when Enter on a news article should open the original source
     /// instead of the alphai.io article page.
     pub fn news_open_original(&self) -> bool {
         self.news_open.as_deref() == Some("original")
-    }
-
-    /// Each half resolves independently (env > file, standard Alpaca SDK
-    /// var names); Some only when both the key id and the secret are set.
-    pub fn alpaca_keys(&self) -> Option<(String, String)> {
-        let file_key = |v: &Option<String>| v.clone().filter(|k| !k.trim().is_empty());
-        let id = env_key("APCA_API_KEY_ID").or_else(|| file_key(&self.keys.alpaca_key_id))?;
-        let secret = env_key("APCA_API_SECRET_KEY").or_else(|| file_key(&self.keys.alpaca_secret))?;
-        Some((id, secret))
     }
 }
 
@@ -126,6 +137,14 @@ pub fn save_to(p: &Path, cfg: &Config) -> Result<()> {
 mod tests {
     use super::*;
 
+    /// A key field whose env var can never be set, so tests exercise the
+    /// file side of the resolution deterministically.
+    const TEST_FIELD: KeyField = KeyField {
+        config_name: "finnhub",
+        env_var: "ALPHAI_TUI_TEST_NEVER_SET",
+        label: "test",
+    };
+
     #[test]
     fn round_trip() {
         let dir = std::env::temp_dir().join(format!("alphai-tui-test-{}", std::process::id()));
@@ -137,12 +156,12 @@ mod tests {
             range: Some("5d".into()),
             interval: Some("15m".into()),
             news_open: Some("original".into()),
-            keys: Keys {
-                finnhub: Some("fh-key".into()),
-                alphai: Some("ak_live_x".into()),
-                alpaca_key_id: Some("PKTEST123".into()),
-                alpaca_secret: Some("alpaca-secret-x".into()),
-            },
+            keys: BTreeMap::from([
+                ("finnhub".to_string(), "fh-key".to_string()),
+                ("alphai".to_string(), "ak_live_x".to_string()),
+                ("alpaca_key_id".to_string(), "PKTEST123".to_string()),
+                ("alpaca_secret".to_string(), "alpaca-secret-x".to_string()),
+            ]),
         };
         save_to(&p, &cfg).unwrap();
         let loaded = load_from(&p).unwrap().unwrap();
@@ -161,6 +180,44 @@ mod tests {
         let cfg: Config = toml::from_str("source = \"yahoo\"").unwrap();
         assert_eq!(cfg.source.as_deref(), Some("yahoo"));
         assert!(cfg.watchlist.is_empty());
-        assert!(cfg.keys.alphai.is_none());
+        assert!(cfg.keys.is_empty());
+    }
+
+    /// The exact `[keys]` shape written by pre-registry versions (and shown
+    /// in the README) keeps parsing; those field names are frozen.
+    #[test]
+    fn old_keys_table_parses_verbatim() {
+        let cfg: Config = toml::from_str(
+            r#"
+            source = "yahoo"
+            [keys]
+            alphai = "ak_live_x"
+            finnhub = ""
+            alpaca_key_id = "PK123"
+            alpaca_secret = "sec"
+            "#,
+        )
+        .unwrap();
+        assert_eq!(cfg.keys.get("alphai").map(String::as_str), Some("ak_live_x"));
+        assert_eq!(cfg.keys.get("alpaca_secret").map(String::as_str), Some("sec"));
+        // A blank file value counts as unset at resolution time.
+        assert_eq!(cfg.key_value(&TEST_FIELD), None);
+    }
+
+    #[test]
+    fn key_value_reads_and_trims_file_values() {
+        let cfg: Config = toml::from_str("[keys]\nfinnhub = \" fh-key \"").unwrap();
+        assert_eq!(cfg.key_value(&TEST_FIELD).as_deref(), Some("fh-key"));
+        assert_eq!(Config::default().key_value(&TEST_FIELD), None);
+    }
+
+    /// A `[keys]` entry this binary does not know must survive load -> save
+    /// (a struct with named fields would silently drop it).
+    #[test]
+    fn unknown_key_survives_round_trip() {
+        let cfg: Config = toml::from_str("[keys]\nnewsource = \"k\"").unwrap();
+        let raw = toml::to_string_pretty(&cfg).unwrap();
+        let again: Config = toml::from_str(&raw).unwrap();
+        assert_eq!(again.keys.get("newsource").map(String::as_str), Some("k"));
     }
 }

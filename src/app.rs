@@ -1,5 +1,5 @@
-use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::sync::{Arc, LazyLock};
 use std::time::Instant;
 
 use anyhow::Result;
@@ -11,10 +11,10 @@ use tokio::sync::Notify;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
 use crate::alphai::{self, Article, InsiderSummary, SentimentSummary};
-use crate::config::{self, Config};
+use crate::config::{self, ALPHAI_KEY_FIELD, Config, KeyField};
 use crate::domain::{Interval, Range, TickerData};
 use crate::poller::{SharedParams, SharedSource, SourceEvent};
-use crate::source::make_source;
+use crate::source::{make_source, registry};
 use crate::ui;
 
 /// Cached news for one cache key (a symbol, or `alphai::MARKET_KEY`).
@@ -74,8 +74,7 @@ impl InsiderBundle {
     }
 }
 
-/// State of the settings overlay. Field order (cursor): price source,
-/// finnhub key, alphai key, alpaca key id, alpaca secret, news opens, save.
+/// State of the settings overlay; the cursor walks `settings_rows()`.
 #[derive(Default)]
 pub struct SettingsState {
     pub open: bool,
@@ -86,16 +85,46 @@ pub struct SettingsState {
     pub editing: bool,
     pub input: String,
     pub source_choice: String,
-    pub finnhub_key: String,
-    pub alphai_key: String,
-    pub alpaca_key_id: String,
-    pub alpaca_secret: String,
+    /// Edit buffers for the `Key` rows, by `KeyField::config_name`.
+    pub key_values: BTreeMap<&'static str, String>,
     /// "alphai" (article page on alphai.io) or "original" (source site).
     pub news_open_choice: String,
     pub message: Option<String>,
 }
 
-pub const SETTINGS_ROWS: usize = 7;
+/// One row of the settings overlay, in cursor order.
+#[derive(Clone, Copy)]
+pub enum SettingsRow {
+    /// The price-source picker (cycles the registry).
+    SourceChoice,
+    /// An editable, masked credential.
+    Key(&'static KeyField),
+    /// Where Enter opens a news article.
+    NewsOpen,
+    /// The save button.
+    Save,
+}
+
+/// Rows of the settings overlay: the source picker, every registered
+/// source's key fields in registry order, the app-level AlphaAI key, the
+/// news-open toggle, Save. Derived from the registry, so a new source's key
+/// rows appear (and persist, and mask) with no settings-code changes.
+pub fn settings_rows() -> &'static [SettingsRow] {
+    static ROWS: LazyLock<Vec<SettingsRow>> = LazyLock::new(|| {
+        let mut rows = vec![SettingsRow::SourceChoice];
+        rows.extend(
+            registry::SOURCES
+                .iter()
+                .flat_map(|s| s.key_fields)
+                .map(SettingsRow::Key),
+        );
+        rows.push(SettingsRow::Key(&ALPHAI_KEY_FIELD));
+        rows.push(SettingsRow::NewsOpen);
+        rows.push(SettingsRow::Save);
+        rows
+    });
+    &ROWS
+}
 
 /// How the price chart draws history: candlesticks or the classic close line.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -684,16 +713,23 @@ impl App {
     // -- settings ----------------------------------------------------------
 
     pub fn open_settings(&mut self) {
+        let key_values = settings_rows()
+            .iter()
+            .filter_map(|row| match row {
+                SettingsRow::Key(field) => Some((
+                    field.config_name,
+                    self.config.keys.get(field.config_name).cloned().unwrap_or_default(),
+                )),
+                _ => None,
+            })
+            .collect();
         let s = &mut self.settings;
         s.open = true;
         s.cursor = 0;
         s.editing = false;
         s.message = None;
         s.source_choice = self.source_name.to_string();
-        s.finnhub_key = self.config.keys.finnhub.clone().unwrap_or_default();
-        s.alphai_key = self.config.keys.alphai.clone().unwrap_or_default();
-        s.alpaca_key_id = self.config.keys.alpaca_key_id.clone().unwrap_or_default();
-        s.alpaca_secret = self.config.keys.alpaca_secret.clone().unwrap_or_default();
+        s.key_values = key_values;
         s.news_open_choice = if self.config.news_open_original() {
             "original".to_string()
         } else {
@@ -707,12 +743,8 @@ impl App {
             match key.code {
                 KeyCode::Enter => {
                     let value = s.input.trim().to_string();
-                    match s.cursor {
-                        1 => s.finnhub_key = value,
-                        2 => s.alphai_key = value,
-                        3 => s.alpaca_key_id = value,
-                        4 => s.alpaca_secret = value,
-                        _ => {}
+                    if let SettingsRow::Key(field) = settings_rows()[s.cursor] {
+                        s.key_values.insert(field.config_name, value);
                     }
                     s.editing = false;
                 }
@@ -735,32 +767,24 @@ impl App {
                 self.settings.cursor = self.settings.cursor.saturating_sub(1)
             }
             KeyCode::Down | KeyCode::Char('j') | KeyCode::Tab => {
-                self.settings.cursor = (self.settings.cursor + 1).min(SETTINGS_ROWS - 1)
+                self.settings.cursor = (self.settings.cursor + 1).min(settings_rows().len() - 1)
             }
-            KeyCode::Left | KeyCode::Right | KeyCode::Char(' ')
-                if self.settings.cursor == 0 =>
-            {
-                self.toggle_source_choice()
+            KeyCode::Left | KeyCode::Right | KeyCode::Char(' ') => {
+                match settings_rows()[self.settings.cursor] {
+                    SettingsRow::SourceChoice => self.toggle_source_choice(),
+                    SettingsRow::NewsOpen => self.toggle_news_open_choice(),
+                    _ => {}
+                }
             }
-            KeyCode::Left | KeyCode::Right | KeyCode::Char(' ')
-                if self.settings.cursor == 5 =>
-            {
-                self.toggle_news_open_choice()
-            }
-            KeyCode::Enter => match self.settings.cursor {
-                0 => self.toggle_source_choice(),
-                5 => self.toggle_news_open_choice(),
-                1..=4 => {
+            KeyCode::Enter => match settings_rows()[self.settings.cursor] {
+                SettingsRow::SourceChoice => self.toggle_source_choice(),
+                SettingsRow::NewsOpen => self.toggle_news_open_choice(),
+                SettingsRow::Key(field) => {
                     let s = &mut self.settings;
-                    s.input = match s.cursor {
-                        1 => s.finnhub_key.clone(),
-                        2 => s.alphai_key.clone(),
-                        3 => s.alpaca_key_id.clone(),
-                        _ => s.alpaca_secret.clone(),
-                    };
+                    s.input = s.key_values.get(field.config_name).cloned().unwrap_or_default();
                     s.editing = true;
                 }
-                _ => self.settings_save(),
+                SettingsRow::Save => self.settings_save(),
             },
             _ => {}
         }
@@ -784,30 +808,35 @@ impl App {
     fn settings_save(&mut self) {
         let mut cfg = self.config.clone();
         cfg.source = Some(self.settings.source_choice.clone());
-        cfg.keys.finnhub = non_empty(&self.settings.finnhub_key);
-        cfg.keys.alphai = non_empty(&self.settings.alphai_key);
-        cfg.keys.alpaca_key_id = non_empty(&self.settings.alpaca_key_id);
-        cfg.keys.alpaca_secret = non_empty(&self.settings.alpaca_secret);
+        // A cleared key leaves the file entirely instead of writing "".
+        for (name, value) in &self.settings.key_values {
+            let value = value.trim();
+            if value.is_empty() {
+                cfg.keys.remove(*name);
+            } else {
+                cfg.keys.insert((*name).to_string(), value.to_string());
+            }
+        }
         cfg.news_open = Some(self.settings.news_open_choice.clone());
         // Saving persists the watchlist on screen, so a bare `alphai-tui`
         // reopens exactly this setup.
         cfg.watchlist = self.symbols.clone();
 
+        // A swap to another source, or an edit to the selected source's own
+        // keys, rebuilds it. Comparing the env-layered values means editing
+        // a file key that an env var shadows does not trigger a rebuild.
+        let keys_changed = registry::find(&self.settings.source_choice).is_some_and(|info| {
+            info.key_fields
+                .iter()
+                .any(|field| cfg.key_value(field) != self.config.key_value(field))
+        });
         let source_changed = !self
             .settings
             .source_choice
             .eq_ignore_ascii_case(self.source_name)
-            || (self.settings.source_choice == "finnhub"
-                && cfg.keys.finnhub != self.config.keys.finnhub)
-            || (self.settings.source_choice == "alpaca"
-                && (cfg.keys.alpaca_key_id != self.config.keys.alpaca_key_id
-                    || cfg.keys.alpaca_secret != self.config.keys.alpaca_secret));
+            || keys_changed;
         if source_changed {
-            match make_source(
-                &self.settings.source_choice,
-                cfg.finnhub_key().as_deref(),
-                cfg.alpaca_keys(),
-            ) {
+            match make_source(&self.settings.source_choice, &cfg) {
                 Ok(src) => {
                     self.source_name = src.name();
                     *self.source.write().unwrap() = src;
@@ -863,18 +892,13 @@ fn append_page(articles: &mut Vec<Article>, page: Vec<Article>) {
     );
 }
 
-/// Settings source toggle cycle: yahoo -> finnhub -> alpaca -> yahoo.
+/// Settings source toggle: cycles the registry in order; unknown names
+/// reset to the keyless default.
 fn next_source(cur: &str) -> &'static str {
-    match cur {
-        "yahoo" => "finnhub",
-        "finnhub" => "alpaca",
-        _ => "yahoo",
+    match registry::SOURCES.iter().position(|s| s.id == cur) {
+        Some(i) => registry::SOURCES[(i + 1) % registry::SOURCES.len()].id,
+        None => registry::SOURCES[0].id,
     }
-}
-
-fn non_empty(v: &str) -> Option<String> {
-    let v = v.trim();
-    (!v.is_empty()).then(|| v.to_string())
 }
 
 /// Tag an outgoing article link with this client as the traffic source, so
@@ -927,11 +951,21 @@ mod tests {
 
     #[test]
     fn source_cycle_covers_all_and_wraps() {
-        assert_eq!(next_source("yahoo"), "finnhub");
-        assert_eq!(next_source("finnhub"), "alpaca");
-        assert_eq!(next_source("alpaca"), "yahoo");
+        use crate::source::registry::SOURCES;
+        let mut cur = SOURCES[0].id;
+        let mut seen = vec![cur];
+        for _ in 1..SOURCES.len() {
+            cur = next_source(cur);
+            seen.push(cur);
+        }
+        // Every registered source is reachable exactly once, then it wraps.
+        let mut ids: Vec<&str> = SOURCES.iter().map(|s| s.id).collect();
+        seen.sort_unstable();
+        ids.sort_unstable();
+        assert_eq!(seen, ids);
+        assert_eq!(next_source(cur), SOURCES[0].id);
         // Anything unexpected resets to the keyless default.
-        assert_eq!(next_source("weird"), "yahoo");
+        assert_eq!(next_source("weird"), SOURCES[0].id);
     }
 
     #[test]

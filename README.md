@@ -240,6 +240,8 @@ src/
   domain.rs      Quote, Candle, TickerData, Range/Interval
   config.rs      config file load/save (CLI > env > file > defaults)
   source/        DataSource trait + implementations
+    registry.rs  the one place a new source registers; CLI, settings and keys derive from it
+    http.rs      shared client builder, JSON fetching and error helpers
     yahoo.rs     Yahoo v8 chart endpoint (quote + history in one call)
     finnhub.rs   Finnhub /quote with synthetic session history
     alpaca.rs    snapshot + real historical bars (IEX/SIP feeds, crypto)
@@ -263,8 +265,15 @@ over `&mut App`. The UI never blocks on the network.
 
 ### Adding a price source
 
-Implement `source::DataSource` (one async `fetch` returning quote + candles)
-in a new module and register it in `source::make_source`.
+1. Implement `source::DataSource` (one async `fetch` returning quote plus
+   candles) in a new module under `src/source/`. The helpers in
+   `source/http.rs` cover the client, JSON fetching and error plumbing.
+2. Append one `SourceInfo` entry to `source/registry.rs`: id, aliases, a
+   settings hint, the key fields it needs and a constructor. The `--source`
+   help and error list, the settings screen rows and picker cycle, config
+   `[keys]` persistence and env-var overrides all derive from that entry,
+   and the registry tests check it.
+3. Describe the source in this README.
 
 ### Adding a view
 

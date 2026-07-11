@@ -25,7 +25,7 @@ fn empty_app_with_cmds(
 ) -> (App, tokio::sync::mpsc::UnboundedReceiver<alphai::Cmd>) {
     let (_tx, rx) = tokio::sync::mpsc::unbounded_channel();
     let (alphai_tx, alphai_rx) = tokio::sync::mpsc::unbounded_channel();
-    let source = make_source("yahoo", None, None).unwrap();
+    let source = make_source("yahoo", &Config::default()).unwrap();
     let app = App::new(AppInit {
         symbols,
         source: Arc::new(RwLock::new(source)),
@@ -782,8 +782,8 @@ fn ttl_refetch_waits_for_top_row() {
 #[test]
 fn settings_overlay_masks_keys() {
     let mut app = fake_app();
-    app.config.keys.alphai = Some("ak_live_abcdefgh1234".into());
-    app.config.keys.alpaca_secret = Some("alpaca-secret-abcd9876".into());
+    app.config.keys.insert("alphai".into(), "ak_live_abcdefgh1234".into());
+    app.config.keys.insert("alpaca_secret".into(), "alpaca-secret-abcd9876".into());
     app.open_settings();
     let screen = render(&mut app);
     assert!(screen.contains("Settings"), "screen:\n{screen}");
@@ -807,7 +807,7 @@ fn settings_overlay_masks_keys() {
 fn first_run_opens_settings_with_welcome() {
     let (_tx, rx) = tokio::sync::mpsc::unbounded_channel();
     let (alphai_tx, _alphai_rx) = tokio::sync::mpsc::unbounded_channel();
-    let source = make_source("yahoo", None, None).unwrap();
+    let source = make_source("yahoo", &Config::default()).unwrap();
     let mut app = App::new(AppInit {
         symbols: vec!["AAPL".into()],
         source: Arc::new(RwLock::new(source)),

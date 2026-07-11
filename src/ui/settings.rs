@@ -3,14 +3,20 @@ use ratatui::style::{Color, Modifier, Style, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Clear, Paragraph, Wrap};
 
-use crate::app::App;
+use crate::app::{App, SettingsRow, settings_rows};
 use crate::config;
+use crate::source::registry;
 use crate::ui::centered;
 
 /// Modal overlay drawn on top of whatever view is active.
 pub fn render(f: &mut Frame, app: &App) {
     let s = &app.settings;
-    let area = centered(f.area(), 74, if s.first_run { 22 } else { 17 });
+    let rows = settings_rows();
+    // Height scales with the registry (rows plus the fixed chrome: borders,
+    // blank lines, message, help and config-path footer), so a new source's
+    // key rows never clip.
+    let height = rows.len() as u16 + 10 + if s.first_run { 5 } else { 0 };
+    let area = centered(f.area(), 74, height);
     f.render_widget(Clear, area);
 
     let mut lines: Vec<Line> = Vec::new();
@@ -28,42 +34,41 @@ pub fn render(f: &mut Frame, app: &App) {
         lines.push(Line::from(""));
     }
 
-    let rows: [(&str, String, String); 6] = [
-        (
-            "Price source",
-            format!("‹ {} ›", s.source_choice),
-            source_hint(s.source_choice.as_str()),
-        ),
-        (
-            "Finnhub key",
-            field_value(s, 1, &s.finnhub_key),
-            env_hint("FINNHUB_API_KEY"),
-        ),
-        (
-            "AlphaAI key",
-            field_value(s, 2, &s.alphai_key),
-            env_hint("ALPHAI_API_KEY"),
-        ),
-        (
-            "Alpaca key ID",
-            field_value(s, 3, &s.alpaca_key_id),
-            env_hint("APCA_API_KEY_ID"),
-        ),
-        (
-            "Alpaca secret",
-            field_value(s, 4, &s.alpaca_secret),
-            env_hint("APCA_API_SECRET_KEY"),
-        ),
-        (
-            "News opens",
-            format!("‹ {} ›", s.news_open_choice),
-            news_open_hint(s.news_open_choice.as_str()),
-        ),
-    ];
-    for (i, (label, value, hint)) in rows.into_iter().enumerate() {
+    for (i, row) in rows.iter().enumerate() {
         let selected = s.cursor == i;
-        let editing = selected && s.editing;
         let marker = if selected { "▶ " } else { "  " };
+        if let SettingsRow::Save = row {
+            lines.push(Line::from(""));
+            let save_style = if selected {
+                Style::new().add_modifier(Modifier::REVERSED)
+            } else {
+                Style::new()
+            };
+            lines.push(Line::from(vec![
+                Span::raw(marker),
+                Span::styled("[ Save and close ]", save_style),
+            ]));
+            continue;
+        }
+        let (label, value, hint) = match row {
+            SettingsRow::SourceChoice => (
+                "Price source",
+                format!("‹ {} ›", s.source_choice),
+                source_hint(s.source_choice.as_str()),
+            ),
+            SettingsRow::Key(field) => (
+                field.label,
+                field_value(s, i, s.key_values.get(field.config_name).map_or("", String::as_str)),
+                env_hint(field.env_var),
+            ),
+            SettingsRow::NewsOpen => (
+                "News opens",
+                format!("‹ {} ›", s.news_open_choice),
+                news_open_hint(s.news_open_choice.as_str()),
+            ),
+            SettingsRow::Save => unreachable!(),
+        };
+        let editing = selected && s.editing;
         let value_style = if editing {
             Style::new().fg(Color::Yellow)
         } else if selected {
@@ -79,17 +84,6 @@ pub fn render(f: &mut Frame, app: &App) {
             Span::raw(hint).dim(),
         ]));
     }
-
-    lines.push(Line::from(""));
-    let save_style = if s.cursor == 6 {
-        Style::new().add_modifier(Modifier::REVERSED)
-    } else {
-        Style::new()
-    };
-    lines.push(Line::from(vec![
-        Span::raw(if s.cursor == 6 { "▶ " } else { "  " }),
-        Span::styled("[ Save and close ]", save_style),
-    ]));
 
     lines.push(Line::from(""));
     if let Some(msg) = &s.message {
@@ -137,11 +131,10 @@ pub fn mask(key: &str) -> String {
 }
 
 fn source_hint(choice: &str) -> String {
-    match choice {
-        "finnhub" => "real-time quotes, needs a key (free at finnhub.io)".into(),
-        "alpaca" => "realtime IEX quotes and real candle history, free keys at alpaca.markets".into(),
-        _ => "no key needed, ~15 min delayed".into(),
-    }
+    registry::find(choice)
+        .unwrap_or(&registry::SOURCES[0])
+        .hint
+        .to_string()
 }
 
 fn news_open_hint(choice: &str) -> String {
