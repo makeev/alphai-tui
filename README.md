@@ -67,7 +67,7 @@ Built in Rust with [ratatui](https://ratatui.rs).
   `alphai-tui` is enough.
 
 Prices work with no key at all (Yahoo). News, sentiment and insider views
-use the [AlphaAI](https://alphai.io) API and need a free key.
+use the [AlphaAI](https://alphai.io?utm_source=alphai-tui&utm_medium=referral) API and need a free key.
 
 ## Install
 
@@ -118,7 +118,7 @@ alphai-tui AAPL MSFT NVDA BTC-USD
 ```
 
 The first run opens the settings screen: pick a price source and paste your
-AlphaAI key (get one free at [alphai.io](https://alphai.io), Account >
+AlphaAI key (get one free at [alphai.io](https://alphai.io?utm_source=alphai-tui&utm_medium=referral), Account >
 API keys). Leave it empty if you only want quotes and charts. Your watchlist
 and options persist in the config file, so next time plain `alphai-tui` works.
 
@@ -199,7 +199,7 @@ The same trick turns the terminal into a full trading desk with an AI
 analyst on staff. Run an agent such as
 [Claude Code](https://claude.com/claude-code) in the pane next to
 alphai-tui and connect it to the
-[AlphaAI MCP server](https://alphai.io/mcp), which serves the same news,
+[AlphaAI MCP server](https://alphai.io/mcp?utm_source=alphai-tui&utm_medium=referral), which serves the same news,
 sentiment and insider data as the dashboard. You watch the tape on one
 side while the agent digs through whatever the tape surfaces: ask it for
 the last insider sells and the news that moved the stock this week, and
@@ -243,7 +243,7 @@ get a sourced brief without leaving the terminal.
 
 **News, sentiment, insider**
 
-- [AlphaAI](https://alphai.io): AI-enriched financial news feed. Every
+- [AlphaAI](https://alphai.io?utm_source=alphai-tui&utm_medium=referral): AI-enriched financial news feed. Every
   article carries validated tickers, a category, a deterministic 1 to 10
   relevance score and a full per-ticker AI analysis (sentiment, price
   impact, confidence, novelty, actionability); insider rows are generated
@@ -258,7 +258,7 @@ get a sourced brief without leaving the terminal.
   on Pro keys, detected automatically). Paging back past your plan's
   archive horizon (30 days on Free, 90 on Basic) shows an upgrade hint
   instead of older articles. Full API reference:
-  [alphai.io/developers](https://alphai.io/developers).
+  [alphai.io/developers](https://alphai.io/developers?utm_source=alphai-tui&utm_medium=referral).
 
 Ticker forms follow the US/Yahoo convention (`AAPL`, `BTC-USD`, `VOD.L`),
 which is also what AlphaAI uses. Finnhub-specific symbols like
