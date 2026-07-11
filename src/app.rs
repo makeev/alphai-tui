@@ -22,6 +22,7 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use crate::alphai::{self, Article};
 use crate::config::Config;
 use crate::domain::{Interval, Range, TickerData};
+use crate::keymap::{Action, Keymap};
 use crate::poller::{SharedParams, SharedSource, SourceEvent};
 use crate::theme::Theme;
 use crate::ui;
@@ -156,6 +157,7 @@ pub struct App {
     pub settings: SettingsState,
     pub config: Config,
     pub theme: Theme,
+    pub keymap: Keymap,
     source: SharedSource,
     params: SharedParams,
     inflight: HashSet<String>,
@@ -192,6 +194,7 @@ impl App {
             settings: SettingsState::default(),
             config: init.config,
             theme: init.theme,
+            keymap: Keymap::default(),
             source: init.source,
             params: init.params,
             inflight: HashSet::new(),
@@ -247,7 +250,10 @@ impl App {
         }
     }
 
-    /// Returns true when the app should quit.
+    /// Returns true when the app should quit. Fixed keys resolve first
+    /// (Ctrl-C, Esc, the positional 1-9 digits); everything else goes
+    /// through the keymap and dispatches on `Action`, with the same view
+    /// guards the raw keys used — a remap can never bypass them.
     pub(crate) fn handle_key(&mut self, key: KeyEvent) -> bool {
         if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
             return true;
@@ -258,28 +264,35 @@ impl App {
         if self.article_overlay.open {
             return self.handle_overlay_key(key);
         }
+        if key.code == KeyCode::Esc {
+            return true;
+        }
+        if let KeyCode::Char(c @ '1'..='9') = key.code {
+            let idx = c as usize - '1' as usize;
+            if idx < ui::VIEWS.len() {
+                self.switch_view(idx);
+            }
+            return false;
+        }
         let news_view = ui::VIEWS[self.view_idx].navigates_articles();
         let chart_view = ui::VIEWS[self.view_idx].has_chart_panel();
-        match key.code {
-            KeyCode::Char('q') | KeyCode::Esc => return true,
-            KeyCode::Tab => self.switch_view((self.view_idx + 1) % ui::VIEWS.len()),
-            KeyCode::BackTab => {
+        let Some(action) = self.keymap.resolve(&key) else {
+            return false;
+        };
+        match action {
+            Action::Quit => return true,
+            Action::NextView => self.switch_view((self.view_idx + 1) % ui::VIEWS.len()),
+            Action::PrevView => {
                 self.switch_view((self.view_idx + ui::VIEWS.len() - 1) % ui::VIEWS.len())
             }
-            KeyCode::Char(c @ '1'..='9') => {
-                let idx = c as usize - '1' as usize;
-                if idx < ui::VIEWS.len() {
-                    self.switch_view(idx);
-                }
-            }
-            KeyCode::Char('s') => self.open_settings(),
-            KeyCode::Char('r') => self.manual_refresh(),
+            Action::Settings => self.open_settings(),
+            Action::Refresh => self.manual_refresh(),
             // News/Insider: up/down scroll articles, left/right switch ticker.
-            KeyCode::Up | KeyCode::Char('k') if news_view => {
+            Action::Up if news_view => {
                 self.news_selected = self.news_selected.saturating_sub(1);
                 self.card_scroll = 0;
             }
-            KeyCode::Down | KeyCode::Char('j') if news_view => {
+            Action::Down if news_view => {
                 let max = self.visible_articles().map_or(0, <[Article]>::len);
                 if self.news_selected + 1 < max {
                     self.news_selected += 1;
@@ -289,28 +302,28 @@ impl App {
                     self.request_more_articles();
                 }
             }
-            KeyCode::Left | KeyCode::Char('h') if news_view => {
+            Action::Left if news_view => {
                 self.selected = self.selected.saturating_sub(1);
                 self.news_selected = 0;
                 self.card_scroll = 0;
             }
-            KeyCode::Right | KeyCode::Char('l') if news_view => {
+            Action::Right if news_view => {
                 self.selected = (self.selected + 1).min(self.symbols.len() - 1);
                 self.news_selected = 0;
                 self.card_scroll = 0;
             }
-            // Card pane scrolling (the list keeps ↑↓/jk).
-            KeyCode::PageUp if self.view_id() == ui::ViewId::News => {
+            // Card pane scrolling (the list keeps up/down).
+            Action::PageUp if self.view_id() == ui::ViewId::News => {
                 self.card_scroll = self.card_scroll.saturating_sub(10)
             }
-            KeyCode::PageDown if self.view_id() == ui::ViewId::News => {
+            Action::PageDown if self.view_id() == ui::ViewId::News => {
                 self.card_scroll = self.card_scroll.saturating_add(10)
             }
-            KeyCode::Char('x') if self.view_id() == ui::ViewId::News => {
+            Action::CycleLayout if self.view_id() == ui::ViewId::News => {
                 self.news_layout = self.news_layout.next();
                 self.card_scroll = 0;
             }
-            KeyCode::Enter | KeyCode::Char('o') if news_view => {
+            Action::Open if news_view => {
                 if let Some(a) = self
                     .visible_articles()
                     .and_then(|list| list.get(self.news_selected))
@@ -318,57 +331,59 @@ impl App {
                     open_url(&self.article_url(a));
                 }
             }
-            KeyCode::Char('v')
+            Action::Card
                 if news_view && self.visible_articles().is_some_and(|list| !list.is_empty()) =>
             {
                 self.article_overlay = ArticleOverlay { open: true, scroll: 0 };
             }
-            KeyCode::Char('f')
+            Action::CycleScope
                 if ui::VIEWS[self.view_idx].feed_shown() == Some(FeedKind::News) =>
             {
                 self.news_scope = self.news_scope.next();
                 self.news_selected = 0;
                 self.card_scroll = 0;
             }
-            KeyCode::Char('c') if chart_view => {
+            Action::ChartStyle if chart_view => {
                 self.chart_style = match self.chart_style {
                     ChartStyle::Candles => ChartStyle::Line,
                     ChartStyle::Line => ChartStyle::Candles,
                 }
             }
-            KeyCode::Char('m') if chart_view => self.show_sma = !self.show_sma,
-            KeyCode::Char('i') if chart_view => self.show_rsi = !self.show_rsi,
-            KeyCode::Char('t') => self.cycle_range(1),
-            KeyCode::Char('T') => self.cycle_range(-1),
-            KeyCode::Up | KeyCode::Char('k') => self.selected = self.selected.saturating_sub(1),
-            KeyCode::Down | KeyCode::Char('j') => {
-                self.selected = (self.selected + 1).min(self.symbols.len() - 1)
-            }
+            Action::ToggleSma if chart_view => self.show_sma = !self.show_sma,
+            Action::ToggleRsi if chart_view => self.show_rsi = !self.show_rsi,
+            Action::NextPreset => self.cycle_range(1),
+            Action::PrevPreset => self.cycle_range(-1),
+            Action::Up => self.selected = self.selected.saturating_sub(1),
+            Action::Down => self.selected = (self.selected + 1).min(self.symbols.len() - 1),
             _ => {}
         }
         false
     }
 
     /// Keys while the article card overlay is open; it swallows everything so
-    /// list navigation does not shift under the reader.
+    /// list navigation does not shift under the reader. Esc always closes.
     fn handle_overlay_key(&mut self, key: KeyEvent) -> bool {
-        match key.code {
-            KeyCode::Char('q') => return true,
-            KeyCode::Esc | KeyCode::Char('v') => self.article_overlay = ArticleOverlay::default(),
-            KeyCode::Up | KeyCode::Char('k') => {
+        if key.code == KeyCode::Esc {
+            self.article_overlay = ArticleOverlay::default();
+            return false;
+        }
+        match self.keymap.resolve(&key) {
+            Some(Action::Quit) => return true,
+            Some(Action::Card) => self.article_overlay = ArticleOverlay::default(),
+            Some(Action::Up) => {
                 self.article_overlay.scroll = self.article_overlay.scroll.saturating_sub(1)
             }
             // The render pass clamps the scroll to the card's real height.
-            KeyCode::Down | KeyCode::Char('j') => {
+            Some(Action::Down) => {
                 self.article_overlay.scroll = self.article_overlay.scroll.saturating_add(1)
             }
-            KeyCode::PageUp => {
+            Some(Action::PageUp) => {
                 self.article_overlay.scroll = self.article_overlay.scroll.saturating_sub(10)
             }
-            KeyCode::PageDown => {
+            Some(Action::PageDown) => {
                 self.article_overlay.scroll = self.article_overlay.scroll.saturating_add(10)
             }
-            KeyCode::Enter | KeyCode::Char('o') => {
+            Some(Action::Open) => {
                 if let Some(a) = self
                     .visible_articles()
                     .and_then(|list| list.get(self.news_selected))

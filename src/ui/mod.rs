@@ -13,6 +13,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
 use crate::app::{App, FeedKind};
+use crate::keymap::Action;
 
 /// Stable identity of a display mode, decoupled from its position in the
 /// tab order.
@@ -25,6 +26,36 @@ pub enum ViewId {
     Insider,
 }
 
+/// One footer hint: the keys of `actions` (looked up in the live keymap so
+/// the footer always shows what is actually bound) plus a short label.
+/// `fixed` names keys outside the keymap (the positional 1-9 digits).
+pub struct Hint {
+    pub actions: &'static [Action],
+    pub fixed: &'static str,
+    pub label: &'static str,
+}
+
+impl Hint {
+    pub const fn act(actions: &'static [Action], label: &'static str) -> Self {
+        Self { actions, fixed: "", label }
+    }
+
+    pub const fn fixed(fixed: &'static str, label: &'static str) -> Self {
+        Self { actions: &[], fixed, label }
+    }
+}
+
+/// Footer hints of views that only navigate the watchlist (the trait
+/// default; Table uses it as is).
+pub static DEFAULT_HINTS: &[Hint] = &[
+    Hint::act(&[Action::Quit], "quit"),
+    Hint::fixed("tab/1-9", "view"),
+    Hint::act(&[Action::Up, Action::Down], "select"),
+    Hint::act(&[Action::NextPreset], "interval"),
+    Hint::act(&[Action::Refresh], "refresh"),
+    Hint::act(&[Action::Settings], "settings"),
+];
+
 /// A display mode. Views are stateless renderers: all mutable state
 /// (selection, scroll) lives in `App`, so adding a view is a unit struct, a
 /// `ViewId` variant and one entry in `VIEWS`. The capability methods drive
@@ -34,9 +65,9 @@ pub trait View: Sync {
     fn id(&self) -> ViewId;
     fn title(&self) -> &'static str;
 
-    /// Footer hint line while this view is active.
-    fn footer_hints(&self) -> &'static str {
-        " q quit · tab/1-9 view · ↑↓ select · t interval · r refresh · s settings"
+    /// Footer hints while this view is active; keys render from the keymap.
+    fn hints(&self) -> &'static [Hint] {
+        DEFAULT_HINTS
     }
 
     /// The AlphaAI feed to keep fresh while this view is visible (drives
@@ -139,11 +170,24 @@ mod tests;
 
 fn footer_line(app: &App) -> Paragraph<'static> {
     let hints = if app.settings.open {
-        " ↑↓ move · enter edit/toggle/save · esc close"
+        // The settings form is a text input; its keys are not remappable.
+        " ↑↓ move · enter edit/toggle/save · esc close".to_string()
     } else if app.article_overlay.open {
-        " ↑↓/jk scroll · pgup/pgdn page · ⏎ open in browser · esc/v close"
+        " ↑↓/jk scroll · pgup/pgdn page · ⏎ open in browser · esc/v close".to_string()
     } else {
-        VIEWS[app.view_idx].footer_hints()
+        let parts: Vec<String> = VIEWS[app.view_idx]
+            .hints()
+            .iter()
+            .map(|h| {
+                let keys = if h.actions.is_empty() {
+                    h.fixed.to_string()
+                } else {
+                    app.keymap.labels(h.actions)
+                };
+                format!("{keys} {}", h.label)
+            })
+            .collect();
+        format!(" {}", parts.join(" · "))
     };
     let mut spans = vec![Span::raw(hints).dim()];
     if let Some((symbol, error)) = app.errors.iter().next() {

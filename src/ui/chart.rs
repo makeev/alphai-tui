@@ -9,8 +9,9 @@ use ratatui::widgets::{Axis, Block, Chart, Dataset, GraphType, Paragraph};
 use crate::app::{App, ChartStyle};
 use crate::domain::{Candle, Quote, Range, TickerData, fmt_price};
 use crate::indicators::{self, SMA_FAST, SMA_SLOW};
+use crate::keymap::Action;
 use crate::theme::Theme;
-use crate::ui::{View, ViewId};
+use crate::ui::{Hint, View, ViewId};
 
 pub struct ChartView;
 
@@ -23,8 +24,19 @@ impl View for ChartView {
         "Chart"
     }
 
-    fn footer_hints(&self) -> &'static str {
-        " q quit · tab/1-9 view · ↑↓ select · c style · m sma · i rsi · t interval · r refresh · s settings"
+    fn hints(&self) -> &'static [Hint] {
+        const HINTS: &[Hint] = &[
+            Hint::act(&[Action::Quit], "quit"),
+            Hint::fixed("tab/1-9", "view"),
+            Hint::act(&[Action::Up, Action::Down], "select"),
+            Hint::act(&[Action::ChartStyle], "style"),
+            Hint::act(&[Action::ToggleSma], "sma"),
+            Hint::act(&[Action::ToggleRsi], "rsi"),
+            Hint::act(&[Action::NextPreset], "interval"),
+            Hint::act(&[Action::Refresh], "refresh"),
+            Hint::act(&[Action::Settings], "settings"),
+        ];
+        HINTS
     }
 
     fn has_chart_panel(&self) -> bool {

@@ -2,7 +2,8 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 
 use crate::app::{App, FeedKind};
-use crate::ui::{View, ViewId};
+use crate::keymap::Action;
+use crate::ui::{Hint, View, ViewId};
 use crate::ui::{chart, news, table};
 
 /// Below this body height the news half is dropped so the table and chart
@@ -20,8 +21,18 @@ impl View for SplitView {
         "Split"
     }
 
-    fn footer_hints(&self) -> &'static str {
-        " q quit · tab/1-9 view · ↑↓ select · f scope · c/m/i chart · t interval · r refresh · s settings"
+    fn hints(&self) -> &'static [Hint] {
+        const HINTS: &[Hint] = &[
+            Hint::act(&[Action::Quit], "quit"),
+            Hint::fixed("tab/1-9", "view"),
+            Hint::act(&[Action::Up, Action::Down], "select"),
+            Hint::act(&[Action::CycleScope], "scope"),
+            Hint::act(&[Action::ChartStyle, Action::ToggleSma, Action::ToggleRsi], "chart"),
+            Hint::act(&[Action::NextPreset], "interval"),
+            Hint::act(&[Action::Refresh], "refresh"),
+            Hint::act(&[Action::Settings], "settings"),
+        ];
+        HINTS
     }
 
     /// The embedded news strip drives the same demand-driven fetch as the

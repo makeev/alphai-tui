@@ -7,8 +7,9 @@ use ratatui::widgets::{Block, Cell, Paragraph, Row, Table, Wrap};
 
 use crate::alphai::Article;
 use crate::app::{App, FeedKind, NewsScope};
+use crate::keymap::Action;
 use crate::theme::Theme;
-use crate::ui::{View, ViewId};
+use crate::ui::{Hint, View, ViewId};
 
 pub struct NewsView;
 
@@ -21,8 +22,19 @@ impl View for NewsView {
         "News"
     }
 
-    fn footer_hints(&self) -> &'static str {
-        " q quit · ↑↓ article · ←→ ticker · ⏎ open · v card · x layout · f scope · r refresh · s settings"
+    fn hints(&self) -> &'static [Hint] {
+        const HINTS: &[Hint] = &[
+            Hint::act(&[Action::Quit], "quit"),
+            Hint::act(&[Action::Up, Action::Down], "article"),
+            Hint::act(&[Action::Left, Action::Right], "ticker"),
+            Hint::act(&[Action::Open], "open"),
+            Hint::act(&[Action::Card], "card"),
+            Hint::act(&[Action::CycleLayout], "layout"),
+            Hint::act(&[Action::CycleScope], "scope"),
+            Hint::act(&[Action::Refresh], "refresh"),
+            Hint::act(&[Action::Settings], "settings"),
+        ];
+        HINTS
     }
 
     fn feed_shown(&self) -> Option<FeedKind> {

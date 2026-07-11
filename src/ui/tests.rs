@@ -370,13 +370,29 @@ fn split_view_drops_news_panel_on_tiny_terminal() {
 }
 
 /// Every view registers a distinct ViewId (a duplicate would make
-/// `view_index` land on the wrong tab) and carries a footer hint line.
+/// `view_index` land on the wrong tab) and carries footer hints.
 #[test]
 fn view_ids_are_unique_and_indexable() {
     for (i, view) in ui::VIEWS.iter().enumerate() {
         assert_eq!(ui::view_index(view.id()), i, "duplicate ViewId {:?}", view.id());
-        assert!(!view.footer_hints().is_empty(), "{:?}: empty footer", view.id());
+        assert!(!view.hints().is_empty(), "{:?}: empty footer hints", view.id());
     }
+}
+
+/// The footer renders the keys actually bound in the keymap, in the
+/// traditional shapes ("↑↓ select", "c/m/i chart").
+#[test]
+fn footer_shows_bound_keys() {
+    let mut app = fake_app();
+    let screen = render(&mut app);
+    assert!(screen.contains("q quit"), "screen:\n{screen}");
+    assert!(screen.contains("tab/1-9 view"), "screen:\n{screen}");
+    assert!(screen.contains("↑↓ select"), "screen:\n{screen}");
+    assert!(screen.contains("c/m/i chart"), "screen:\n{screen}");
+    app.view_idx = ui::view_index(ui::ViewId::News);
+    let screen = render(&mut app);
+    assert!(screen.contains("⏎ open"), "screen:\n{screen}");
+    assert!(screen.contains("x layout"), "screen:\n{screen}");
 }
 
 /// Split embeds the news strip, but j/k must keep driving the watchlist

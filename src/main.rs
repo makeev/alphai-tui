@@ -3,6 +3,7 @@ mod app;
 mod config;
 mod domain;
 mod indicators;
+mod keymap;
 mod poller;
 mod source;
 mod theme;

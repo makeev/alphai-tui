@@ -7,8 +7,9 @@ use ratatui::widgets::{Block, Cell, Paragraph, Row, Table};
 
 use crate::alphai::{Article, InsiderSummary, fmt_usd, insider_key};
 use crate::app::{App, FeedKind};
+use crate::keymap::Action;
 use crate::theme::Theme;
-use crate::ui::{View, ViewId};
+use crate::ui::{Hint, View, ViewId};
 use crate::ui::news::{feed_bottom_hint, render_detail, render_gate, score_cell, sentiment_cell};
 
 pub struct InsiderView;
@@ -22,8 +23,18 @@ impl View for InsiderView {
         "Insider"
     }
 
-    fn footer_hints(&self) -> &'static str {
-        " q quit · 1-9 view · ↑↓ article · ←→ ticker · ⏎ open · v card · r refresh · s settings"
+    fn hints(&self) -> &'static [Hint] {
+        const HINTS: &[Hint] = &[
+            Hint::act(&[Action::Quit], "quit"),
+            Hint::fixed("1-9", "view"),
+            Hint::act(&[Action::Up, Action::Down], "article"),
+            Hint::act(&[Action::Left, Action::Right], "ticker"),
+            Hint::act(&[Action::Open], "open"),
+            Hint::act(&[Action::Card], "card"),
+            Hint::act(&[Action::Refresh], "refresh"),
+            Hint::act(&[Action::Settings], "settings"),
+        ];
+        HINTS
     }
 
     fn feed_shown(&self) -> Option<FeedKind> {

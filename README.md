@@ -273,6 +273,8 @@ src/
     finnhub.rs   Finnhub /quote with synthetic session history
     alpaca.rs    snapshot + real historical bars (IEX/SIP feeds, crypto)
   alphai.rs      AlphaAI API client + demand-driven fetch task (TTL cache)
+  keymap.rs      semantic actions + the key table (footer hints derive from it)
+  theme.rs       semantic color palette ([theme] overrides)
   indicators.rs  SMA and RSI (Wilder smoothing)
   poller.rs      fetches all symbols concurrently on a timer -> mpsc channel
   app.rs         App state, event loop, key handling
