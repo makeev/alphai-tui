@@ -131,6 +131,32 @@ defaults. API keys can also come from env vars, which win over the config:
 | `s` | everywhere | settings |
 | `q` / `Esc` / `Ctrl-C` | everywhere | quit |
 
+## A tmux workspace
+
+alphai-tui is a single self-contained process, so a terminal multiplexer
+(tmux, zellij, screen, or your terminal's own splits) turns it into a
+custom trading workspace: run one instance per pane and switch each pane
+to the view you want with `1`..`5`.
+
+```sh
+tmux new-session -d -s market 'alphai-tui CRWV'
+tmux split-window  -h 'alphai-tui AAPL'      # news pane on the right
+tmux split-window -v -t market:0.0 'alphai-tui NVDA'
+tmux split-window -v -t market:0.1 'alphai-tui NBIS'
+tmux attach -t market
+```
+
+Press `4` in the chart panes and `2` in the news pane, and you get a wall
+of charts next to a live scored feed:
+
+![four alphai-tui instances in tmux panes: three candlestick charts with SMA and RSI next to a full-height AI-scored news view](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/tmux.png)
+
+Two things the instances share. The config file is one: the last pane to
+save settings wins, so set things up once and let the other panes just
+read it. Your AlphaAI key's rate budget is the other: every pane showing
+news or insider data spends requests from the same per-key allowance, so
+on a free key keep an eye on how many such panes you open.
+
 ## Data sources
 
 **Prices**
