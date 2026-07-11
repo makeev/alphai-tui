@@ -71,6 +71,20 @@ use the [AlphaAI](https://alphai.io) API and need a free key.
 
 ## Install
 
+Prebuilt binaries for macOS, Linux and Windows, no Rust needed:
+
+```sh
+curl -LsSf https://github.com/makeev/alphai-tui/releases/latest/download/alphai-tui-installer.sh | sh
+```
+
+```powershell
+# Windows
+powershell -ExecutionPolicy Bypass -c "irm https://github.com/makeev/alphai-tui/releases/latest/download/alphai-tui-installer.ps1 | iex"
+```
+
+Archives for every platform, with checksums, live on the
+[releases page](https://github.com/makeev/alphai-tui/releases).
+
 With a Rust toolchain (1.85+):
 
 ```sh

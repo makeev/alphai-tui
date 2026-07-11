@@ -23,6 +23,7 @@ use crate::domain::{Interval, Range, fmt_price};
 #[derive(Parser, Debug)]
 #[command(
     name = "alphai-tui",
+    version,
     about = "Terminal stock dashboard: quotes, charts, AI-scored news and insider activity",
     after_help = "Every option falls back to the config file written by the in-app settings \
                   screen (press s), then to built-in defaults. Bare `alphai-tui` runs with the \
