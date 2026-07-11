@@ -189,6 +189,18 @@ read it. Your AlphaAI key's rate budget is the other: every pane showing
 news or insider data spends requests from the same per-key allowance, so
 on a free key keep an eye on how many such panes you open.
 
+The same trick turns the terminal into a full trading desk with an AI
+analyst on staff. Run an agent such as
+[Claude Code](https://claude.com/claude-code) in the pane next to
+alphai-tui and connect it to the
+[AlphaAI MCP server](https://alphai.io/mcp), which serves the same news,
+sentiment and insider data as the dashboard. You watch the tape on one
+side while the agent digs through whatever the tape surfaces: ask it for
+the last insider sells and the news that moved the stock this week, and
+get a sourced brief without leaving the terminal.
+
+![Claude Code next to alphai-tui in tmux: the agent summarizes CRWV insider selling and the week's dominant story while the dashboard shows the candlestick chart and the scored news feed](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/agent.png)
+
 ## Data sources
 
 **Prices**
