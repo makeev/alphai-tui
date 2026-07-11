@@ -225,8 +225,8 @@ impl App {
             self.inflight.clear();
         }
 
-        match config::save(&cfg) {
-            Ok(_) => {
+        match config::save_at(self.config_path.as_deref(), &cfg) {
+            Ok(()) => {
                 self.config = cfg;
                 self.settings.open = false;
                 self.settings.first_run = false;

@@ -26,12 +26,14 @@ pub type SharedParams = Arc<RwLock<(Range, Interval)>>;
 
 /// Polls every symbol concurrently, then sleeps until the next cycle or a
 /// manual refresh. Streaming sources will bypass this and push straight into
-/// the same channel.
+/// the same channel. `slow_bars` is the slowest indicator period, sizing
+/// the warm-up over-fetch.
 pub async fn run(
     source: SharedSource,
     symbols: Vec<String>,
     params: SharedParams,
     every: Duration,
+    slow_bars: usize,
     tx: UnboundedSender<SourceEvent>,
     refresh: Arc<Notify>,
 ) {
@@ -40,7 +42,7 @@ pub async fn run(
         let (range, interval) = *params.read().unwrap();
         // Fetch wider than the visible range so indicators have their warm-up
         // history; the chart trims rendering back to `range`.
-        let range = fetch_range(range, interval);
+        let range = fetch_range(range, interval, slow_bars);
         let mut set = JoinSet::new();
         for symbol in &symbols {
             let source = current.clone();

@@ -7,8 +7,9 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Axis, Block, Chart, Dataset, GraphType, Paragraph};
 
 use crate::app::{App, ChartStyle};
+use crate::config::ChartDefaults;
 use crate::domain::{Candle, Quote, Range, TickerData, fmt_price};
-use crate::indicators::{self, SMA_FAST, SMA_SLOW};
+use crate::indicators;
 use crate::keymap::Action;
 use crate::theme::Theme;
 use crate::ui::{Hint, View, ViewId};
@@ -48,7 +49,6 @@ impl View for ChartView {
     }
 }
 
-const RSI_PERIOD: usize = 14;
 const RSI_PANEL_HEIGHT: u16 = 8;
 /// Below this total height the RSI panel is dropped so the price chart keeps
 /// usable space (same graceful degradation as the split view's news half).
@@ -97,7 +97,7 @@ pub fn render_chart(f: &mut Frame, area: Rect, app: &App) {
         ChartStyle::Candles => render_price_candles(f, price_area, app, &symbol, data, cut),
     }
     if let Some(r) = rsi_area {
-        render_rsi(f, r, data, cut, &app.theme);
+        render_rsi(f, r, data, cut, app.chart.rsi_period, &app.theme);
     }
 }
 
@@ -130,6 +130,7 @@ fn chart_title(
     q: &Quote,
     data: &TickerData,
     show_sma: bool,
+    chart: &ChartDefaults,
     theme: &Theme,
 ) -> Line<'static> {
     let change_str = match (q.change(), q.change_pct()) {
@@ -146,7 +147,8 @@ fn chart_title(
         Span::styled(format!("{change_str} "), Style::new().fg(dir_color(q, theme))),
     ];
     if show_sma {
-        for (period, color) in [(SMA_FAST, theme.sma_fast), (SMA_SLOW, theme.sma_slow)] {
+        for (period, color) in [(chart.sma_fast, theme.sma_fast), (chart.sma_slow, theme.sma_slow)]
+        {
             if data.candles.len() >= period {
                 spans.push(Span::styled(format!("SMA{period} "), Style::new().fg(color)));
             }
@@ -216,7 +218,7 @@ fn render_price_line(
             .collect()
     };
     let (sma_fast, sma_slow) = if app.show_sma {
-        (sma_points(SMA_FAST), sma_points(SMA_SLOW))
+        (sma_points(app.chart.sma_fast), sma_points(app.chart.sma_slow))
     } else {
         (Vec::new(), Vec::new())
     };
@@ -264,7 +266,14 @@ fn render_price_line(
     ];
 
     let chart = Chart::new(datasets)
-        .block(Block::bordered().title(chart_title(symbol, q, data, app.show_sma, &app.theme)))
+        .block(Block::bordered().title(chart_title(
+            symbol,
+            q,
+            data,
+            app.show_sma,
+            &app.chart,
+            &app.theme,
+        )))
         .x_axis(
             Axis::default()
                 .bounds([0.0, x_hi])
@@ -295,7 +304,14 @@ fn render_price_candles(
 ) {
     let q = &data.quote;
     let visible = &data.candles[cut..];
-    let block = Block::bordered().title(chart_title(symbol, q, data, app.show_sma, &app.theme));
+    let block = Block::bordered().title(chart_title(
+        symbol,
+        q,
+        data,
+        app.show_sma,
+        &app.chart,
+        &app.theme,
+    ));
     let inner = block.inner(area);
     f.render_widget(block, area);
 
@@ -385,7 +401,10 @@ fn render_price_candles(
     // y-range by warm-up history are skipped, not pinned to the edge.
     if app.show_sma {
         let closes: Vec<f64> = data.candles.iter().map(|c| c.close).collect();
-        for (period, color) in [(SMA_SLOW, app.theme.sma_slow), (SMA_FAST, app.theme.sma_fast)] {
+        for (period, color) in [
+            (app.chart.sma_slow, app.theme.sma_slow),
+            (app.chart.sma_fast, app.theme.sma_fast),
+        ] {
             let line = indicators::sma(&closes, period);
             for (i, &raw) in sample_idx.iter().enumerate() {
                 let Some(v) = line[cut + raw] else { continue };
@@ -527,15 +546,13 @@ fn aggregate(chunk: &[Candle]) -> Candle {
 
 // -- RSI panel ----------------------------------------------------------------
 
-fn render_rsi(f: &mut Frame, area: Rect, data: &TickerData, cut: usize, theme: &Theme) {
+fn render_rsi(f: &mut Frame, area: Rect, data: &TickerData, cut: usize, period: usize, theme: &Theme) {
     let closes: Vec<f64> = data.candles.iter().map(|c| c.close).collect();
-    let rsi = indicators::rsi(&closes, RSI_PERIOD);
+    let rsi = indicators::rsi(&closes, period);
     let Some(last) = rsi.last().copied().flatten() else {
         f.render_widget(
-            Paragraph::new(
-                Line::from(format!("not enough history for RSI({RSI_PERIOD})")).dim(),
-            )
-            .block(Block::bordered().title(format!(" RSI({RSI_PERIOD}) "))),
+            Paragraph::new(Line::from(format!("not enough history for RSI({period})")).dim())
+                .block(Block::bordered().title(format!(" RSI({period}) "))),
             area,
         );
         return;
@@ -579,7 +596,7 @@ fn render_rsi(f: &mut Frame, area: Rect, data: &TickerData, cut: usize, theme: &
         theme.flat
     };
     let title = Line::from(vec![
-        Span::styled(format!(" RSI({RSI_PERIOD}) "), Style::new().bold()),
+        Span::styled(format!(" RSI({period}) "), Style::new().bold()),
         Span::styled(format!("{last:.1} "), Style::new().fg(val_color)),
     ]);
     let chart = Chart::new(datasets)

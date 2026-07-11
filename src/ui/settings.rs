@@ -4,7 +4,6 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Clear, Paragraph, Wrap};
 
 use crate::app::{App, SettingsRow, settings_rows};
-use crate::config;
 use crate::source::registry;
 use crate::ui::centered;
 
@@ -95,7 +94,7 @@ pub fn render(f: &mut Frame, app: &App) {
         lines.push(Line::from(""));
     }
     lines.push(Line::from("  ↑↓ move · enter edit / toggle / save · esc close").dim());
-    if let Some(p) = config::path() {
+    if let Some(p) = &app.config_path {
         lines.push(Line::from(format!("  config: {}", tilde(&p.display().to_string()))).dim());
     }
 

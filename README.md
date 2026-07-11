@@ -101,6 +101,7 @@ alphai-tui -s finnhub NVDA  # explicit source for one run
 | `-r, --range` | `1d` | History window: `1d 5d 1mo 3mo 6mo 1y 2y` |
 | `-i, --interval` | `5m` | Candle size: `1m 2m 5m 15m 30m 60m 1d` |
 | `--once` | | Print quotes to stdout and exit |
+| `--config` | | Use an alternate config file (Save writes back to it) |
 
 `-r` and `-i` set the startup window; the `t` key cycles preset combinations
 for the session without persisting them.
@@ -216,7 +217,13 @@ which is also what AlphaAI uses. Finnhub-specific symbols like
 
 `~/.config/alphai-tui/config.toml` on Linux and macOS (`%APPDATA%` on
 Windows), created by the settings screen with mode 0600 since it can hold
-keys. Saving the settings also persists the watchlist on screen:
+keys; `--config PATH` points at a different file. Saving the settings also
+persists the watchlist on screen. Every key is optional. A misspelled value
+in the `[ui]`, `[chart]` or `[theme]` sections prints a warning on startup
+and keeps that entry's default; only a TOML syntax error makes the whole
+file fall back to defaults. The `[ui]` and `[chart]` sections set startup
+defaults; the session keys (`x`, `f`, `c`, `m`, `i`, `t`) still change
+everything live without persisting it:
 
 ```toml
 source = "yahoo"
@@ -231,6 +238,26 @@ alphai = "ak_live_..."
 finnhub = ""
 alpaca_key_id = ""
 alpaca_secret = ""
+
+[ui]
+default_view = "split"    # split | news | table | chart | insider
+news_layout = "side"      # side | stacked
+news_scope = "ticker"     # ticker | market | trending
+
+[chart]
+style = "candles"         # candles | line
+sma = true                # SMA overlays visible at start
+rsi = true                # RSI panel visible at start
+sma_fast = 20             # 2 to 250
+sma_slow = 100            # 2 to 250; also sizes the history warm-up
+rsi_period = 14           # 2 to 100
+presets = [               # the combos the t and T keys cycle
+  ["1d", "5m"],
+  ["5d", "15m"],
+  ["1mo", "60m"],
+  ["6mo", "1d"],
+  ["1y", "1d"],
+]
 ```
 
 ### Colors

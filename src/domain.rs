@@ -1,7 +1,5 @@
 use clap::ValueEnum;
 
-use crate::indicators;
-
 /// History window requested from a data source.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 pub enum Range {
@@ -107,17 +105,17 @@ impl Interval {
 }
 
 /// The range to actually request from a data source so that the slowest
-/// indicator (SMA100) has a full lookback window behind every candle of the
-/// visible `display` range. Candles only exist while the market trades, so
-/// the warm-up is scaled from market time to calendar time: ~6.5 trading
-/// hours per weekday for intraday bars (factor 6 with margin for holidays),
-/// 5 trading days per week for daily bars (factor 1.5). Picks the smallest
-/// range that covers display + warm-up; the UI trims rendering back to
-/// `display` (see `ui::chart`). Combos too big to warm up fully (e.g. 2y/1d)
-/// fall back to the largest range and degrade to an indented SMA, exactly
-/// like before.
-pub fn fetch_range(display: Range, interval: Interval) -> Range {
-    let bars = indicators::SMA_SLOW as i64;
+/// indicator (the SMA of `slow_bars` periods, configurable via `[chart]`)
+/// has a full lookback window behind every candle of the visible `display`
+/// range. Candles only exist while the market trades, so the warm-up is
+/// scaled from market time to calendar time: ~6.5 trading hours per weekday
+/// for intraday bars (factor 6 with margin for holidays), 5 trading days
+/// per week for daily bars (factor 1.5). Picks the smallest range that
+/// covers display + warm-up; the UI trims rendering back to `display` (see
+/// `ui::chart`). Combos too big to warm up fully (e.g. 2y/1d) fall back to
+/// the largest range and degrade to an indented SMA, exactly like before.
+pub fn fetch_range(display: Range, interval: Interval, slow_bars: usize) -> Range {
+    let bars = slow_bars as i64;
     let warmup = match interval {
         Interval::D1 => bars * interval.secs() * 3 / 2,
         _ => bars * interval.secs() * 6,
@@ -178,25 +176,34 @@ pub fn fmt_price(p: f64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::indicators::SMA_SLOW;
 
     /// Every `t`-cycle preset must fetch enough history for a full SMA100
     /// warm-up behind its visible window.
     #[test]
     fn fetch_range_covers_presets() {
-        assert_eq!(fetch_range(Range::D1, Interval::M5), Range::D5);
-        assert_eq!(fetch_range(Range::D5, Interval::M15), Range::Mo1);
-        assert_eq!(fetch_range(Range::Mo1, Interval::M60), Range::Mo3);
-        assert_eq!(fetch_range(Range::Mo6, Interval::D1), Range::Y1);
-        assert_eq!(fetch_range(Range::Y1, Interval::D1), Range::Y2);
+        assert_eq!(fetch_range(Range::D1, Interval::M5, SMA_SLOW), Range::D5);
+        assert_eq!(fetch_range(Range::D5, Interval::M15, SMA_SLOW), Range::Mo1);
+        assert_eq!(fetch_range(Range::Mo1, Interval::M60, SMA_SLOW), Range::Mo3);
+        assert_eq!(fetch_range(Range::Mo6, Interval::D1, SMA_SLOW), Range::Y1);
+        assert_eq!(fetch_range(Range::Y1, Interval::D1, SMA_SLOW), Range::Y2);
     }
 
     #[test]
     fn fetch_range_odd_combos() {
         // CLI-only combos still get the smallest range that fits.
-        assert_eq!(fetch_range(Range::D1, Interval::M1), Range::D5);
-        assert_eq!(fetch_range(Range::Mo3, Interval::M5), Range::Mo6);
+        assert_eq!(fetch_range(Range::D1, Interval::M1, SMA_SLOW), Range::D5);
+        assert_eq!(fetch_range(Range::Mo3, Interval::M5, SMA_SLOW), Range::Mo6);
         // Nothing bigger than 2y exists: degrade gracefully.
-        assert_eq!(fetch_range(Range::Y2, Interval::D1), Range::Y2);
+        assert_eq!(fetch_range(Range::Y2, Interval::D1, SMA_SLOW), Range::Y2);
+    }
+
+    /// A configured slow period scales the warm-up: a slower SMA widens the
+    /// over-fetch for the same visible window.
+    #[test]
+    fn fetch_range_scales_with_the_slow_period() {
+        assert_eq!(fetch_range(Range::D1, Interval::M5, 400), Range::Mo1);
+        assert_eq!(fetch_range(Range::Mo6, Interval::D1, 200), Range::Y2);
     }
 
     #[test]

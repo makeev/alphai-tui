@@ -9,6 +9,7 @@ pub use feeds::{FeedBundle, FeedKind};
 pub use settings::{SettingsRow, SettingsState, settings_rows};
 
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -20,7 +21,7 @@ use tokio::sync::Notify;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
 use crate::alphai::{self, Article};
-use crate::config::Config;
+use crate::config::{ChartDefaults, Config, UiDefaults};
 use crate::domain::{Interval, Range, TickerData};
 use crate::keymap::{Action, Keymap};
 use crate::poller::{SharedParams, SharedSource, SourceEvent};
@@ -91,9 +92,9 @@ impl NewsLayout {
     }
 }
 
-/// The combos the t and T keys cycle through; wraps at the ends. A startup
-/// combo not in the table (e.g. -r 3mo) jumps to the first preset on t and
-/// to the last on T.
+/// The default combos the t and T keys cycle through (`[chart] presets`
+/// overrides them); wraps at the ends. A startup combo not in the table
+/// (e.g. -r 3mo) jumps to the first preset on t and to the last on T.
 pub const RANGE_PRESETS: [(Range, Interval); 5] = [
     (Range::D1, Interval::M5),
     (Range::D5, Interval::M15),
@@ -102,12 +103,16 @@ pub const RANGE_PRESETS: [(Range, Interval); 5] = [
     (Range::Y1, Interval::D1),
 ];
 
-fn next_preset(cur: (Range, Interval), dir: isize) -> (Range, Interval) {
-    let n = RANGE_PRESETS.len() as isize;
-    match RANGE_PRESETS.iter().position(|&p| p == cur) {
-        Some(i) => RANGE_PRESETS[((i as isize + dir).rem_euclid(n)) as usize],
-        None if dir > 0 => RANGE_PRESETS[0],
-        None => RANGE_PRESETS[RANGE_PRESETS.len() - 1],
+fn next_preset(
+    presets: &[(Range, Interval)],
+    cur: (Range, Interval),
+    dir: isize,
+) -> (Range, Interval) {
+    let n = presets.len() as isize;
+    match presets.iter().position(|&p| p == cur) {
+        Some(i) => presets[((i as isize + dir).rem_euclid(n)) as usize],
+        None if dir > 0 => presets[0],
+        None => presets[presets.len() - 1],
     }
 }
 
@@ -122,7 +127,11 @@ pub struct AppInit {
     pub refresh: Arc<Notify>,
     pub alphai_tx: UnboundedSender<alphai::Cmd>,
     pub config: Config,
+    /// Where Save writes the config back; None disables persisting.
+    pub config_path: Option<PathBuf>,
     pub theme: Theme,
+    pub chart: ChartDefaults,
+    pub ui: UiDefaults,
     pub alphai_enabled: bool,
     pub first_run: bool,
 }
@@ -138,10 +147,12 @@ pub struct App {
     pub interval: Interval,
     pub last_update: Option<DateTime<Local>>,
     pub table_state: TableState,
-    // Chart options (session-only, deliberately not persisted)
+    // Chart options: seeded from [chart], then session-only toggles
     pub chart_style: ChartStyle,
     pub show_sma: bool,
     pub show_rsi: bool,
+    /// Validated [chart] values: indicator periods and the t/T preset cycle.
+    pub chart: ChartDefaults,
     // AlphaAI feed state: every fetched feed by cache key (news under the
     // symbol/market/trending keys, insider under `ins:SYM`)
     pub feeds: HashMap<String, FeedBundle>,
@@ -156,6 +167,7 @@ pub struct App {
     pub article_overlay: ArticleOverlay,
     pub settings: SettingsState,
     pub config: Config,
+    pub config_path: Option<PathBuf>,
     pub theme: Theme,
     pub keymap: Keymap,
     source: SharedSource,
@@ -173,26 +185,28 @@ impl App {
             data: HashMap::new(),
             errors: HashMap::new(),
             selected: 0,
-            view_idx: ui::view_index(ui::ViewId::Split),
+            view_idx: init.ui.view_idx,
             source_name: init.source_name,
             range: init.range,
             interval: init.interval,
             last_update: None,
             table_state: TableState::default(),
-            chart_style: ChartStyle::Candles,
-            show_sma: true,
-            show_rsi: true,
+            chart_style: init.chart.style,
+            show_sma: init.chart.sma,
+            show_rsi: init.chart.rsi,
+            chart: init.chart,
             feeds: HashMap::new(),
             alphai_errors: HashMap::new(),
             alphai_enabled: init.alphai_enabled,
             news_selected: 0,
-            news_scope: NewsScope::default(),
-            news_layout: NewsLayout::default(),
+            news_scope: init.ui.news_scope,
+            news_layout: init.ui.news_layout,
             card_scroll: 0,
             news_table_state: TableState::default(),
             article_overlay: ArticleOverlay::default(),
             settings: SettingsState::default(),
             config: init.config,
+            config_path: init.config_path,
             theme: init.theme,
             keymap: Keymap::default(),
             source: init.source,
@@ -421,7 +435,7 @@ impl App {
     /// would also drop the visible AlphaAI bundle and burn a request from
     /// its budget for what is purely a price-history change.
     fn cycle_range(&mut self, dir: isize) {
-        let (range, interval) = next_preset((self.range, self.interval), dir);
+        let (range, interval) = next_preset(&self.chart.presets, (self.range, self.interval), dir);
         self.range = range;
         self.interval = interval;
         *self.params.write().unwrap() = (range, interval);
@@ -481,9 +495,9 @@ mod tests {
     fn range_presets_wrap_both_ways() {
         let first = RANGE_PRESETS[0];
         let last = RANGE_PRESETS[RANGE_PRESETS.len() - 1];
-        assert_eq!(next_preset(first, 1), RANGE_PRESETS[1]);
-        assert_eq!(next_preset(last, 1), first);
-        assert_eq!(next_preset(first, -1), last);
+        assert_eq!(next_preset(&RANGE_PRESETS, first, 1), RANGE_PRESETS[1]);
+        assert_eq!(next_preset(&RANGE_PRESETS, last, 1), first);
+        assert_eq!(next_preset(&RANGE_PRESETS, first, -1), last);
     }
 
     #[test]
@@ -514,7 +528,10 @@ mod tests {
     fn range_presets_absorb_unknown_startup_combo() {
         // A CLI combo outside the table joins the cycle at the nearest edge.
         let odd = (Range::Mo3, Interval::M5);
-        assert_eq!(next_preset(odd, 1), RANGE_PRESETS[0]);
-        assert_eq!(next_preset(odd, -1), RANGE_PRESETS[RANGE_PRESETS.len() - 1]);
+        assert_eq!(next_preset(&RANGE_PRESETS, odd, 1), RANGE_PRESETS[0]);
+        assert_eq!(
+            next_preset(&RANGE_PRESETS, odd, -1),
+            RANGE_PRESETS[RANGE_PRESETS.len() - 1]
+        );
     }
 }

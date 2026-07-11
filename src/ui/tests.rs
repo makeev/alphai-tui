@@ -8,7 +8,7 @@ use tokio::sync::Notify;
 
 use crate::alphai::{self, Article, FeedPayload, InsiderSummary, SentimentSummary, TRENDING_KEY};
 use crate::app::{App, AppInit, ChartStyle, FeedBundle, NewsLayout, NewsScope};
-use crate::config::Config;
+use crate::config::{ChartDefaults, Config, UiDefaults};
 use crate::domain::{Candle, Interval, Quote, Range, TickerData};
 use crate::source::make_source;
 use crate::theme::Theme;
@@ -38,7 +38,10 @@ fn empty_app_with_cmds(
         refresh: Arc::new(Notify::new()),
         alphai_tx,
         config: Config::default(),
+        config_path: None,
         theme: Theme::default(),
+        chart: ChartDefaults::default(),
+        ui: UiDefaults::default(),
         alphai_enabled: true,
         first_run: false,
     });
@@ -827,6 +830,56 @@ fn ttl_refetch_waits_for_top_row() {
     );
 }
 
+/// Resolved [chart] and [ui] values seed the startup state (the session
+/// keys keep toggling everything afterwards) and the t cycle walks the
+/// configured presets.
+#[test]
+fn config_defaults_seed_startup_state() {
+    let (_tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    let (alphai_tx, _alphai_rx) = tokio::sync::mpsc::unbounded_channel();
+    let source = make_source("yahoo", &Config::default()).unwrap();
+    let mut app = App::new(AppInit {
+        symbols: vec!["AAPL".into()],
+        source: Arc::new(RwLock::new(source)),
+        source_name: "yahoo",
+        range: Range::D1,
+        interval: Interval::M5,
+        params: Arc::new(RwLock::new((Range::D1, Interval::M5))),
+        rx,
+        refresh: Arc::new(Notify::new()),
+        alphai_tx,
+        config: Config::default(),
+        config_path: None,
+        theme: Theme::default(),
+        chart: ChartDefaults {
+            style: ChartStyle::Line,
+            sma: false,
+            rsi: false,
+            presets: vec![(Range::D5, Interval::M15), (Range::Y1, Interval::D1)],
+            ..Default::default()
+        },
+        ui: UiDefaults {
+            view_idx: ui::view_index(ui::ViewId::News),
+            news_layout: NewsLayout::Stacked,
+            news_scope: NewsScope::Market,
+        },
+        alphai_enabled: false,
+        first_run: false,
+    });
+    assert_eq!(app.view_idx, ui::view_index(ui::ViewId::News));
+    assert_eq!(app.chart_style, ChartStyle::Line);
+    assert!(!app.show_sma && !app.show_rsi);
+    assert_eq!(app.news_layout, NewsLayout::Stacked);
+    assert_eq!(app.news_scope, NewsScope::Market);
+    // t cycles the configured presets, not the built-in table.
+    press(&mut app, KeyCode::Char('t'));
+    assert_eq!((app.range, app.interval), (Range::D5, Interval::M15));
+    press(&mut app, KeyCode::Char('t'));
+    assert_eq!((app.range, app.interval), (Range::Y1, Interval::D1));
+    press(&mut app, KeyCode::Char('t'));
+    assert_eq!((app.range, app.interval), (Range::D5, Interval::M15));
+}
+
 /// Empty config = the default look; a remapped accent slot recolors the
 /// brand cell in the header.
 #[test]
@@ -934,7 +987,10 @@ fn first_run_opens_settings_with_welcome() {
         refresh: Arc::new(Notify::new()),
         alphai_tx,
         config: Config::default(),
+        config_path: None,
         theme: Theme::default(),
+        chart: ChartDefaults::default(),
+        ui: UiDefaults::default(),
         alphai_enabled: false,
         first_run: true,
     });

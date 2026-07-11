@@ -9,6 +9,7 @@ mod source;
 mod theme;
 mod ui;
 
+use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
@@ -49,11 +50,15 @@ struct Args {
     /// Print quotes once to stdout and exit (no TUI); handy for scripts
     #[arg(long)]
     once: bool,
+
+    /// Use an alternate config file (the settings screen saves back to it)
+    #[arg(long, value_name = "PATH")]
+    config: Option<PathBuf>,
 }
 
 fn main() -> Result<()> {
     let args = Args::parse();
-    let (cfg, cfg_existed) = config::load();
+    let (cfg, cfg_existed, config_path) = config::load_at(args.config.as_deref());
     // Validation warnings go to stderr before the TUI takes the terminal,
     // so they stay readable in scrollback after exit.
     let (resolved, warnings) = config::resolve(&cfg);
@@ -99,6 +104,7 @@ fn main() -> Result<()> {
         symbols.clone(),
         params.clone(),
         Duration::from_secs(every.max(2)),
+        resolved.chart.sma_slow,
         tx.clone(),
         refresh.clone(),
     ));
@@ -119,7 +125,10 @@ fn main() -> Result<()> {
         refresh,
         alphai_tx,
         config: cfg,
+        config_path,
         theme: resolved.theme,
+        chart: resolved.chart,
+        ui: resolved.ui,
         alphai_enabled: alphai_key.is_some(),
         first_run: !cfg_existed,
     });

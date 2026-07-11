@@ -1,8 +1,16 @@
 use std::collections::BTreeMap;
+use std::ops::RangeInclusive;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
+
+use crate::app::{ChartStyle, NewsLayout, NewsScope, RANGE_PRESETS};
+use crate::domain::{Interval, Range};
+use crate::indicators;
+use crate::theme::Theme;
+use crate::ui;
 
 /// Used when neither the CLI nor the config file provides symbols.
 pub const DEFAULT_WATCHLIST: [&str; 4] = ["AAPL", "MSFT", "NVDA", "BTC-USD"];
@@ -43,6 +51,12 @@ pub struct Config {
     /// key this binary does not know (say, a config written by a newer
     /// version) survives a load -> save round trip instead of being dropped.
     pub keys: BTreeMap<String, String>,
+    /// `[ui]` startup defaults (view, news layout and scope).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ui: Option<UiConfig>,
+    /// `[chart]` startup defaults and indicator parameters.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chart: Option<ChartConfig>,
     /// `[theme]` color overrides by slot name (see `theme::Theme`). Kept as
     /// raw strings: validation happens in `resolve`, per slot, so one typo
     /// never degrades the whole file.
@@ -50,19 +64,198 @@ pub struct Config {
     pub theme: Option<BTreeMap<String, String>>,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct UiConfig {
+    pub default_view: Option<String>,
+    pub news_layout: Option<String>,
+    pub news_scope: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ChartConfig {
+    pub style: Option<String>,
+    pub sma: Option<bool>,
+    pub rsi: Option<bool>,
+    pub sma_fast: Option<usize>,
+    pub sma_slow: Option<usize>,
+    pub rsi_period: Option<usize>,
+    /// The t/T cycle, as pairs like `["1d", "5m"]`.
+    pub presets: Option<Vec<Vec<String>>>,
+}
+
 /// Everything derived and validated from the raw config. Semantic problems
 /// in these sections warn and fall back per entry; only a TOML syntax error
-/// degrades the whole file (in `load`).
+/// degrades the whole file (in `load_at`).
 pub struct Resolved {
-    pub theme: crate::theme::Theme,
+    pub theme: Theme,
+    pub chart: ChartDefaults,
+    pub ui: UiDefaults,
+}
+
+/// Validated `[chart]` values; `Default` is the traditional look. The
+/// session keys (c, m, i, t) still toggle everything live, these only seed
+/// the startup state and the indicator math.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ChartDefaults {
+    pub style: ChartStyle,
+    pub sma: bool,
+    pub rsi: bool,
+    pub sma_fast: usize,
+    pub sma_slow: usize,
+    pub rsi_period: usize,
+    pub presets: Vec<(Range, Interval)>,
+}
+
+impl Default for ChartDefaults {
+    fn default() -> Self {
+        Self {
+            style: ChartStyle::Candles,
+            sma: true,
+            rsi: true,
+            sma_fast: indicators::SMA_FAST,
+            sma_slow: indicators::SMA_SLOW,
+            rsi_period: indicators::RSI_PERIOD,
+            presets: RANGE_PRESETS.to_vec(),
+        }
+    }
+}
+
+/// Validated `[ui]` startup values.
+#[derive(Clone, Debug, PartialEq)]
+pub struct UiDefaults {
+    pub view_idx: usize,
+    pub news_layout: NewsLayout,
+    pub news_scope: NewsScope,
+}
+
+impl Default for UiDefaults {
+    fn default() -> Self {
+        Self {
+            view_idx: ui::view_index(ui::ViewId::Split),
+            news_layout: NewsLayout::default(),
+            news_scope: NewsScope::default(),
+        }
+    }
 }
 
 /// Validate the raw config into ready-to-use values plus human-readable
 /// warnings (printed to stderr before the TUI starts).
 pub fn resolve(cfg: &Config) -> (Resolved, Vec<String>) {
     let mut warnings = Vec::new();
-    let theme = crate::theme::Theme::from_config(cfg.theme.as_ref(), &mut warnings);
-    (Resolved { theme }, warnings)
+    let theme = Theme::from_config(cfg.theme.as_ref(), &mut warnings);
+    let chart = resolve_chart(cfg.chart.as_ref(), &mut warnings);
+    let ui = resolve_ui(cfg.ui.as_ref(), &mut warnings);
+    (Resolved { theme, chart, ui }, warnings)
+}
+
+fn resolve_chart(raw: Option<&ChartConfig>, warnings: &mut Vec<String>) -> ChartDefaults {
+    let mut out = ChartDefaults::default();
+    let Some(raw) = raw else { return out };
+    if let Some(style) = &raw.style {
+        match style.to_lowercase().as_str() {
+            "candles" => out.style = ChartStyle::Candles,
+            "line" => out.style = ChartStyle::Line,
+            other => warnings.push(format!(
+                "[chart] style: unknown \"{other}\" (candles or line), keeping candles"
+            )),
+        }
+    }
+    if let Some(v) = raw.sma {
+        out.sma = v;
+    }
+    if let Some(v) = raw.rsi {
+        out.rsi = v;
+    }
+    out.sma_fast = period(raw.sma_fast, out.sma_fast, "sma_fast", 2..=250, warnings);
+    out.sma_slow = period(raw.sma_slow, out.sma_slow, "sma_slow", 2..=250, warnings);
+    out.rsi_period = period(raw.rsi_period, out.rsi_period, "rsi_period", 2..=100, warnings);
+    if let Some(rows) = &raw.presets {
+        let mut presets = Vec::new();
+        for row in rows {
+            match parse_preset(row) {
+                Some(p) => presets.push(p),
+                None => warnings.push(format!(
+                    "[chart] presets: bad pair {row:?}, expected like [\"1d\", \"5m\"]"
+                )),
+            }
+        }
+        if presets.is_empty() {
+            warnings.push("[chart] presets: no valid pairs, keeping the built-in cycle".into());
+        } else {
+            out.presets = presets;
+        }
+    }
+    out
+}
+
+fn period(
+    raw: Option<usize>,
+    default: usize,
+    name: &str,
+    valid: RangeInclusive<usize>,
+    warnings: &mut Vec<String>,
+) -> usize {
+    match raw {
+        Some(v) if valid.contains(&v) => v,
+        Some(v) => {
+            warnings.push(format!(
+                "[chart] {name}: {v} is outside {}..={}, keeping {default}",
+                valid.start(),
+                valid.end()
+            ));
+            default
+        }
+        None => default,
+    }
+}
+
+fn parse_preset(row: &[String]) -> Option<(Range, Interval)> {
+    let [range, interval] = row else { return None };
+    Some((
+        Range::from_str(range, true).ok()?,
+        Interval::from_str(interval, true).ok()?,
+    ))
+}
+
+fn resolve_ui(raw: Option<&UiConfig>, warnings: &mut Vec<String>) -> UiDefaults {
+    let mut out = UiDefaults::default();
+    let Some(raw) = raw else { return out };
+    if let Some(name) = &raw.default_view {
+        // Matched by title, so the list stays correct as views register.
+        match ui::VIEWS.iter().position(|v| v.title().eq_ignore_ascii_case(name)) {
+            Some(idx) => out.view_idx = idx,
+            None => {
+                let names: Vec<String> =
+                    ui::VIEWS.iter().map(|v| v.title().to_lowercase()).collect();
+                warnings.push(format!(
+                    "[ui] default_view: unknown \"{name}\" (one of {}), keeping split",
+                    names.join(", ")
+                ));
+            }
+        }
+    }
+    if let Some(layout) = &raw.news_layout {
+        match layout.to_lowercase().as_str() {
+            "side" => out.news_layout = NewsLayout::Side,
+            "stacked" => out.news_layout = NewsLayout::Stacked,
+            other => warnings.push(format!(
+                "[ui] news_layout: unknown \"{other}\" (side or stacked), keeping side"
+            )),
+        }
+    }
+    if let Some(scope) = &raw.news_scope {
+        match scope.to_lowercase().as_str() {
+            "ticker" => out.news_scope = NewsScope::Ticker,
+            "market" => out.news_scope = NewsScope::Market,
+            "trending" => out.news_scope = NewsScope::Trending,
+            other => warnings.push(format!(
+                "[ui] news_scope: unknown \"{other}\" (ticker, market or trending), keeping ticker"
+            )),
+        }
+    }
+    out
 }
 
 impl Config {
@@ -107,19 +300,21 @@ pub fn path() -> Option<PathBuf> {
     Some(base.join("alphai-tui").join("config.toml"))
 }
 
-/// Returns the config and whether a file existed. A missing file is a normal
-/// first run; an unreadable one degrades to defaults with a stderr warning
-/// rather than blocking startup.
-pub fn load() -> (Config, bool) {
-    let Some(p) = path() else {
-        return (Config::default(), false);
+/// Load from an explicit path (the `--config` flag) or the default
+/// location. Returns the config, whether a file existed, and the path Save
+/// must write back to (None when the platform has no config dir). A missing
+/// file is a normal first run; an unreadable one degrades to defaults with
+/// a stderr warning rather than blocking startup.
+pub fn load_at(override_path: Option<&Path>) -> (Config, bool, Option<PathBuf>) {
+    let Some(p) = override_path.map(Path::to_path_buf).or_else(path) else {
+        return (Config::default(), false, None);
     };
     match load_from(&p) {
-        Ok(Some(cfg)) => (cfg, true),
-        Ok(None) => (Config::default(), false),
+        Ok(Some(cfg)) => (cfg, true, Some(p)),
+        Ok(None) => (Config::default(), false, Some(p)),
         Err(e) => {
             eprintln!("warning: ignoring bad config at {}: {e:#}", p.display());
-            (Config::default(), false)
+            (Config::default(), false, Some(p))
         }
     }
 }
@@ -132,10 +327,10 @@ pub fn load_from(p: &Path) -> Result<Option<Config>> {
     Ok(Some(toml::from_str(&raw).context("parse failed")?))
 }
 
-pub fn save(cfg: &Config) -> Result<PathBuf> {
-    let p = path().context("no config directory on this platform")?;
-    save_to(&p, cfg)?;
-    Ok(p)
+/// Save to the path `load_at` resolved (the settings screen passes it back).
+pub fn save_at(path: Option<&Path>, cfg: &Config) -> Result<()> {
+    let p = path.context("no config directory on this platform")?;
+    save_to(p, cfg)
 }
 
 /// The file may hold API keys, so it is created user-only (0600) on unix.
@@ -182,6 +377,17 @@ mod tests {
                 ("alpaca_key_id".to_string(), "PKTEST123".to_string()),
                 ("alpaca_secret".to_string(), "alpaca-secret-x".to_string()),
             ]),
+            ui: Some(UiConfig {
+                default_view: Some("news".into()),
+                news_layout: Some("stacked".into()),
+                news_scope: None,
+            }),
+            chart: Some(ChartConfig {
+                style: Some("line".into()),
+                sma_slow: Some(200),
+                presets: Some(vec![vec!["1d".into(), "5m".into()]]),
+                ..Default::default()
+            }),
             theme: Some(BTreeMap::from([("accent".to_string(), "magenta".to_string())])),
         };
         save_to(&p, &cfg).unwrap();
@@ -261,8 +467,91 @@ mod tests {
         let (_, warnings) = resolve(&toml::from_str::<Config>("[theme]\nup = \"banana\"").unwrap());
         assert_eq!(warnings.len(), 1, "{warnings:?}");
 
-        // No [theme] in the file: Save must not spray an empty table in.
+        // Absent sections must not serialize: Save would spray empty tables
+        // into every config otherwise.
         let bare = toml::to_string_pretty(&Config::default()).unwrap();
-        assert!(!bare.contains("[theme]"), "{bare}");
+        for section in ["[theme]", "[ui]", "[chart]"] {
+            assert!(!bare.contains(section), "{bare}");
+        }
+    }
+
+    #[test]
+    fn chart_section_validates_per_entry() {
+        let cfg: Config = toml::from_str(
+            r#"
+            [chart]
+            style = "line"
+            sma_fast = 50
+            sma_slow = 9000
+            rsi_period = 21
+            presets = [["1d", "5m"], ["nope", "5m"], ["1y"]]
+            "#,
+        )
+        .unwrap();
+        let (resolved, warnings) = resolve(&cfg);
+        assert_eq!(resolved.chart.style, ChartStyle::Line);
+        assert_eq!(resolved.chart.sma_fast, 50);
+        // Out of range: warned, default kept.
+        assert_eq!(resolved.chart.sma_slow, indicators::SMA_SLOW);
+        assert_eq!(resolved.chart.rsi_period, 21);
+        // One valid pair survives; the two bad ones warn.
+        assert_eq!(resolved.chart.presets, vec![(Range::D1, Interval::M5)]);
+        assert_eq!(warnings.len(), 3, "{warnings:?}");
+
+        // All presets bad: fall back to the built-in cycle.
+        let cfg: Config = toml::from_str("[chart]\npresets = [[\"x\", \"y\"]]").unwrap();
+        let (resolved, warnings) = resolve(&cfg);
+        assert_eq!(resolved.chart.presets, RANGE_PRESETS.to_vec());
+        assert_eq!(warnings.len(), 2, "{warnings:?}");
+    }
+
+    #[test]
+    fn ui_section_validates_per_entry() {
+        let cfg: Config = toml::from_str(
+            "[ui]\ndefault_view = \"News\"\nnews_layout = \"stacked\"\nnews_scope = \"market\"",
+        )
+        .unwrap();
+        let (resolved, warnings) = resolve(&cfg);
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(resolved.ui.view_idx, ui::view_index(ui::ViewId::News));
+        assert_eq!(resolved.ui.news_layout, NewsLayout::Stacked);
+        assert_eq!(resolved.ui.news_scope, NewsScope::Market);
+
+        let cfg: Config = toml::from_str("[ui]\ndefault_view = \"nwes\"").unwrap();
+        let (resolved, warnings) = resolve(&cfg);
+        assert_eq!(resolved.ui.view_idx, ui::view_index(ui::ViewId::Split));
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].contains("nwes"), "{warnings:?}");
+    }
+
+    /// Every ```toml block in the README must parse as a Config and resolve
+    /// without warnings, so the documentation cannot rot silently.
+    #[test]
+    fn readme_toml_examples_parse_and_resolve() {
+        let readme = include_str!("../README.md");
+        let mut in_block = false;
+        let mut block = String::new();
+        let mut checked = 0;
+        for line in readme.lines() {
+            if !in_block && line.trim_start().starts_with("```toml") {
+                in_block = true;
+                block.clear();
+                continue;
+            }
+            if in_block && line.trim_start().starts_with("```") {
+                in_block = false;
+                let cfg: Config = toml::from_str(&block)
+                    .unwrap_or_else(|e| panic!("README toml does not parse: {e}\n{block}"));
+                let (_, warnings) = resolve(&cfg);
+                assert!(warnings.is_empty(), "README example warns: {warnings:?}\n{block}");
+                checked += 1;
+                continue;
+            }
+            if in_block {
+                block.push_str(line);
+                block.push('\n');
+            }
+        }
+        assert!(checked >= 2, "expected at least two toml blocks in the README");
     }
 }
