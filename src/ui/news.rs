@@ -42,12 +42,12 @@ impl View for NewsView {
         if render_gate(f, area, &block, app, &key) {
             return;
         }
-        let bundle = &app.news[&key];
+        let bundle = &app.feeds[&key];
 
         let [head, main] =
             Layout::vertical([Constraint::Length(1), Constraint::Min(3)]).areas(area);
 
-        f.render_widget(head_line(app, bundle.sentiment.as_ref()), head);
+        f.render_widget(head_line(app, bundle.sentiment()), head);
 
         if bundle.articles.is_empty() {
             let msg = empty_feed_message(scope, &label);
@@ -167,7 +167,7 @@ pub fn render_panel(f: &mut Frame, area: Rect, app: &mut App) {
     if render_gate(f, area, &block, app, &key) {
         return;
     }
-    let bundle = &app.news[&key];
+    let bundle = &app.feeds[&key];
     if bundle.articles.is_empty() {
         let msg = empty_feed_message(scope, &label);
         f.render_widget(Paragraph::new(Line::from(msg).dim()).block(block), area);
@@ -292,10 +292,7 @@ pub fn render_gate(f: &mut Frame, area: Rect, block: &Block, app: &App, key: &st
         );
         return true;
     }
-    let missing = match app.view_id() {
-        ViewId::Insider => !app.insider.contains_key(app.selected_symbol()),
-        _ => !app.news.contains_key(key),
-    };
+    let missing = !app.feeds.contains_key(key);
     if missing {
         f.render_widget(
             Paragraph::new(Line::from("loading…").dim()).block(block.clone()),

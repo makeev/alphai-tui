@@ -192,19 +192,18 @@ pub enum Cmd {
 }
 
 pub enum Event {
-    News {
+    /// One feed fetch's result: a fresh head (replaces the bundle) or a
+    /// cursor page (`append: true`, extends it).
+    Feed {
+        /// Cache key: a symbol / `MARKET_KEY` / `TRENDING_KEY` for news,
+        /// `ins:SYM` for insider — the same key `App` tracks inflight and
+        /// errors under.
         key: String,
         articles: Vec<Article>,
-        sentiment: Option<SentimentSummary>,
+        /// Side payload of the head fetch; pages never refetch it.
+        side: Option<FeedPayload>,
         next_cursor: Option<String>,
         /// True for a cursor fetch: extend the bundle instead of replacing it.
-        append: bool,
-    },
-    Insider {
-        symbol: String,
-        articles: Vec<Article>,
-        summary: Option<InsiderSummary>,
-        next_cursor: Option<String>,
         append: bool,
     },
     /// A load-more failed. The shown feed stays; `gated` marks the archive
@@ -216,6 +215,12 @@ pub enum Event {
     },
     /// `key` matches the cache key of the fetch that failed.
     Error { key: String, error: String },
+}
+
+/// Rollup fetched alongside a feed's head page.
+pub enum FeedPayload {
+    Sentiment(SentimentSummary),
+    Insider(InsiderSummary),
 }
 
 /// Cache key for a symbol-scoped or market-wide news fetch.
@@ -325,10 +330,10 @@ pub async fn run(
                     ),
                 };
                 let event = match page {
-                    Ok(p) => Event::News {
+                    Ok(p) => Event::Feed {
                         key,
                         articles: p.results,
-                        sentiment,
+                        side: sentiment.map(FeedPayload::Sentiment),
                         next_cursor: p.next_cursor,
                         append,
                     },
@@ -345,10 +350,11 @@ pub async fn run(
                     continue;
                 };
                 let event = match client.trending().await {
-                    Ok(articles) => Event::News {
+                    // A head-only feed: no cursor means paging never starts.
+                    Ok(articles) => Event::Feed {
                         key,
                         articles,
-                        sentiment: None,
+                        side: None,
                         next_cursor: None,
                         append: false,
                     },
@@ -385,10 +391,10 @@ pub async fn run(
                     ),
                 };
                 let event = match page {
-                    Ok(p) => Event::Insider {
-                        symbol,
+                    Ok(p) => Event::Feed {
+                        key,
                         articles: p.results,
-                        summary,
+                        side: summary.map(FeedPayload::Insider),
                         next_cursor: p.next_cursor,
                         append,
                     },

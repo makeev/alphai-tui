@@ -10,17 +10,20 @@ use ratatui::widgets::TableState;
 use tokio::sync::Notify;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
-use crate::alphai::{self, Article, InsiderSummary, SentimentSummary};
+use crate::alphai::{self, Article, FeedPayload, InsiderSummary, SentimentSummary};
 use crate::config::{self, ALPHAI_KEY_FIELD, Config, KeyField};
 use crate::domain::{Interval, Range, TickerData};
 use crate::poller::{SharedParams, SharedSource, SourceEvent};
 use crate::source::{make_source, registry};
 use crate::ui;
 
-/// Cached news for one cache key (a symbol, or `alphai::MARKET_KEY`).
-pub struct NewsBundle {
+/// Cached pageable feed for one cache key: a symbol, `alphai::MARKET_KEY`
+/// or `alphai::TRENDING_KEY` for news, `ins:SYM` for insider — the same key
+/// `inflight` and `alphai_errors` use.
+pub struct FeedBundle {
     pub articles: Vec<Article>,
-    pub sentiment: Option<SentimentSummary>,
+    /// Side payload of the head fetch (pages never refetch it).
+    pub side: Option<FeedPayload>,
     /// Cursor for the next (older) page; None = end of the feed (or gated).
     pub next_cursor: Option<String>,
     /// Last load-more failure, shown under the list without dropping it.
@@ -30,46 +33,35 @@ pub struct NewsBundle {
     pub fetched: Instant,
 }
 
-impl NewsBundle {
+impl FeedBundle {
     pub fn new(
         articles: Vec<Article>,
-        sentiment: Option<SentimentSummary>,
+        side: Option<FeedPayload>,
         next_cursor: Option<String>,
     ) -> Self {
         Self {
             articles,
-            sentiment,
+            side,
             next_cursor,
             page_error: None,
             gated: false,
             fetched: Instant::now(),
         }
     }
-}
 
-/// Cached insider feed + 30d rollup for one symbol.
-pub struct InsiderBundle {
-    pub articles: Vec<Article>,
-    pub summary: Option<InsiderSummary>,
-    pub next_cursor: Option<String>,
-    pub page_error: Option<String>,
-    pub gated: bool,
-    pub fetched: Instant,
-}
+    /// Typed side-payload accessors: a view cannot silently read the wrong
+    /// rollup off a mismatched bundle, it just renders no rollup.
+    pub fn sentiment(&self) -> Option<&SentimentSummary> {
+        match &self.side {
+            Some(FeedPayload::Sentiment(s)) => Some(s),
+            _ => None,
+        }
+    }
 
-impl InsiderBundle {
-    pub fn new(
-        articles: Vec<Article>,
-        summary: Option<InsiderSummary>,
-        next_cursor: Option<String>,
-    ) -> Self {
-        Self {
-            articles,
-            summary,
-            next_cursor,
-            page_error: None,
-            gated: false,
-            fetched: Instant::now(),
+    pub fn insider_summary(&self) -> Option<&InsiderSummary> {
+        match &self.side {
+            Some(FeedPayload::Insider(s)) => Some(s),
+            _ => None,
         }
     }
 }
@@ -248,9 +240,9 @@ pub struct App {
     pub chart_style: ChartStyle,
     pub show_sma: bool,
     pub show_rsi: bool,
-    // AlphaAI news + insider state
-    pub news: HashMap<String, NewsBundle>,
-    pub insider: HashMap<String, InsiderBundle>,
+    // AlphaAI feed state: every fetched feed by cache key (news under the
+    // symbol/market/trending keys, insider under `ins:SYM`)
+    pub feeds: HashMap<String, FeedBundle>,
     pub alphai_errors: HashMap<String, String>,
     pub alphai_enabled: bool,
     pub news_selected: usize,
@@ -286,8 +278,7 @@ impl App {
             chart_style: ChartStyle::Candles,
             show_sma: true,
             show_rsi: true,
-            news: HashMap::new(),
-            insider: HashMap::new(),
+            feeds: HashMap::new(),
             alphai_errors: HashMap::new(),
             alphai_enabled: init.alphai_enabled,
             news_selected: 0,
@@ -336,19 +327,59 @@ impl App {
         self.inflight.contains(key)
     }
 
-    /// Articles behind the current News/Insider view, if fetched.
-    pub fn visible_articles(&self) -> Option<&[Article]> {
-        match self.view_id() {
-            ui::ViewId::News => self
-                .news
-                .get(&self.news_cache_key())
-                .map(|b| b.articles.as_slice()),
-            ui::ViewId::Insider => self
-                .insider
-                .get(self.selected_symbol())
-                .map(|b| b.articles.as_slice()),
-            _ => None,
+    /// The feed the visible view displays: (cache key, kind). The single
+    /// source of truth behind the demand-driven fetch, pagination, refresh
+    /// and the article accessors.
+    fn active_feed(&self) -> Option<(String, FeedKind)> {
+        let kind = ui::VIEWS[self.view_idx].feed_shown()?;
+        let key = match kind {
+            FeedKind::News => self.news_cache_key(),
+            FeedKind::Insider => alphai::insider_key(self.selected_symbol()),
+        };
+        Some((key, kind))
+    }
+
+    /// Head fetch (first page plus side payload) for a feed of `kind`.
+    fn head_cmd(&self, kind: FeedKind) -> alphai::Cmd {
+        match kind {
+            FeedKind::News => match self.news_scope {
+                NewsScope::Ticker => alphai::Cmd::FetchNews {
+                    symbol: Some(self.selected_symbol().to_string()),
+                    cursor: None,
+                },
+                NewsScope::Market => alphai::Cmd::FetchNews { symbol: None, cursor: None },
+                NewsScope::Trending => alphai::Cmd::FetchTrending,
+            },
+            FeedKind::Insider => alphai::Cmd::FetchInsider {
+                symbol: self.selected_symbol().to_string(),
+                cursor: None,
+            },
         }
+    }
+
+    /// Next-page fetch continuing an already shown feed.
+    fn page_cmd(&self, kind: FeedKind, cursor: String) -> alphai::Cmd {
+        match kind {
+            FeedKind::News => alphai::Cmd::FetchNews {
+                symbol: (self.news_scope == NewsScope::Ticker)
+                    .then(|| self.selected_symbol().to_string()),
+                cursor: Some(cursor),
+            },
+            FeedKind::Insider => alphai::Cmd::FetchInsider {
+                symbol: self.selected_symbol().to_string(),
+                cursor: Some(cursor),
+            },
+        }
+    }
+
+    /// Articles behind the current News/Insider view, if fetched. The Split
+    /// strip is read-only and exposes none (v and Enter stay inert there).
+    pub fn visible_articles(&self) -> Option<&[Article]> {
+        if !ui::VIEWS[self.view_idx].navigates_articles() {
+            return None;
+        }
+        let (key, _) = self.active_feed()?;
+        self.feeds.get(&key).map(|b| b.articles.as_slice())
     }
 
     pub fn run(&mut self, terminal: &mut DefaultTerminal) -> Result<()> {
@@ -385,55 +416,29 @@ impl App {
 
     pub(crate) fn apply_alphai(&mut self, event: alphai::Event) {
         match event {
-            alphai::Event::News { key, articles, sentiment, next_cursor, append } => {
+            alphai::Event::Feed { key, articles, side, next_cursor, append } => {
                 self.inflight.remove(&key);
                 self.alphai_errors.remove(&key);
-                match self.news.get_mut(&key) {
-                    // A page extends the shown feed (sentiment stays from the
-                    // head fetch); a fresh fetch replaces the bundle.
+                match self.feeds.get_mut(&key) {
+                    // A page extends the shown feed (the side payload stays
+                    // from the head fetch); a fresh fetch replaces the bundle.
                     Some(b) if append => {
                         b.next_cursor = next_cursor;
                         b.page_error = None;
                         append_page(&mut b.articles, articles);
                     }
                     _ => {
-                        self.news.insert(key, NewsBundle::new(articles, sentiment, next_cursor));
-                    }
-                }
-            }
-            alphai::Event::Insider { symbol, articles, summary, next_cursor, append } => {
-                let key = alphai::insider_key(&symbol);
-                self.inflight.remove(&key);
-                self.alphai_errors.remove(&key);
-                match self.insider.get_mut(&symbol) {
-                    Some(b) if append => {
-                        b.next_cursor = next_cursor;
-                        b.page_error = None;
-                        append_page(&mut b.articles, articles);
-                    }
-                    _ => {
-                        self.insider
-                            .insert(symbol, InsiderBundle::new(articles, summary, next_cursor));
+                        self.feeds.insert(key, FeedBundle::new(articles, side, next_cursor));
                     }
                 }
             }
             alphai::Event::PageError { key, error, gated } => {
                 self.inflight.remove(&key);
-                let (page_error, bundle_gated, next_cursor) =
-                    match key.strip_prefix("ins:") {
-                        Some(symbol) => match self.insider.get_mut(symbol) {
-                            Some(b) => (&mut b.page_error, &mut b.gated, &mut b.next_cursor),
-                            None => return,
-                        },
-                        None => match self.news.get_mut(&key) {
-                            Some(b) => (&mut b.page_error, &mut b.gated, &mut b.next_cursor),
-                            None => return,
-                        },
-                    };
-                *page_error = Some(error);
+                let Some(b) = self.feeds.get_mut(&key) else { return };
+                b.page_error = Some(error);
                 if gated {
-                    *bundle_gated = true;
-                    *next_cursor = None;
+                    b.gated = true;
+                    b.next_cursor = None;
                 }
             }
             alphai::Event::Error { key, error } => {
@@ -457,51 +462,21 @@ impl App {
         {
             return;
         }
+        // The view declares which feed it shows (`View::feed_shown`); the
+        // guards below are the single copy for every feed kind.
+        let Some((key, kind)) = self.active_feed() else { return };
         // A TTL refetch replaces the whole bundle, dropping loaded pages, so
         // it waits until the reader is back at the top row (missing bundles
         // fetch regardless; the Split strip has no selection and stays at 0).
         let at_top = self.news_selected == 0;
-        match self.view_id() {
-            // The Split view embeds the compact news strip, so it drives the
-            // same demand-driven news fetch as the full News view.
-            ui::ViewId::News | ui::ViewId::Split => {
-                let key = self.news_cache_key();
-                let stale = match self.news.get(&key) {
-                    None => true,
-                    Some(b) => at_top && b.fetched.elapsed() > alphai::CACHE_TTL,
-                };
-                if stale && !self.inflight.contains(&key) && !self.alphai_errors.contains_key(&key)
-                {
-                    self.inflight.insert(key);
-                    let cmd = match self.news_scope {
-                        NewsScope::Ticker => alphai::Cmd::FetchNews {
-                            symbol: Some(self.selected_symbol().to_string()),
-                            cursor: None,
-                        },
-                        NewsScope::Market => {
-                            alphai::Cmd::FetchNews { symbol: None, cursor: None }
-                        }
-                        NewsScope::Trending => alphai::Cmd::FetchTrending,
-                    };
-                    let _ = self.alphai_tx.send(cmd);
-                }
-            }
-            ui::ViewId::Insider => {
-                let symbol = self.selected_symbol().to_string();
-                let key = alphai::insider_key(&symbol);
-                let stale = match self.insider.get(&symbol) {
-                    None => true,
-                    Some(b) => at_top && b.fetched.elapsed() > alphai::CACHE_TTL,
-                };
-                if stale && !self.inflight.contains(&key) && !self.alphai_errors.contains_key(&key)
-                {
-                    self.inflight.insert(key);
-                    let _ = self
-                        .alphai_tx
-                        .send(alphai::Cmd::FetchInsider { symbol, cursor: None });
-                }
-            }
-            _ => {}
+        let stale = match self.feeds.get(&key) {
+            None => true,
+            Some(b) => at_top && b.fetched.elapsed() > alphai::CACHE_TTL,
+        };
+        if stale && !self.inflight.contains(&key) && !self.alphai_errors.contains_key(&key) {
+            let cmd = self.head_cmd(kind);
+            self.inflight.insert(key);
+            let _ = self.alphai_tx.send(cmd);
         }
     }
 
@@ -509,33 +484,19 @@ impl App {
     /// user-driven, one request per keypress at most; the shared `inflight`
     /// key also blocks a concurrent TTL refetch of the same feed).
     fn request_more_articles(&mut self) {
-        let (key, cmd) = match self.view_id() {
-            ui::ViewId::News => {
-                let key = self.news_cache_key();
-                let Some(cursor) = self.news.get(&key).and_then(|b| b.next_cursor.clone()) else {
-                    return;
-                };
-                let symbol = (self.news_scope == NewsScope::Ticker)
-                    .then(|| self.selected_symbol().to_string());
-                (key, alphai::Cmd::FetchNews { symbol, cursor: Some(cursor) })
-            }
-            ui::ViewId::Insider => {
-                let symbol = self.selected_symbol().to_string();
-                let key = alphai::insider_key(&symbol);
-                let Some(cursor) = self
-                    .insider
-                    .get(&symbol)
-                    .and_then(|b| b.next_cursor.clone())
-                else {
-                    return;
-                };
-                (key, alphai::Cmd::FetchInsider { symbol, cursor: Some(cursor) })
-            }
-            _ => return,
+        // Only views that navigate articles page; the Split strip never does.
+        if !ui::VIEWS[self.view_idx].navigates_articles() {
+            return;
+        }
+        let Some((key, kind)) = self.active_feed() else { return };
+        // A gated feed carries no cursor (the archive guard cleared it).
+        let Some(cursor) = self.feeds.get(&key).and_then(|b| b.next_cursor.clone()) else {
+            return;
         };
         if self.inflight.contains(&key) {
             return;
         }
+        let cmd = self.page_cmd(kind, cursor);
         self.inflight.insert(key);
         let _ = self.alphai_tx.send(cmd);
     }
@@ -710,18 +671,9 @@ impl App {
     /// any error) so it refetches — this is also the retry path after 401/429.
     fn manual_refresh(&mut self) {
         self.refresh.notify_one();
-        match self.view_id() {
-            ui::ViewId::News | ui::ViewId::Split => {
-                let key = self.news_cache_key();
-                self.news.remove(&key);
-                self.alphai_errors.remove(&key);
-            }
-            ui::ViewId::Insider => {
-                let symbol = self.selected_symbol().to_string();
-                self.insider.remove(&symbol);
-                self.alphai_errors.remove(&alphai::insider_key(&symbol));
-            }
-            _ => {}
+        if let Some((key, _)) = self.active_feed() {
+            self.feeds.remove(&key);
+            self.alphai_errors.remove(&key);
         }
     }
 
@@ -870,8 +822,7 @@ impl App {
             let key = cfg.alphai_key();
             self.alphai_enabled = key.is_some();
             let _ = self.alphai_tx.send(alphai::Cmd::SetKey(key));
-            self.news.clear();
-            self.insider.clear();
+            self.feeds.clear();
             self.alphai_errors.clear();
             self.inflight.clear();
         }

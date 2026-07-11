@@ -6,8 +6,8 @@ use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use tokio::sync::Notify;
 
-use crate::alphai::{self, Article, InsiderSummary, SentimentSummary, TRENDING_KEY};
-use crate::app::{App, AppInit, ChartStyle, InsiderBundle, NewsBundle, NewsLayout, NewsScope};
+use crate::alphai::{self, Article, FeedPayload, InsiderSummary, SentimentSummary, TRENDING_KEY};
+use crate::app::{App, AppInit, ChartStyle, FeedBundle, NewsLayout, NewsScope};
 use crate::config::Config;
 use crate::domain::{Candle, Interval, Quote, Range, TickerData};
 use crate::source::make_source;
@@ -305,25 +305,25 @@ fn range_keys_cycle_presets_and_update_header() {
 fn range_switch_keeps_news_bundle() {
     let mut app = fake_app();
     app.view_idx = ui::view_index(ui::ViewId::News);
-    app.news.insert(
+    app.feeds.insert(
         "AAPL".into(),
-        NewsBundle::new(
+        FeedBundle::new(
             vec![article("Apple beats expectations", "AAPL", 9, "positive")],
             None,
             None,
         ),
     );
     press(&mut app, KeyCode::Char('t'));
-    assert!(app.news.contains_key("AAPL"), "range switch dropped the news bundle");
+    assert!(app.feeds.contains_key("AAPL"), "range switch dropped the news bundle");
 }
 
 #[test]
 fn split_view_combines_table_chart_and_news() {
     let mut app = fake_app();
     app.view_idx = ui::view_index(ui::ViewId::Split);
-    app.news.insert(
+    app.feeds.insert(
         "AAPL".into(),
-        NewsBundle::new(
+        FeedBundle::new(
             vec![article("Apple beats expectations", "AAPL", 9, "positive")],
             None,
             None,
@@ -383,9 +383,9 @@ fn view_ids_are_unique_and_indexable() {
 fn split_j_moves_watchlist_not_articles() {
     let (mut app, mut cmds) = empty_app_with_cmds(vec!["AAPL".into(), "MSFT".into()]);
     app.view_idx = ui::view_index(ui::ViewId::Split);
-    app.news.insert(
+    app.feeds.insert(
         "AAPL".into(),
-        NewsBundle::new(
+        FeedBundle::new(
             vec![article("Apple beats expectations", "AAPL", 9, "positive")],
             None,
             Some("cur1".into()),
@@ -412,20 +412,20 @@ fn missing_data_renders_placeholders() {
 fn news_view_lists_articles_and_sentiment() {
     let mut app = fake_app();
     app.view_idx = ui::view_index(ui::ViewId::News);
-    app.news.insert(
+    app.feeds.insert(
         "AAPL".into(),
-        NewsBundle::new(
+        FeedBundle::new(
             vec![
                 article("Apple beats expectations", "AAPL", 9, "positive"),
                 article("Supplier note weighs on outlook", "AAPL", 6, "negative"),
             ],
-            Some(SentimentSummary {
+            Some(FeedPayload::Sentiment(SentimentSummary {
                 days: 7,
                 total: 20,
                 bullish: 12,
                 neutral: 5,
                 bearish: 3,
-            }),
+            })),
             None,
         ),
     );
@@ -479,11 +479,11 @@ fn insider_view_shows_summary_and_filings() {
         }"#,
     )
     .unwrap();
-    app.insider.insert(
-        "AAPL".into(),
-        InsiderBundle::new(
+    app.feeds.insert(
+        alphai::insider_key("AAPL"),
+        FeedBundle::new(
             vec![filing("Apple insider sold $12.5M of stock", "direct")],
-            Some(summary),
+            Some(FeedPayload::Insider(summary)),
             None,
         ),
     );
@@ -521,9 +521,9 @@ fn market_scope_shows_tickers_and_sources_count() {
     let mut app = fake_app();
     app.view_idx = ui::view_index(ui::ViewId::News);
     app.news_scope = NewsScope::Market;
-    app.news.insert(
+    app.feeds.insert(
         "*".into(),
-        NewsBundle::new(
+        FeedBundle::new(
             vec![market_article("Fed minutes move futures", 7)],
             None,
             None,
@@ -540,9 +540,9 @@ fn trending_view_lists_articles() {
     let mut app = fake_app();
     app.view_idx = ui::view_index(ui::ViewId::News);
     app.news_scope = NewsScope::Trending;
-    app.news.insert(
+    app.feeds.insert(
         TRENDING_KEY.into(),
-        NewsBundle::new(
+        FeedBundle::new(
             vec![market_article("Chip stocks rally on export news", 5)],
             None,
             None,
@@ -559,9 +559,9 @@ fn trending_view_lists_articles() {
 fn article_overlay_opens_scrolls_and_closes() {
     let mut app = fake_app();
     app.view_idx = ui::view_index(ui::ViewId::News);
-    app.news.insert(
+    app.feeds.insert(
         "AAPL".into(),
-        NewsBundle::new(
+        FeedBundle::new(
             vec![article("Apple beats expectations", "AAPL", 9, "positive")],
             None,
             None,
@@ -588,9 +588,9 @@ fn article_overlay_opens_scrolls_and_closes() {
 fn overlay_steals_nav_keys() {
     let mut app = fake_app();
     app.view_idx = ui::view_index(ui::ViewId::News);
-    app.news.insert(
+    app.feeds.insert(
         "AAPL".into(),
-        NewsBundle::new(
+        FeedBundle::new(
             vec![
                 article("First", "AAPL", 9, "positive"),
                 article("Second", "AAPL", 8, "positive"),
@@ -610,9 +610,9 @@ fn overlay_steals_nav_keys() {
 fn overlay_works_from_insider_view() {
     let mut app = fake_app();
     app.view_idx = ui::view_index(ui::ViewId::Insider);
-    app.insider.insert(
-        "AAPL".into(),
-        InsiderBundle::new(
+    app.feeds.insert(
+        alphai::insider_key("AAPL"),
+        FeedBundle::new(
             vec![filing("Officer bought 10,000 shares", "indirect")],
             None,
             None,
@@ -637,9 +637,9 @@ fn overlay_noop_when_no_articles() {
 fn news_card_pane_shown_by_default() {
     let mut app = fake_app();
     app.view_idx = ui::view_index(ui::ViewId::News);
-    app.news.insert(
+    app.feeds.insert(
         "AAPL".into(),
-        NewsBundle::new(
+        FeedBundle::new(
             vec![article("Apple beats expectations", "AAPL", 9, "positive")],
             None,
             None,
@@ -656,9 +656,9 @@ fn news_card_pane_shown_by_default() {
 fn x_cycles_news_layout() {
     let mut app = fake_app();
     app.view_idx = ui::view_index(ui::ViewId::News);
-    app.news.insert(
+    app.feeds.insert(
         "AAPL".into(),
-        NewsBundle::new(
+        FeedBundle::new(
             vec![article("Apple beats expectations", "AAPL", 9, "positive")],
             None,
             None,
@@ -677,9 +677,9 @@ fn x_cycles_news_layout() {
 fn j_at_last_row_requests_next_page() {
     let (mut app, mut cmds) = empty_app_with_cmds(vec!["AAPL".into()]);
     app.view_idx = ui::view_index(ui::ViewId::News);
-    app.news.insert(
+    app.feeds.insert(
         "AAPL".into(),
-        NewsBundle::new(
+        FeedBundle::new(
             vec![article("Apple beats expectations", "AAPL", 9, "positive")],
             None,
             Some("cur1".into()),
@@ -708,9 +708,9 @@ fn j_at_last_row_requests_next_page() {
 fn insider_j_at_last_row_requests_next_page() {
     let (mut app, mut cmds) = empty_app_with_cmds(vec!["AAPL".into()]);
     app.view_idx = ui::view_index(ui::ViewId::Insider);
-    app.insider.insert(
-        "AAPL".into(),
-        InsiderBundle::new(
+    app.feeds.insert(
+        alphai::insider_key("AAPL"),
+        FeedBundle::new(
             vec![filing("Apple insider sold $12.5M of stock", "direct")],
             None,
             Some("cur9".into()),
@@ -735,18 +735,18 @@ fn page_append_extends_list_and_dedupes() {
         .unwrap()
     }
     let mut app = empty_app(vec!["AAPL".into()]);
-    app.news.insert(
+    app.feeds.insert(
         "AAPL".into(),
-        NewsBundle::new(vec![uid_article("aaa", "First")], None, Some("c1".into())),
+        FeedBundle::new(vec![uid_article("aaa", "First")], None, Some("c1".into())),
     );
-    app.apply_alphai(alphai::Event::News {
+    app.apply_alphai(alphai::Event::Feed {
         key: "AAPL".into(),
         articles: vec![uid_article("aaa", "First reprint"), uid_article("bbb", "Second")],
-        sentiment: None,
+        side: None,
         next_cursor: Some("c2".into()),
         append: true,
     });
-    let b = &app.news["AAPL"];
+    let b = &app.feeds["AAPL"];
     assert_eq!(b.articles.len(), 2, "page boundary duplicate not dropped");
     assert_eq!(b.articles[1].original.title, "Second");
     assert_eq!(b.next_cursor.as_deref(), Some("c2"));
@@ -756,9 +756,9 @@ fn page_append_extends_list_and_dedupes() {
 fn archive_gate_shows_upsell_and_stops_paging() {
     let (mut app, mut cmds) = empty_app_with_cmds(vec!["AAPL".into()]);
     app.view_idx = ui::view_index(ui::ViewId::News);
-    app.news.insert(
+    app.feeds.insert(
         "AAPL".into(),
-        NewsBundle::new(
+        FeedBundle::new(
             vec![article("Apple beats expectations", "AAPL", 9, "positive")],
             None,
             Some("cur1".into()),
@@ -769,7 +769,7 @@ fn archive_gate_shows_upsell_and_stops_paging() {
         error: alphai::ARCHIVE_GATE_MSG.into(),
         gated: true,
     });
-    let b = &app.news["AAPL"];
+    let b = &app.feeds["AAPL"];
     assert!(b.gated);
     assert_eq!(b.next_cursor, None, "gated feed still offers a cursor");
     // The list survives and the hint sells the upgrade instead of an error.
@@ -784,9 +784,9 @@ fn archive_gate_shows_upsell_and_stops_paging() {
 fn ttl_refetch_waits_for_top_row() {
     let (mut app, mut cmds) = empty_app_with_cmds(vec!["AAPL".into()]);
     app.view_idx = ui::view_index(ui::ViewId::News);
-    app.news.insert(
+    app.feeds.insert(
         "AAPL".into(),
-        NewsBundle::new(
+        FeedBundle::new(
             vec![
                 article("First", "AAPL", 9, "positive"),
                 article("Second", "AAPL", 8, "positive"),
@@ -795,7 +795,7 @@ fn ttl_refetch_waits_for_top_row() {
             None,
         ),
     );
-    app.news.get_mut("AAPL").unwrap().fetched =
+    app.feeds.get_mut("AAPL").unwrap().fetched =
         Instant::now() - std::time::Duration::from_secs(600);
     // Reader is mid-list: a refetch would drop loaded pages, so hold off.
     app.news_selected = 1;
@@ -806,6 +806,37 @@ fn ttl_refetch_waits_for_top_row() {
     assert!(
         matches!(cmds.try_recv(), Ok(alphai::Cmd::FetchNews { cursor: None, .. })),
         "no refetch at the top row"
+    );
+}
+
+/// The single-copy guards must hold for every feed kind: the insider TTL
+/// refetch also waits for the reader to return to the top row.
+#[test]
+fn insider_ttl_refetch_also_waits_for_top_row() {
+    let (mut app, mut cmds) = empty_app_with_cmds(vec!["AAPL".into()]);
+    app.view_idx = ui::view_index(ui::ViewId::Insider);
+    let key = alphai::insider_key("AAPL");
+    app.feeds.insert(
+        key.clone(),
+        FeedBundle::new(
+            vec![
+                filing("Apple insider sold $12.5M of stock", "direct"),
+                filing("Officer bought 10,000 shares", "indirect"),
+            ],
+            None,
+            None,
+        ),
+    );
+    app.feeds.get_mut(&key).unwrap().fetched =
+        Instant::now() - std::time::Duration::from_secs(600);
+    app.news_selected = 1;
+    app.ensure_alphai_data();
+    assert!(cmds.try_recv().is_err(), "insider refetched under the reader");
+    app.news_selected = 0;
+    app.ensure_alphai_data();
+    assert!(
+        matches!(cmds.try_recv(), Ok(alphai::Cmd::FetchInsider { cursor: None, .. })),
+        "no insider refetch at the top row"
     );
 }
 

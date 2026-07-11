@@ -41,7 +41,7 @@ impl View for InsiderView {
         if render_gate(f, area, &block, app, &key) {
             return;
         }
-        let bundle = &app.insider[&symbol];
+        let bundle = &app.feeds[&key];
         let at_edge = app.news_selected + 1 >= bundle.articles.len();
         if let Some(hint) = feed_bottom_hint(
             bundle.gated,
@@ -60,7 +60,7 @@ impl View for InsiderView {
         ])
         .areas(area);
 
-        f.render_widget(summary_lines(bundle.summary.as_ref()), head);
+        f.render_widget(summary_lines(bundle.insider_summary()), head);
 
         if bundle.articles.is_empty() {
             let msg = format!("no Form 4 activity for {symbol} in the feed");
