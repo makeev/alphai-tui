@@ -133,6 +133,14 @@ pub enum ChartStyle {
     Line,
 }
 
+/// The AlphaAI feeds a view can display (`View::feed_shown`). Trending is
+/// not a kind: it is a news scope, a different cache key of the news feed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FeedKind {
+    News,
+    Insider,
+}
+
 /// News feed scope the f key cycles: the selected ticker, the whole market
 /// (story-collapsed), or the 48h trending top 10. Session-only, like the
 /// chart options.
@@ -269,7 +277,7 @@ impl App {
             data: HashMap::new(),
             errors: HashMap::new(),
             selected: 0,
-            view_idx: 0,
+            view_idx: ui::view_index(ui::ViewId::Split),
             source_name: init.source_name,
             range: init.range,
             interval: init.interval,
@@ -308,6 +316,11 @@ impl App {
         &self.symbols[self.selected]
     }
 
+    /// Identity of the visible view (its `view_idx` is the tab position).
+    pub fn view_id(&self) -> ui::ViewId {
+        ui::VIEWS[self.view_idx].id()
+    }
+
     /// Cache key the News view is currently looking at.
     pub fn news_cache_key(&self) -> String {
         match self.news_scope {
@@ -325,12 +338,12 @@ impl App {
 
     /// Articles behind the current News/Insider view, if fetched.
     pub fn visible_articles(&self) -> Option<&[Article]> {
-        match self.view_idx {
-            ui::VIEW_NEWS => self
+        match self.view_id() {
+            ui::ViewId::News => self
                 .news
                 .get(&self.news_cache_key())
                 .map(|b| b.articles.as_slice()),
-            ui::VIEW_INSIDER => self
+            ui::ViewId::Insider => self
                 .insider
                 .get(self.selected_symbol())
                 .map(|b| b.articles.as_slice()),
@@ -448,10 +461,10 @@ impl App {
         // it waits until the reader is back at the top row (missing bundles
         // fetch regardless; the Split strip has no selection and stays at 0).
         let at_top = self.news_selected == 0;
-        match self.view_idx {
+        match self.view_id() {
             // The Split view embeds the compact news strip, so it drives the
             // same demand-driven news fetch as the full News view.
-            ui::VIEW_NEWS | ui::VIEW_SPLIT => {
+            ui::ViewId::News | ui::ViewId::Split => {
                 let key = self.news_cache_key();
                 let stale = match self.news.get(&key) {
                     None => true,
@@ -473,7 +486,7 @@ impl App {
                     let _ = self.alphai_tx.send(cmd);
                 }
             }
-            ui::VIEW_INSIDER => {
+            ui::ViewId::Insider => {
                 let symbol = self.selected_symbol().to_string();
                 let key = alphai::insider_key(&symbol);
                 let stale = match self.insider.get(&symbol) {
@@ -496,8 +509,8 @@ impl App {
     /// user-driven, one request per keypress at most; the shared `inflight`
     /// key also blocks a concurrent TTL refetch of the same feed).
     fn request_more_articles(&mut self) {
-        let (key, cmd) = match self.view_idx {
-            ui::VIEW_NEWS => {
+        let (key, cmd) = match self.view_id() {
+            ui::ViewId::News => {
                 let key = self.news_cache_key();
                 let Some(cursor) = self.news.get(&key).and_then(|b| b.next_cursor.clone()) else {
                     return;
@@ -506,7 +519,7 @@ impl App {
                     .then(|| self.selected_symbol().to_string());
                 (key, alphai::Cmd::FetchNews { symbol, cursor: Some(cursor) })
             }
-            ui::VIEW_INSIDER => {
+            ui::ViewId::Insider => {
                 let symbol = self.selected_symbol().to_string();
                 let key = alphai::insider_key(&symbol);
                 let Some(cursor) = self
@@ -538,8 +551,8 @@ impl App {
         if self.article_overlay.open {
             return self.handle_overlay_key(key);
         }
-        let news_view = matches!(self.view_idx, ui::VIEW_NEWS | ui::VIEW_INSIDER);
-        let chart_view = matches!(self.view_idx, ui::VIEW_CHART | ui::VIEW_SPLIT);
+        let news_view = ui::VIEWS[self.view_idx].navigates_articles();
+        let chart_view = ui::VIEWS[self.view_idx].has_chart_panel();
         match key.code {
             KeyCode::Char('q') | KeyCode::Esc => return true,
             KeyCode::Tab => self.switch_view((self.view_idx + 1) % ui::VIEWS.len()),
@@ -580,13 +593,13 @@ impl App {
                 self.card_scroll = 0;
             }
             // Card pane scrolling (the list keeps ↑↓/jk).
-            KeyCode::PageUp if self.view_idx == ui::VIEW_NEWS => {
+            KeyCode::PageUp if self.view_id() == ui::ViewId::News => {
                 self.card_scroll = self.card_scroll.saturating_sub(10)
             }
-            KeyCode::PageDown if self.view_idx == ui::VIEW_NEWS => {
+            KeyCode::PageDown if self.view_id() == ui::ViewId::News => {
                 self.card_scroll = self.card_scroll.saturating_add(10)
             }
-            KeyCode::Char('x') if self.view_idx == ui::VIEW_NEWS => {
+            KeyCode::Char('x') if self.view_id() == ui::ViewId::News => {
                 self.news_layout = self.news_layout.next();
                 self.card_scroll = 0;
             }
@@ -603,7 +616,9 @@ impl App {
             {
                 self.article_overlay = ArticleOverlay { open: true, scroll: 0 };
             }
-            KeyCode::Char('f') if matches!(self.view_idx, ui::VIEW_NEWS | ui::VIEW_SPLIT) => {
+            KeyCode::Char('f')
+                if ui::VIEWS[self.view_idx].feed_shown() == Some(FeedKind::News) =>
+            {
                 self.news_scope = self.news_scope.next();
                 self.news_selected = 0;
                 self.card_scroll = 0;
@@ -663,7 +678,7 @@ impl App {
     /// article page (settings can flip this to the original source); insider
     /// filings always open the original, which points at the SEC filing.
     fn article_url(&self, a: &Article) -> String {
-        let url = if self.view_idx == ui::VIEW_NEWS && !self.config.news_open_original() {
+        let url = if self.view_id() == ui::ViewId::News && !self.config.news_open_original() {
             a.alphai_url().unwrap_or_else(|| a.original.url.clone())
         } else {
             a.original.url.clone()
@@ -695,13 +710,13 @@ impl App {
     /// any error) so it refetches — this is also the retry path after 401/429.
     fn manual_refresh(&mut self) {
         self.refresh.notify_one();
-        match self.view_idx {
-            ui::VIEW_NEWS | ui::VIEW_SPLIT => {
+        match self.view_id() {
+            ui::ViewId::News | ui::ViewId::Split => {
                 let key = self.news_cache_key();
                 self.news.remove(&key);
                 self.alphai_errors.remove(&key);
             }
-            ui::VIEW_INSIDER => {
+            ui::ViewId::Insider => {
                 let symbol = self.selected_symbol().to_string();
                 self.insider.remove(&symbol);
                 self.alphai_errors.remove(&alphai::insider_key(&symbol));

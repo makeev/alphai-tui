@@ -277,8 +277,13 @@ over `&mut App`. The UI never blocks on the network.
 
 ### Adding a view
 
-Implement `ui::View` (a stateless `render` over `&mut App`) as a unit struct
-and add it to `ui::VIEWS`. Order in that array defines the `1`..`9` hotkeys.
+1. Implement `ui::View` as a unit struct in a new module under `src/ui/`: a
+   stateless `render` over `&mut App`, a new `ViewId` variant, a footer hint
+   line, and the capability methods (`feed_shown`, `navigates_articles`,
+   `has_chart_panel`) that opt into the shared key handling and the
+   demand-driven AlphaAI fetch. Views never fetch anything themselves.
+2. Add it to `ui::VIEWS`. Order in that array defines the tab cycle and the
+   `1`..`9` hotkeys; the header pills and the footer hints derive from it.
 
 ## Development
 

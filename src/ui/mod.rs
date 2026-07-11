@@ -12,18 +12,56 @@ use ratatui::style::{Color, Modifier, Style, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
-use crate::app::App;
+use crate::app::{App, FeedKind};
+
+/// Stable identity of a display mode, decoupled from its position in the
+/// tab order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ViewId {
+    Split,
+    News,
+    Table,
+    Chart,
+    Insider,
+}
 
 /// A display mode. Views are stateless renderers: all mutable state
-/// (selection, scroll) lives in `App`, so adding a view is just a unit
-/// struct + one entry in `VIEWS`.
+/// (selection, scroll) lives in `App`, so adding a view is a unit struct, a
+/// `ViewId` variant and one entry in `VIEWS`. The capability methods drive
+/// key handling and the demand-driven AlphaAI fetch centrally in `App`: a
+/// view declares what it shows and never fetches anything itself.
 pub trait View: Sync {
+    fn id(&self) -> ViewId;
     fn title(&self) -> &'static str;
+
+    /// Footer hint line while this view is active.
+    fn footer_hints(&self) -> &'static str {
+        " q quit · tab/1-9 view · ↑↓ select · t interval · r refresh · s settings"
+    }
+
+    /// The AlphaAI feed to keep fresh while this view is visible (drives
+    /// the demand-driven fetch, TTL refresh and the r retry). The
+    /// request-budget guards stay in `App`.
+    fn feed_shown(&self) -> Option<FeedKind> {
+        None
+    }
+
+    /// True when ↑↓/jk drive the article list (with j paging the feed at
+    /// the last row) instead of the watchlist selection.
+    fn navigates_articles(&self) -> bool {
+        false
+    }
+
+    /// True when the chart option keys (c, m, i) apply.
+    fn has_chart_panel(&self) -> bool {
+        false
+    }
+
     fn render(&self, f: &mut Frame, area: Rect, app: &mut App);
 }
 
-/// Register new display modes here. Order defines the 1..9 hotkeys and must
-/// match the VIEW_* constants below (app key handling branches on them).
+/// Register new display modes here. Order defines the tab cycle and the
+/// 1..9 hotkeys.
 pub static VIEWS: [&dyn View; 5] = [
     &split::SplitView,
     &news::NewsView,
@@ -32,10 +70,14 @@ pub static VIEWS: [&dyn View; 5] = [
     &insider::InsiderView,
 ];
 
-pub const VIEW_SPLIT: usize = 0;
-pub const VIEW_NEWS: usize = 1;
-pub const VIEW_CHART: usize = 3;
-pub const VIEW_INSIDER: usize = 4;
+/// Index of a view in `VIEWS`. Every `ViewId` is registered exactly once
+/// (the tests enforce it), so this is total.
+pub fn view_index(id: ViewId) -> usize {
+    VIEWS
+        .iter()
+        .position(|v| v.id() == id)
+        .unwrap_or_else(|| panic!("view {id:?} is not registered in VIEWS"))
+}
 
 pub fn draw(f: &mut Frame, app: &mut App) {
     let [header, body, footer] =
@@ -101,13 +143,7 @@ fn footer_line(app: &App) -> Paragraph<'static> {
     } else if app.article_overlay.open {
         " ↑↓/jk scroll · pgup/pgdn page · ⏎ open in browser · esc/v close"
     } else {
-        match app.view_idx {
-            VIEW_NEWS => " q quit · ↑↓ article · ←→ ticker · ⏎ open · v card · x layout · f scope · r refresh · s settings",
-            VIEW_INSIDER => " q quit · 1-9 view · ↑↓ article · ←→ ticker · ⏎ open · v card · r refresh · s settings",
-            VIEW_SPLIT => " q quit · tab/1-9 view · ↑↓ select · f scope · c/m/i chart · t interval · r refresh · s settings",
-            VIEW_CHART => " q quit · tab/1-9 view · ↑↓ select · c style · m sma · i rsi · t interval · r refresh · s settings",
-            _ => " q quit · tab/1-9 view · ↑↓ select · t interval · r refresh · s settings",
-        }
+        VIEWS[app.view_idx].footer_hints()
     };
     let mut spans = vec![Span::raw(hints).dim()];
     if let Some((symbol, error)) = app.errors.iter().next() {

@@ -6,14 +6,30 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Cell, Paragraph, Row, Table, Wrap};
 
 use crate::alphai::Article;
-use crate::app::{App, NewsScope};
-use crate::ui::View;
+use crate::app::{App, FeedKind, NewsScope};
+use crate::ui::{View, ViewId};
 
 pub struct NewsView;
 
 impl View for NewsView {
+    fn id(&self) -> ViewId {
+        ViewId::News
+    }
+
     fn title(&self) -> &'static str {
         "News"
+    }
+
+    fn footer_hints(&self) -> &'static str {
+        " q quit · ↑↓ article · ←→ ticker · ⏎ open · v card · x layout · f scope · r refresh · s settings"
+    }
+
+    fn feed_shown(&self) -> Option<FeedKind> {
+        Some(FeedKind::News)
+    }
+
+    fn navigates_articles(&self) -> bool {
+        true
     }
 
     fn render(&self, f: &mut Frame, area: Rect, app: &mut App) {
@@ -276,8 +292,8 @@ pub fn render_gate(f: &mut Frame, area: Rect, block: &Block, app: &App, key: &st
         );
         return true;
     }
-    let missing = match app.view_idx {
-        crate::ui::VIEW_INSIDER => !app.insider.contains_key(app.selected_symbol()),
+    let missing = match app.view_id() {
+        ViewId::Insider => !app.insider.contains_key(app.selected_symbol()),
         _ => !app.news.contains_key(key),
     };
     if missing {

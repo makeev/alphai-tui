@@ -5,11 +5,15 @@ use ratatui::widgets::{Block, Cell, Row, Table};
 
 use crate::app::App;
 use crate::domain::fmt_price;
-use crate::ui::View;
+use crate::ui::{View, ViewId};
 
 pub struct TableView;
 
 impl View for TableView {
+    fn id(&self) -> ViewId {
+        ViewId::Table
+    }
+
     fn title(&self) -> &'static str {
         "Table"
     }

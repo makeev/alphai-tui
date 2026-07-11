@@ -182,7 +182,7 @@ fn render_sized(app: &mut App, width: u16, height: u16) -> String {
 #[test]
 fn table_view_shows_quotes() {
     let mut app = fake_app();
-    app.view_idx = 2; // Table
+    app.view_idx = ui::view_index(ui::ViewId::Table);
     let screen = render(&mut app);
     assert!(screen.contains("Watchlist"), "screen:\n{screen}");
     assert!(screen.contains("AAPL"), "screen:\n{screen}");
@@ -195,7 +195,7 @@ fn table_view_shows_quotes() {
 #[test]
 fn chart_view_shows_selected_symbol() {
     let mut app = fake_app();
-    app.view_idx = ui::VIEW_CHART;
+    app.view_idx = ui::view_index(ui::ViewId::Chart);
     app.selected = 1;
     let screen = render(&mut app);
     assert!(screen.contains("MSFT"), "screen:\n{screen}");
@@ -206,7 +206,7 @@ fn chart_view_shows_selected_symbol() {
 #[test]
 fn chart_toggles_to_line_mode() {
     let mut app = fake_app();
-    app.view_idx = ui::VIEW_CHART;
+    app.view_idx = ui::view_index(ui::ViewId::Chart);
     press(&mut app, KeyCode::Char('c'));
     assert_eq!(app.chart_style, ChartStyle::Line);
     let screen = render(&mut app);
@@ -221,7 +221,7 @@ fn chart_toggles_to_line_mode() {
 #[test]
 fn sma_toggle_hides_legend() {
     let mut app = fake_app();
-    app.view_idx = ui::VIEW_CHART;
+    app.view_idx = ui::view_index(ui::ViewId::Chart);
     let screen = render(&mut app);
     assert!(screen.contains("SMA20"), "screen:\n{screen}");
     // The 30-candle fixture cannot produce an SMA100 line, so its legend
@@ -238,7 +238,7 @@ fn sma_toggle_hides_legend() {
 #[test]
 fn sma_slow_appears_with_warmup_history() {
     let mut app = fake_app();
-    app.view_idx = ui::VIEW_CHART;
+    app.view_idx = ui::view_index(ui::ViewId::Chart);
     let candles: Vec<Candle> = (0..600)
         .map(|i| {
             let close = 200.0 + (i % 40) as f64 * 0.5;
@@ -263,7 +263,7 @@ fn sma_slow_appears_with_warmup_history() {
 #[test]
 fn rsi_toggle_hides_panel() {
     let mut app = fake_app();
-    app.view_idx = ui::VIEW_CHART;
+    app.view_idx = ui::view_index(ui::ViewId::Chart);
     let screen = render(&mut app);
     assert!(screen.contains("RSI(14)"), "screen:\n{screen}");
     press(&mut app, KeyCode::Char('i'));
@@ -274,7 +274,7 @@ fn rsi_toggle_hides_panel() {
 #[test]
 fn rsi_panel_hidden_on_short_terminal() {
     let mut app = fake_app();
-    app.view_idx = ui::VIEW_CHART;
+    app.view_idx = ui::view_index(ui::ViewId::Chart);
     // Body height 16 is below the RSI threshold: price chart keeps it all.
     let screen = render_sized(&mut app, 100, 18);
     assert!(!screen.contains("RSI(14)"), "screen:\n{screen}");
@@ -284,7 +284,7 @@ fn rsi_panel_hidden_on_short_terminal() {
 #[test]
 fn range_keys_cycle_presets_and_update_header() {
     let mut app = fake_app();
-    app.view_idx = ui::VIEW_CHART;
+    app.view_idx = ui::view_index(ui::ViewId::Chart);
     press(&mut app, KeyCode::Char('t'));
     assert_eq!((app.range, app.interval), (Range::D5, Interval::M15));
     let screen = render(&mut app);
@@ -304,7 +304,7 @@ fn range_keys_cycle_presets_and_update_header() {
 #[test]
 fn range_switch_keeps_news_bundle() {
     let mut app = fake_app();
-    app.view_idx = ui::VIEW_NEWS;
+    app.view_idx = ui::view_index(ui::ViewId::News);
     app.news.insert(
         "AAPL".into(),
         NewsBundle::new(
@@ -320,7 +320,7 @@ fn range_switch_keeps_news_bundle() {
 #[test]
 fn split_view_combines_table_chart_and_news() {
     let mut app = fake_app();
-    app.view_idx = ui::VIEW_SPLIT;
+    app.view_idx = ui::view_index(ui::ViewId::Split);
     app.news.insert(
         "AAPL".into(),
         NewsBundle::new(
@@ -343,7 +343,7 @@ fn split_view_combines_table_chart_and_news() {
 fn split_view_news_panel_without_key_shows_one_line_hint() {
     let mut app = fake_app();
     app.alphai_enabled = false;
-    app.view_idx = ui::VIEW_SPLIT;
+    app.view_idx = ui::view_index(ui::ViewId::Split);
     let screen = render(&mut app);
     assert!(screen.contains("alphai.io"), "screen:\n{screen}");
     assert!(screen.contains("press s"), "screen:\n{screen}");
@@ -352,7 +352,7 @@ fn split_view_news_panel_without_key_shows_one_line_hint() {
 #[test]
 fn split_view_drops_news_panel_on_tiny_terminal() {
     let mut app = fake_app();
-    app.view_idx = ui::VIEW_SPLIT;
+    app.view_idx = ui::view_index(ui::ViewId::Split);
     let mut terminal = Terminal::new(TestBackend::new(100, 12)).unwrap();
     terminal.draw(|f| ui::draw(f, &mut app)).unwrap();
     let buffer = terminal.backend().buffer().clone();
@@ -365,6 +365,36 @@ fn split_view_drops_news_panel_on_tiny_terminal() {
     }
     assert!(screen.contains("Watchlist"), "screen:\n{screen}");
     assert!(!screen.contains("News ·"), "news strip should be hidden:\n{screen}");
+}
+
+/// Every view registers a distinct ViewId (a duplicate would make
+/// `view_index` land on the wrong tab) and carries a footer hint line.
+#[test]
+fn view_ids_are_unique_and_indexable() {
+    for (i, view) in ui::VIEWS.iter().enumerate() {
+        assert_eq!(ui::view_index(view.id()), i, "duplicate ViewId {:?}", view.id());
+        assert!(!view.footer_hints().is_empty(), "{:?}: empty footer", view.id());
+    }
+}
+
+/// Split embeds the news strip, but j/k must keep driving the watchlist
+/// selection and must never page the feed (budget guard).
+#[test]
+fn split_j_moves_watchlist_not_articles() {
+    let (mut app, mut cmds) = empty_app_with_cmds(vec!["AAPL".into(), "MSFT".into()]);
+    app.view_idx = ui::view_index(ui::ViewId::Split);
+    app.news.insert(
+        "AAPL".into(),
+        NewsBundle::new(
+            vec![article("Apple beats expectations", "AAPL", 9, "positive")],
+            None,
+            Some("cur1".into()),
+        ),
+    );
+    press(&mut app, KeyCode::Char('j'));
+    assert_eq!(app.selected, 1, "j did not move the watchlist selection");
+    assert_eq!(app.news_selected, 0, "j leaked into the article list");
+    assert!(cmds.try_recv().is_err(), "split view paged the feed");
 }
 
 #[test]
@@ -381,7 +411,7 @@ fn missing_data_renders_placeholders() {
 #[test]
 fn news_view_lists_articles_and_sentiment() {
     let mut app = fake_app();
-    app.view_idx = ui::VIEW_NEWS;
+    app.view_idx = ui::view_index(ui::ViewId::News);
     app.news.insert(
         "AAPL".into(),
         NewsBundle::new(
@@ -418,7 +448,7 @@ fn news_view_lists_articles_and_sentiment() {
 fn news_view_without_key_shows_hint() {
     let mut app = fake_app();
     app.alphai_enabled = false;
-    app.view_idx = ui::VIEW_NEWS;
+    app.view_idx = ui::view_index(ui::ViewId::News);
     let screen = render(&mut app);
     assert!(screen.contains("alphai.io"), "screen:\n{screen}");
     assert!(screen.contains("free API key"), "screen:\n{screen}");
@@ -427,7 +457,7 @@ fn news_view_without_key_shows_hint() {
 #[test]
 fn news_view_shows_error_state() {
     let mut app = fake_app();
-    app.view_idx = ui::VIEW_NEWS;
+    app.view_idx = ui::view_index(ui::ViewId::News);
     app.alphai_errors
         .insert("AAPL".into(), "invalid AlphaAI API key".into());
     let screen = render(&mut app);
@@ -438,7 +468,7 @@ fn news_view_shows_error_state() {
 #[test]
 fn insider_view_shows_summary_and_filings() {
     let mut app = fake_app();
-    app.view_idx = ui::VIEW_INSIDER;
+    app.view_idx = ui::view_index(ui::ViewId::Insider);
     let summary: InsiderSummary = serde_json::from_str(
         r#"{
           "ticker": "AAPL", "days": 30, "total_transactions": 14,
@@ -472,7 +502,7 @@ fn insider_view_shows_summary_and_filings() {
 #[test]
 fn news_scope_cycles_and_relabels() {
     let mut app = fake_app();
-    app.view_idx = ui::VIEW_NEWS;
+    app.view_idx = ui::view_index(ui::ViewId::News);
     assert_eq!(app.news_cache_key(), "AAPL");
     press(&mut app, KeyCode::Char('f'));
     assert_eq!(app.news_scope, NewsScope::Market);
@@ -489,7 +519,7 @@ fn news_scope_cycles_and_relabels() {
 #[test]
 fn market_scope_shows_tickers_and_sources_count() {
     let mut app = fake_app();
-    app.view_idx = ui::VIEW_NEWS;
+    app.view_idx = ui::view_index(ui::ViewId::News);
     app.news_scope = NewsScope::Market;
     app.news.insert(
         "*".into(),
@@ -508,7 +538,7 @@ fn market_scope_shows_tickers_and_sources_count() {
 #[test]
 fn trending_view_lists_articles() {
     let mut app = fake_app();
-    app.view_idx = ui::VIEW_NEWS;
+    app.view_idx = ui::view_index(ui::ViewId::News);
     app.news_scope = NewsScope::Trending;
     app.news.insert(
         TRENDING_KEY.into(),
@@ -528,7 +558,7 @@ fn trending_view_lists_articles() {
 #[test]
 fn article_overlay_opens_scrolls_and_closes() {
     let mut app = fake_app();
-    app.view_idx = ui::VIEW_NEWS;
+    app.view_idx = ui::view_index(ui::ViewId::News);
     app.news.insert(
         "AAPL".into(),
         NewsBundle::new(
@@ -557,7 +587,7 @@ fn article_overlay_opens_scrolls_and_closes() {
 #[test]
 fn overlay_steals_nav_keys() {
     let mut app = fake_app();
-    app.view_idx = ui::VIEW_NEWS;
+    app.view_idx = ui::view_index(ui::ViewId::News);
     app.news.insert(
         "AAPL".into(),
         NewsBundle::new(
@@ -579,7 +609,7 @@ fn overlay_steals_nav_keys() {
 #[test]
 fn overlay_works_from_insider_view() {
     let mut app = fake_app();
-    app.view_idx = ui::VIEW_INSIDER;
+    app.view_idx = ui::view_index(ui::ViewId::Insider);
     app.insider.insert(
         "AAPL".into(),
         InsiderBundle::new(
@@ -598,7 +628,7 @@ fn overlay_works_from_insider_view() {
 #[test]
 fn overlay_noop_when_no_articles() {
     let mut app = fake_app();
-    app.view_idx = ui::VIEW_NEWS;
+    app.view_idx = ui::view_index(ui::ViewId::News);
     press(&mut app, KeyCode::Char('v'));
     assert!(!app.article_overlay.open, "overlay opened with nothing to show");
 }
@@ -606,7 +636,7 @@ fn overlay_noop_when_no_articles() {
 #[test]
 fn news_card_pane_shown_by_default() {
     let mut app = fake_app();
-    app.view_idx = ui::VIEW_NEWS;
+    app.view_idx = ui::view_index(ui::ViewId::News);
     app.news.insert(
         "AAPL".into(),
         NewsBundle::new(
@@ -625,7 +655,7 @@ fn news_card_pane_shown_by_default() {
 #[test]
 fn x_cycles_news_layout() {
     let mut app = fake_app();
-    app.view_idx = ui::VIEW_NEWS;
+    app.view_idx = ui::view_index(ui::ViewId::News);
     app.news.insert(
         "AAPL".into(),
         NewsBundle::new(
@@ -646,7 +676,7 @@ fn x_cycles_news_layout() {
 #[test]
 fn j_at_last_row_requests_next_page() {
     let (mut app, mut cmds) = empty_app_with_cmds(vec!["AAPL".into()]);
-    app.view_idx = ui::VIEW_NEWS;
+    app.view_idx = ui::view_index(ui::ViewId::News);
     app.news.insert(
         "AAPL".into(),
         NewsBundle::new(
@@ -677,7 +707,7 @@ fn j_at_last_row_requests_next_page() {
 #[test]
 fn insider_j_at_last_row_requests_next_page() {
     let (mut app, mut cmds) = empty_app_with_cmds(vec!["AAPL".into()]);
-    app.view_idx = ui::VIEW_INSIDER;
+    app.view_idx = ui::view_index(ui::ViewId::Insider);
     app.insider.insert(
         "AAPL".into(),
         InsiderBundle::new(
@@ -725,7 +755,7 @@ fn page_append_extends_list_and_dedupes() {
 #[test]
 fn archive_gate_shows_upsell_and_stops_paging() {
     let (mut app, mut cmds) = empty_app_with_cmds(vec!["AAPL".into()]);
-    app.view_idx = ui::VIEW_NEWS;
+    app.view_idx = ui::view_index(ui::ViewId::News);
     app.news.insert(
         "AAPL".into(),
         NewsBundle::new(
@@ -753,7 +783,7 @@ fn archive_gate_shows_upsell_and_stops_paging() {
 #[test]
 fn ttl_refetch_waits_for_top_row() {
     let (mut app, mut cmds) = empty_app_with_cmds(vec!["AAPL".into()]);
-    app.view_idx = ui::VIEW_NEWS;
+    app.view_idx = ui::view_index(ui::ViewId::News);
     app.news.insert(
         "AAPL".into(),
         NewsBundle::new(

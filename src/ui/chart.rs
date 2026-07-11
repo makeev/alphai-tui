@@ -9,13 +9,25 @@ use ratatui::widgets::{Axis, Block, Chart, Dataset, GraphType, Paragraph};
 use crate::app::{App, ChartStyle};
 use crate::domain::{Candle, Quote, Range, TickerData, fmt_price};
 use crate::indicators::{self, SMA_FAST, SMA_SLOW};
-use crate::ui::View;
+use crate::ui::{View, ViewId};
 
 pub struct ChartView;
 
 impl View for ChartView {
+    fn id(&self) -> ViewId {
+        ViewId::Chart
+    }
+
     fn title(&self) -> &'static str {
         "Chart"
+    }
+
+    fn footer_hints(&self) -> &'static str {
+        " q quit · tab/1-9 view · ↑↓ select · c style · m sma · i rsi · t interval · r refresh · s settings"
+    }
+
+    fn has_chart_panel(&self) -> bool {
+        true
     }
 
     fn render(&self, f: &mut Frame, area: Rect, app: &mut App) {

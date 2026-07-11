@@ -6,15 +6,31 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Cell, Paragraph, Row, Table};
 
 use crate::alphai::{Article, InsiderSummary, fmt_usd, insider_key};
-use crate::app::App;
-use crate::ui::View;
+use crate::app::{App, FeedKind};
+use crate::ui::{View, ViewId};
 use crate::ui::news::{feed_bottom_hint, render_detail, render_gate, score_cell, sentiment_cell};
 
 pub struct InsiderView;
 
 impl View for InsiderView {
+    fn id(&self) -> ViewId {
+        ViewId::Insider
+    }
+
     fn title(&self) -> &'static str {
         "Insider"
+    }
+
+    fn footer_hints(&self) -> &'static str {
+        " q quit · 1-9 view · ↑↓ article · ←→ ticker · ⏎ open · v card · r refresh · s settings"
+    }
+
+    fn feed_shown(&self) -> Option<FeedKind> {
+        Some(FeedKind::Insider)
+    }
+
+    fn navigates_articles(&self) -> bool {
+        true
     }
 
     fn render(&self, f: &mut Frame, area: Rect, app: &mut App) {
