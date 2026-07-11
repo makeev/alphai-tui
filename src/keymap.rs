@@ -31,6 +31,8 @@ pub enum Action {
     Card,
     CycleScope,
     CycleLayout,
+    ScoreUp,
+    ScoreDown,
     ChartStyle,
     ToggleSma,
     ToggleRsi,
@@ -40,7 +42,7 @@ pub enum Action {
 
 /// Every action with its snake_case config name, the single source of truth
 /// for the future `[keybindings]` parsing and for the coverage test.
-pub const ACTIONS: [(Action, &str); 20] = [
+pub const ACTIONS: [(Action, &str); 22] = [
     (Action::Quit, "quit"),
     (Action::NextView, "next_view"),
     (Action::PrevView, "prev_view"),
@@ -56,6 +58,8 @@ pub const ACTIONS: [(Action, &str); 20] = [
     (Action::Card, "card"),
     (Action::CycleScope, "cycle_scope"),
     (Action::CycleLayout, "cycle_layout"),
+    (Action::ScoreUp, "score_up"),
+    (Action::ScoreDown, "score_down"),
     (Action::ChartStyle, "chart_style"),
     (Action::ToggleSma, "toggle_sma"),
     (Action::ToggleRsi, "toggle_rsi"),
@@ -112,6 +116,9 @@ fn default_keys(action: Action) -> Vec<KeyCombo> {
         Action::Card => vec![ch('v')],
         Action::CycleScope => vec![ch('f')],
         Action::CycleLayout => vec![ch('x')],
+        // '=' is unshifted '+' on most layouts; both raise the filter.
+        Action::ScoreUp => vec![ch('+'), ch('=')],
+        Action::ScoreDown => vec![ch('-')],
         Action::ChartStyle => vec![ch('c')],
         Action::ToggleSma => vec![ch('m')],
         Action::ToggleRsi => vec![ch('i')],
@@ -226,6 +233,18 @@ mod tests {
         // Ctrl-modified chars are distinct from plain ones.
         let ctrl_r = KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL);
         assert_eq!(map.resolve(&ctrl_r), None);
+    }
+
+    #[test]
+    fn score_keys_resolve_shifted_and_unshifted() {
+        let map = Keymap::default();
+        // '+' usually arrives shifted; '=' is its unshifted position.
+        let shifted_plus = KeyEvent::new(KeyCode::Char('+'), KeyModifiers::SHIFT);
+        assert_eq!(map.resolve(&shifted_plus), Some(Action::ScoreUp));
+        assert_eq!(map.resolve(&KeyEvent::from(KeyCode::Char('='))), Some(Action::ScoreUp));
+        assert_eq!(map.resolve(&KeyEvent::from(KeyCode::Char('-'))), Some(Action::ScoreDown));
+        // The footer shows the two filter keys as one glyph pair.
+        assert_eq!(map.labels(&[Action::ScoreUp, Action::ScoreDown]), "+-");
     }
 
     #[test]

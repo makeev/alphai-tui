@@ -4,6 +4,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Clear, Paragraph, Wrap};
 
 use crate::app::{App, SettingsRow, settings_rows};
+use crate::config::{ALPHAI_KEY_FIELD, KeyField};
 use crate::source::registry;
 use crate::ui::centered;
 
@@ -55,11 +56,10 @@ pub fn render(f: &mut Frame, app: &App) {
                 format!("‹ {} ›", s.source_choice),
                 source_hint(s.source_choice.as_str()),
             ),
-            SettingsRow::Key(field) => (
-                field.label,
-                field_value(s, i, s.key_values.get(field.config_name).map_or("", String::as_str)),
-                env_hint(field.env_var),
-            ),
+            SettingsRow::Key(field) => {
+                let stored = s.key_values.get(field.config_name).map_or("", String::as_str);
+                (field.label, field_value(s, i, stored), key_hint(field, stored))
+            }
             SettingsRow::NewsOpen => (
                 "News opens",
                 format!("‹ {} ›", s.news_open_choice),
@@ -149,6 +149,19 @@ fn env_hint(var: &str) -> String {
     } else {
         String::new()
     }
+}
+
+/// Hint beside a credential row: the env override wins; a missing AlphaAI
+/// key points at where to get one.
+fn key_hint(field: &KeyField, stored: &str) -> String {
+    let env = env_hint(field.env_var);
+    if !env.is_empty() {
+        return env;
+    }
+    if field.config_name == ALPHAI_KEY_FIELD.config_name && stored.trim().is_empty() {
+        return "get free on alphai.io/developers".into();
+    }
+    String::new()
 }
 
 fn tilde(path: &str) -> String {

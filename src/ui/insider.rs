@@ -10,7 +10,9 @@ use crate::app::{App, FeedKind};
 use crate::keymap::Action;
 use crate::theme::Theme;
 use crate::ui::{Hint, View, ViewId};
-use crate::ui::news::{feed_bottom_hint, render_detail, render_gate, score_cell, sentiment_cell};
+use crate::ui::news::{
+    feed_bottom_hint, is_fresh, render_detail, render_gate, score_cell, sentiment_cell,
+};
 
 pub struct InsiderView;
 
@@ -31,6 +33,7 @@ impl View for InsiderView {
             Hint::act(&[Action::Left, Action::Right], "ticker"),
             Hint::act(&[Action::Open], "open"),
             Hint::act(&[Action::Card], "card"),
+            Hint::act(&[Action::ScoreUp, Action::ScoreDown], "size"),
             Hint::act(&[Action::Refresh], "refresh"),
             Hint::act(&[Action::Settings], "settings"),
         ];
@@ -48,7 +51,10 @@ impl View for InsiderView {
     fn render(&self, f: &mut Frame, area: Rect, app: &mut App) {
         let symbol = app.selected_symbol().to_string();
         let key = insider_key(&symbol);
-        let mut block = Block::bordered().title(format!(" Insider · {symbol} (SEC Form 4) "));
+        let mut block = Block::bordered().title(format!(
+            " Insider · {symbol} (SEC Form 4) · score {}+ ",
+            app.insider_min_score
+        ));
 
         if render_gate(f, area, &block, app, &key) {
             return;
@@ -77,7 +83,14 @@ impl View for InsiderView {
         f.render_widget(summary_lines(bundle.insider_summary(), &theme), head);
 
         if bundle.articles.is_empty() {
-            let msg = format!("no Form 4 activity for {symbol} in the feed");
+            let msg = if app.insider_min_score > 1 {
+                format!(
+                    "no Form 4 activity for {symbol} with score {}+ (press - to lower the filter)",
+                    app.insider_min_score
+                )
+            } else {
+                format!("no Form 4 activity for {symbol} in the feed")
+            };
             f.render_widget(Paragraph::new(Line::from(msg).dim()).block(block), list_area);
             return;
         }
@@ -93,6 +106,8 @@ impl View for InsiderView {
             Constraint::Length(2),
             Constraint::Length(2),
             Constraint::Length(1),
+            Constraint::Length(1), // 10b5-1 plan marker
+            Constraint::Length(8), // trade value
             Constraint::Min(20),
         ];
         let table = Table::new(rows, widths)
@@ -108,29 +123,61 @@ impl View for InsiderView {
 }
 
 /// One Form 4 filing as a row: age, score, buy/sell glyph, direct/indirect
-/// marker, title colored by trade side when known. The glyph reports the
-/// trade direction, so the deterministic title template wins over the AI
-/// sentiment call (which can rate a routine sale as neutral).
+/// marker, a 10b5-1 plan flag, the trade value, title colored by trade side
+/// when known.
 fn filing_row(a: &Article, symbol: &str, now: chrono::DateTime<Utc>, theme: &Theme) -> Row<'static> {
-    let side = side_from_title(&a.original.title)
-        .or_else(|| a.sentiment_for(symbol).map(str::to_string));
+    let side = filing_side(a, symbol);
     let title_style = match side.as_deref() {
         Some("positive") => Style::new().fg(theme.pos),
         Some("negative") => Style::new().fg(theme.neg),
         _ => Style::new(),
     };
+    // Same freshness accent as the news rows: a just-filed Form 4 stands out.
+    let age = if is_fresh(a, now) {
+        Cell::from(a.age(now)).style(Style::new().fg(theme.accent))
+    } else {
+        Cell::from(a.age(now)).dim()
+    };
+    let plan = match &a.insider {
+        Some(t) if t.is_10b5_1 => Cell::from("p").dim(),
+        _ => Cell::from(" "),
+    };
+    let value = a
+        .insider
+        .as_ref()
+        .and_then(|t| t.total_value_usd.as_deref())
+        .map(|v| Cell::from(format!("{:>8}", fmt_usd(v))).dim())
+        .unwrap_or_else(|| Cell::from(" "));
     Row::new(vec![
-        Cell::from(a.age(now)).dim(),
+        age,
         score_cell(a.score(), theme),
         sentiment_cell(side.as_deref(), theme),
         ownership_cell(a.original.ownership_form.as_deref()),
+        plan,
+        value,
         Cell::from(a.original.title.clone()).style(title_style),
     ])
 }
 
-/// Trade side from the deterministic Form 4 row template, for rows whose
-/// enrichment carries no per-ticker sentiment. Tied to the current wording;
-/// if the templates change it degrades to an uncolored row, nothing worse.
+/// Trade side of a filing row. The API's structured `insider.side` is
+/// authoritative when present: "buy"/"sell" color the row, "other" (grants,
+/// code D sales back to the issuer, ...) deliberately stays neutral rather
+/// than falling back to keyword guessing. Legacy rows without the block keep
+/// the old chain: title template first, then the AI sentiment call (which
+/// can rate a routine sale as neutral).
+fn filing_side(a: &Article, symbol: &str) -> Option<String> {
+    match a.insider.as_ref().and_then(|t| t.side.as_deref()) {
+        Some("buy") => Some("positive".to_string()),
+        Some("sell") => Some("negative".to_string()),
+        Some(_) => Some("neutral".to_string()),
+        None => side_from_title(&a.original.title)
+            .or_else(|| a.sentiment_for(symbol).map(str::to_string)),
+    }
+}
+
+/// Trade side from the deterministic Form 4 row template, for legacy rows
+/// without the structured block. Tied to the current wording; if the
+/// templates change it degrades to an uncolored row, nothing worse.
 fn side_from_title(title: &str) -> Option<String> {
     let t = title.to_lowercase();
     if t.contains("sold") || t.contains("sale") {

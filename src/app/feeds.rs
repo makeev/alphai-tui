@@ -35,6 +35,10 @@ pub struct FeedBundle {
     pub page_error: Option<String>,
     /// Paging hit the plan's archive horizon: stop offering more pages.
     pub gated: bool,
+    /// Score filter the head fetch carried; None for feeds without one
+    /// (trending, insider). A mismatch with the live `news_min_score`
+    /// marks the bundle stale.
+    pub min_score: Option<u8>,
     pub fetched: Instant,
 }
 
@@ -50,6 +54,7 @@ impl FeedBundle {
             next_cursor,
             page_error: None,
             gated: false,
+            min_score: None,
             fetched: Instant::now(),
         }
     }
@@ -106,13 +111,19 @@ impl App {
                 NewsScope::Ticker => alphai::Cmd::FetchNews {
                     symbol: Some(self.selected_symbol().to_string()),
                     cursor: None,
+                    min_relevance: Some(self.news_min_score),
                 },
-                NewsScope::Market => alphai::Cmd::FetchNews { symbol: None, cursor: None },
+                NewsScope::Market => alphai::Cmd::FetchNews {
+                    symbol: None,
+                    cursor: None,
+                    min_relevance: Some(self.news_min_score),
+                },
                 NewsScope::Trending => alphai::Cmd::FetchTrending,
             },
             FeedKind::Insider => alphai::Cmd::FetchInsider {
                 symbol: self.selected_symbol().to_string(),
                 cursor: None,
+                min_relevance: Some(self.insider_min_score),
             },
         }
     }
@@ -124,10 +135,12 @@ impl App {
                 symbol: (self.news_scope == NewsScope::Ticker)
                     .then(|| self.selected_symbol().to_string()),
                 cursor: Some(cursor),
+                min_relevance: Some(self.news_min_score),
             },
             FeedKind::Insider => alphai::Cmd::FetchInsider {
                 symbol: self.selected_symbol().to_string(),
                 cursor: Some(cursor),
+                min_relevance: Some(self.insider_min_score),
             },
         }
     }
@@ -144,19 +157,22 @@ impl App {
 
     pub(crate) fn apply_alphai(&mut self, event: alphai::Event) {
         match event {
-            alphai::Event::Feed { key, articles, side, next_cursor, append } => {
+            alphai::Event::Feed { key, articles, side, next_cursor, append, min_relevance } => {
                 self.inflight.remove(&key);
                 self.alphai_errors.remove(&key);
                 match self.feeds.get_mut(&key) {
-                    // A page extends the shown feed (the side payload stays
-                    // from the head fetch); a fresh fetch replaces the bundle.
+                    // A page extends the shown feed (the side payload and the
+                    // recorded score filter stay from the head fetch); a
+                    // fresh fetch replaces the bundle.
                     Some(b) if append => {
                         b.next_cursor = next_cursor;
                         b.page_error = None;
                         append_page(&mut b.articles, articles);
                     }
                     _ => {
-                        self.feeds.insert(key, FeedBundle::new(articles, side, next_cursor));
+                        let mut b = FeedBundle::new(articles, side, next_cursor);
+                        b.min_score = min_relevance;
+                        self.feeds.insert(key, b);
                     }
                 }
             }
@@ -193,13 +209,27 @@ impl App {
         // The view declares which feed it shows (`View::feed_shown`); the
         // guards below are the single copy for every feed kind.
         let Some((key, kind)) = self.active_feed() else { return };
+        // The score filter a head fetch of this feed would carry right now
+        // (trending is the exception: server-curated 8+, no filter).
+        let wanted = match kind {
+            FeedKind::News if self.news_scope != NewsScope::Trending => {
+                Some(self.news_min_score)
+            }
+            FeedKind::News => None,
+            FeedKind::Insider => Some(self.insider_min_score),
+        };
         // A TTL refetch replaces the whole bundle, dropping loaded pages, so
         // it waits until the reader is back at the top row (missing bundles
         // fetch regardless; the Split strip has no selection and stays at 0).
+        // A changed score filter refetches immediately: page 1 of the new
+        // filter is exactly what the user asked for.
         let at_top = self.news_selected == 0;
         let stale = match self.feeds.get(&key) {
             None => true,
-            Some(b) => at_top && b.fetched.elapsed() > alphai::CACHE_TTL,
+            Some(b) => match (b.min_score, wanted) {
+                (Some(have), Some(want)) if have != want => true,
+                _ => at_top && b.fetched.elapsed() > alphai::CACHE_TTL,
+            },
         };
         if stale && !self.inflight.contains(&key) && !self.alphai_errors.contains_key(&key) {
             let cmd = self.head_cmd(kind);
@@ -227,6 +257,25 @@ impl App {
         let cmd = self.page_cmd(kind, cursor);
         self.inflight.insert(key);
         let _ = self.alphai_tx.send(cmd);
+    }
+
+    /// +/-: move the visible feed's score filter one step (clamped to 1..=10);
+    /// news and insider each keep their own value. No fetch happens here: the
+    /// visible bundle's recorded `min_score` stops matching and
+    /// `ensure_alphai_data` refetches it, at most one request per press
+    /// (the shared inflight key absorbs faster presses).
+    pub(super) fn adjust_min_score(&mut self, delta: i8) {
+        let Some((_, kind)) = self.active_feed() else { return };
+        let field = match kind {
+            FeedKind::News => &mut self.news_min_score,
+            FeedKind::Insider => &mut self.insider_min_score,
+        };
+        let new = (*field as i8).saturating_add(delta).clamp(1, 10) as u8;
+        if new != *field {
+            *field = new;
+            self.news_selected = 0;
+            self.card_scroll = 0;
+        }
     }
 
     /// `r`: immediate price cycle, plus drop the visible AlphaAI bundle (and

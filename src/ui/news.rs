@@ -5,11 +5,15 @@ use ratatui::style::{Modifier, Style, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Cell, Paragraph, Row, Table, Wrap};
 
-use crate::alphai::Article;
+use crate::alphai::{Article, fmt_usd};
 use crate::app::{App, FeedKind, NewsScope};
 use crate::keymap::Action;
 use crate::theme::Theme;
 use crate::ui::{Hint, View, ViewId};
+
+/// Below this width the Side layout drops the card pane so the list keeps
+/// readable columns; v still opens the fullscreen card.
+const SIDE_CARD_MIN_WIDTH: u16 = 90;
 
 pub struct NewsView;
 
@@ -31,6 +35,7 @@ impl View for NewsView {
             Hint::act(&[Action::Card], "card"),
             Hint::act(&[Action::CycleLayout], "layout"),
             Hint::act(&[Action::CycleScope], "scope"),
+            Hint::act(&[Action::ScoreUp, Action::ScoreDown], "score"),
             Hint::act(&[Action::Refresh], "refresh"),
             Hint::act(&[Action::Settings], "settings"),
         ];
@@ -50,7 +55,7 @@ impl View for NewsView {
         let scope = app.news_scope;
         let symbol = app.selected_symbol().to_string();
         let label = scope.label(&symbol).to_string();
-        let mut block = Block::bordered().title(format!(" News · {label} "));
+        let mut block = Block::bordered().title(news_title(scope, &label, app.news_min_score));
 
         if render_gate(f, area, &block, app, &key) {
             return;
@@ -63,24 +68,29 @@ impl View for NewsView {
         f.render_widget(head_line(app, bundle.sentiment()), head);
 
         if bundle.articles.is_empty() {
-            let msg = empty_feed_message(scope, &label);
+            let msg = empty_feed_message(scope, &label, app.news_min_score);
             f.render_widget(Paragraph::new(Line::from(msg).dim()).block(block), main);
             return;
         }
 
-        // List and card side by side (x flips to list over card). The side
-        // list drops the novelty column; the card carries it in its meta.
+        // List and card side by side (x flips to list over card); a terminal
+        // too narrow for two readable panes drops the card, v still opens the
+        // fullscreen one. The side list drops the novelty column; the card
+        // carries it in its meta.
         let (list_area, card_area, full) = match app.news_layout {
+            crate::app::NewsLayout::Side if main.width < SIDE_CARD_MIN_WIDTH => {
+                (main, None, false)
+            }
             crate::app::NewsLayout::Side => {
                 let [l, r] =
                     Layout::horizontal([Constraint::Percentage(55), Constraint::Percentage(45)])
                         .areas(main);
-                (l, r, false)
+                (l, Some(r), false)
             }
             crate::app::NewsLayout::Stacked => {
                 let [t, b] =
                     Layout::vertical([Constraint::Min(3), Constraint::Percentage(45)]).areas(main);
-                (t, b, true)
+                (t, Some(b), true)
             }
         };
 
@@ -112,14 +122,16 @@ impl View for NewsView {
         app.news_table_state.select(Some(app.news_selected));
         f.render_stateful_widget(table, list_area, &mut app.news_table_state);
 
-        crate::ui::article::render_pane(
-            f,
-            card_area,
-            bundle.articles.get(app.news_selected),
-            &symbol,
-            &mut app.card_scroll,
-            &theme,
-        );
+        if let Some(card_area) = card_area {
+            crate::ui::article::render_pane(
+                f,
+                card_area,
+                bundle.articles.get(app.news_selected),
+                &symbol,
+                &mut app.card_scroll,
+                &theme,
+            );
+        }
     }
 }
 
@@ -158,10 +170,22 @@ pub(crate) fn feed_bottom_hint(
     })
 }
 
-fn empty_feed_message(scope: NewsScope, label: &str) -> String {
+/// Block title of a news list: the scope label plus the active score filter
+/// (trending is server-curated, there is no filter to show).
+fn news_title(scope: NewsScope, label: &str, min_score: u8) -> String {
+    match scope {
+        NewsScope::Trending => format!(" News · {label} "),
+        _ => format!(" News · {label} · score {min_score}+ "),
+    }
+}
+
+fn empty_feed_message(scope: NewsScope, label: &str, min_score: u8) -> String {
     match scope {
         NewsScope::Trending => "no trending stories right now".to_string(),
-        _ => format!("no recent news for {label} (relevance score 4 or higher)"),
+        _ if min_score > 1 => {
+            format!("no recent news for {label} with score {min_score}+ (press - to lower the filter)")
+        }
+        _ => format!("no recent news for {label}"),
     }
 }
 
@@ -172,7 +196,7 @@ pub fn render_panel(f: &mut Frame, area: Rect, app: &mut App) {
     let key = app.news_cache_key();
     let scope = app.news_scope;
     let label = scope.label(app.selected_symbol()).to_string();
-    let block = Block::bordered().title(format!(" News · {label} "));
+    let block = Block::bordered().title(news_title(scope, &label, app.news_min_score));
 
     if !app.alphai_enabled {
         let line =
@@ -186,7 +210,7 @@ pub fn render_panel(f: &mut Frame, area: Rect, app: &mut App) {
     }
     let bundle = &app.feeds[&key];
     if bundle.articles.is_empty() {
-        let msg = empty_feed_message(scope, &label);
+        let msg = empty_feed_message(scope, &label, app.news_min_score);
         f.render_widget(Paragraph::new(Line::from(msg).dim()).block(block), area);
         return;
     }
@@ -214,7 +238,13 @@ fn article_row(
     full: bool,
     theme: &Theme,
 ) -> Row<'static> {
-    let mut cells = vec![Cell::from(a.age(now)).dim(), score_cell(a.score(), theme)];
+    // Breaking rows stand out: a fresh age renders in the accent color.
+    let age = if is_fresh(a, now) {
+        Cell::from(a.age(now)).style(Style::new().fg(theme.accent))
+    } else {
+        Cell::from(a.age(now)).dim()
+    };
+    let mut cells = vec![age, score_cell(a.score(), theme)];
     if full {
         cells.push(novelty_cell(a.novelty()));
     }
@@ -383,6 +413,17 @@ pub fn meta_line(a: &Article, ticker: &str) -> Vec<String> {
     if let Some(act) = a.trading_value().and_then(|t| t.actionability_score.clone()) {
         meta.push(format!("act {act}"));
     }
+    // Insider rows: the structured trade beats anything parsed from text.
+    if let Some(t) = &a.insider {
+        match (t.side.as_deref(), t.total_value_usd.as_deref()) {
+            (Some(side), Some(v)) => meta.push(format!("{} {}", side.to_uppercase(), fmt_usd(v))),
+            (Some(side), None) => meta.push(side.to_uppercase()),
+            _ => {}
+        }
+        if t.is_10b5_1 {
+            meta.push("10b5-1 plan".to_string());
+        }
+    }
     if let Some(n) = a.sources_badge() {
         meta.push(format!("×{n} outlets"));
     }
@@ -390,6 +431,11 @@ pub fn meta_line(a: &Article, ticker: &str) -> Vec<String> {
         meta.push(a.enrichment.tickers.join(", "));
     }
     meta
+}
+
+/// Under 15 minutes old counts as breaking; unparsable timestamps never do.
+pub(crate) fn is_fresh(a: &Article, now: DateTime<Utc>) -> bool {
+    a.published().is_some_and(|ts| (now - ts).num_minutes() < 15)
 }
 
 pub fn score_cell(score: i64, theme: &Theme) -> Cell<'static> {

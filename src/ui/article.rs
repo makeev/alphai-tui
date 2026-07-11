@@ -89,6 +89,55 @@ fn card_lines(a: &Article, symbol: &str, theme: &Theme) -> Vec<Line<'static>> {
         lines.push(Line::from(a.original.summary.clone()));
     }
 
+    // Insider rows: the structured Form 4 event, straight from the filing.
+    if let Some(t) = &a.insider {
+        let mut trade: Vec<String> = Vec::new();
+        if let Some(side) = &t.side {
+            trade.push(side.to_uppercase());
+        }
+        if let Some(sh) = t.shares.as_deref() {
+            trade.push(format!("{} sh", crate::alphai::fmt_shares(sh)));
+        }
+        // Per-share price keeps its cents; fmt_usd would band it to "$187".
+        if let Some(p) = t.avg_price_usd.as_deref() {
+            match p.parse::<f64>() {
+                Ok(v) => trade.push(format!("@ ${}", crate::domain::fmt_price(v))),
+                Err(_) => trade.push(format!("@ {p}")),
+            }
+        }
+        if let Some(v) = t.total_value_usd.as_deref() {
+            trade.push(format!("= {}", crate::alphai::fmt_usd(v)));
+        }
+        if let Some(code) = &t.transaction_code {
+            trade.push(format!("(code {code})"));
+        }
+        let mut who: Vec<String> = Vec::new();
+        if !t.insider_name.is_empty() {
+            let role = t.role();
+            who.push(if role.is_empty() {
+                t.insider_name.clone()
+            } else {
+                format!("{} ({role})", t.insider_name)
+            });
+        }
+        if let Some(d) = &t.transaction_date {
+            who.push(d.clone());
+        }
+        if t.is_10b5_1 {
+            who.push("pre-arranged 10b5-1 plan".to_string());
+        }
+        if !trade.is_empty() || !who.is_empty() {
+            lines.push(Line::from(""));
+            lines.push(section("Trade", theme));
+            if !trade.is_empty() {
+                lines.push(Line::from(format!("  {}", trade.join(" "))));
+            }
+            if !who.is_empty() {
+                lines.push(Line::from(format!("  {}", who.join(" · "))).dim());
+            }
+        }
+    }
+
     if let Some(insights) = &a.enrichment.ai_trading_insights {
         for t in insights.ticker_analysis.iter().take(4) {
             let Some(i) = &t.impact_analysis else { continue };

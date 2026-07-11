@@ -161,6 +161,14 @@ pub struct App {
     pub news_selected: usize,
     pub news_scope: NewsScope,
     pub news_layout: NewsLayout,
+    /// Minimum relevance score in the ticker and market news feeds (1..=10,
+    /// applied server-side). Seeded from `[ui] news_min_score`, then
+    /// session-only via +/-, like the scope and layout.
+    pub news_min_score: u8,
+    /// Same for the insider feed, where the score tracks the trade size, so
+    /// this filters by dollar value. Seeded from `[ui] insider_min_score`;
+    /// +/- adjust whichever feed the visible view shows.
+    pub insider_min_score: u8,
     /// Scroll of the embedded card pane (News view); reset on selection moves.
     pub card_scroll: u16,
     pub news_table_state: TableState,
@@ -201,6 +209,8 @@ impl App {
             news_selected: 0,
             news_scope: init.ui.news_scope,
             news_layout: init.ui.news_layout,
+            news_min_score: init.ui.news_min_score,
+            insider_min_score: init.ui.insider_min_score,
             card_scroll: 0,
             news_table_state: TableState::default(),
             article_overlay: ArticleOverlay::default(),
@@ -290,6 +300,8 @@ impl App {
         }
         let news_view = ui::VIEWS[self.view_idx].navigates_articles();
         let chart_view = ui::VIEWS[self.view_idx].has_chart_panel();
+        let news_feed = ui::VIEWS[self.view_idx].feed_shown() == Some(FeedKind::News);
+        let any_feed = ui::VIEWS[self.view_idx].feed_shown().is_some();
         let Some(action) = self.keymap.resolve(&key) else {
             return false;
         };
@@ -350,13 +362,13 @@ impl App {
             {
                 self.article_overlay = ArticleOverlay { open: true, scroll: 0 };
             }
-            Action::CycleScope
-                if ui::VIEWS[self.view_idx].feed_shown() == Some(FeedKind::News) =>
-            {
+            Action::CycleScope if news_feed => {
                 self.news_scope = self.news_scope.next();
                 self.news_selected = 0;
                 self.card_scroll = 0;
             }
+            Action::ScoreUp if any_feed => self.adjust_min_score(1),
+            Action::ScoreDown if any_feed => self.adjust_min_score(-1),
             Action::ChartStyle if chart_view => {
                 self.chart_style = match self.chart_style {
                     ChartStyle::Candles => ChartStyle::Line,

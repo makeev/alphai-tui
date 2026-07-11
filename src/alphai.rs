@@ -105,7 +105,9 @@ impl Client {
 
     /// One page of enriched news; `symbol: None` = market-wide feed, `cursor`
     /// pages back (opaque, from the prior page's `next_cursor`), `page_size`
-    /// only accepts 50 on Pro keys (omit for the default 10).
+    /// only accepts 50 on Pro keys (omit for the default 10), `min_relevance`
+    /// filters server-side by score 1..10 (the server defaults to 4 when
+    /// omitted) so low-score rows never occupy page slots.
     /// Market-wide requests collapse syndicated reprints to one row per story
     /// (`sources_count` reports the outlet count). The symbol-scoped feed is
     /// left uncollapsed: the collapse filter matches the story root, which may
@@ -115,6 +117,7 @@ impl Client {
         symbol: Option<&str>,
         cursor: Option<&str>,
         page_size: Option<u8>,
+        min_relevance: Option<u8>,
     ) -> Result<NewsPage> {
         let mut query: Vec<(&str, &str)> = Vec::new();
         match symbol {
@@ -128,6 +131,10 @@ impl Client {
         if let Some(size) = &size {
             query.push(("page_size", size));
         }
+        let min = min_relevance.map(|n| n.to_string());
+        if let Some(min) = &min {
+            query.push(("min_relevance", min));
+        }
         self.get_json("/api/news/", &query).await
     }
 
@@ -137,13 +144,16 @@ impl Client {
         self.get_json("/api/news/trending/", &[]).await
     }
 
-    /// One page of the SEC Form 4 insider feed for one symbol; `cursor` and
-    /// `page_size` behave as in `news`.
+    /// One page of the SEC Form 4 insider feed for one symbol; `cursor`,
+    /// `page_size` and `min_relevance` behave as in `news`. Insider rows are
+    /// scored from the event's total dollar value, so the relevance filter
+    /// doubles as a trade-size filter (7 keeps roughly the $10M+ trades).
     pub async fn insider_news(
         &self,
         symbol: &str,
         cursor: Option<&str>,
         page_size: Option<u8>,
+        min_relevance: Option<u8>,
     ) -> Result<NewsPage> {
         let mut query: Vec<(&str, &str)> = vec![("symbol", symbol)];
         if let Some(c) = cursor {
@@ -152,6 +162,10 @@ impl Client {
         let size = page_size.map(|n| n.to_string());
         if let Some(size) = &size {
             query.push(("page_size", size));
+        }
+        let min = min_relevance.map(|n| n.to_string());
+        if let Some(min) = &min {
+            query.push(("min_relevance", min));
         }
         self.get_json("/api/news/insider/", &query).await
     }
@@ -178,16 +192,22 @@ pub enum Cmd {
     SetKey(Option<String>),
     /// Fetch news (+ sentiment when symbol-scoped). None = market-wide.
     /// A cursor means "load the next page" of an already shown feed.
+    /// `min_relevance` is the score filter the app wants (echoed back on the
+    /// resulting `Event::Feed` so the bundle can record it).
     FetchNews {
         symbol: Option<String>,
         cursor: Option<String>,
+        min_relevance: Option<u8>,
     },
     /// Fetch the 48h trending top 10 (cached under `TRENDING_KEY`).
     FetchTrending,
     /// Fetch the insider feed + 30d summary for one symbol; a cursor pages.
+    /// `min_relevance` works as in `FetchNews` (insider scores track the
+    /// trade size, so this is effectively a size filter).
     FetchInsider {
         symbol: String,
         cursor: Option<String>,
+        min_relevance: Option<u8>,
     },
 }
 
@@ -205,6 +225,10 @@ pub enum Event {
         next_cursor: Option<String>,
         /// True for a cursor fetch: extend the bundle instead of replacing it.
         append: bool,
+        /// The score filter this fetch carried; None for feeds without one
+        /// (trending, insider). The bundle records it so a changed setting
+        /// marks the cached feed stale.
+        min_relevance: Option<u8>,
     },
     /// A load-more failed. The shown feed stays; `gated` marks the archive
     /// horizon (terminal for this feed, offer an upgrade instead of a retry).
@@ -233,10 +257,10 @@ pub fn insider_key(symbol: &str) -> String {
     format!("ins:{symbol}")
 }
 
-/// Which paginated feed a page fetch targets.
+/// Which paginated feed a page fetch targets, each with its score filter.
 enum Feed<'a> {
-    News(Option<&'a str>),
-    Insider(&'a str),
+    News(Option<&'a str>, Option<u8>),
+    Insider(&'a str, Option<u8>),
 }
 
 /// Fetch one feed page, self-tuning the page size to the key's tier.
@@ -253,8 +277,10 @@ async fn fetch_feed_page(
     let try50 = matches!(*page50, Some(true)) || (page50.is_none() && cursor.is_some());
     if try50 {
         let result = match &feed {
-            Feed::News(symbol) => client.news(*symbol, cursor, Some(50)).await,
-            Feed::Insider(symbol) => client.insider_news(symbol, cursor, Some(50)).await,
+            Feed::News(symbol, min) => client.news(*symbol, cursor, Some(50), *min).await,
+            Feed::Insider(symbol, min) => {
+                client.insider_news(symbol, cursor, Some(50), *min).await
+            }
         };
         match result {
             Ok(page) => {
@@ -269,8 +295,8 @@ async fn fetch_feed_page(
         }
     }
     match &feed {
-        Feed::News(symbol) => client.news(*symbol, cursor, None).await,
-        Feed::Insider(symbol) => client.insider_news(symbol, cursor, None).await,
+        Feed::News(symbol, min) => client.news(*symbol, cursor, None, *min).await,
+        Feed::Insider(symbol, min) => client.insider_news(symbol, cursor, None, *min).await,
     }
 }
 
@@ -300,7 +326,7 @@ pub async fn run(
                 client = key.and_then(|k| Client::new(k).ok());
                 page50 = None;
             }
-            Cmd::FetchNews { symbol, cursor } => {
+            Cmd::FetchNews { symbol, cursor, min_relevance } => {
                 let key = news_key(symbol.as_deref());
                 let Some(client) = &client else {
                     send_error(&tx, key, "no AlphaAI API key configured");
@@ -313,7 +339,12 @@ pub async fn run(
                 let (page, sentiment) = match (&symbol, append) {
                     (Some(s), false) => {
                         let (p, senti) = tokio::join!(
-                            fetch_feed_page(client, Feed::News(Some(s)), None, &mut page50),
+                            fetch_feed_page(
+                                client,
+                                Feed::News(Some(s), min_relevance),
+                                None,
+                                &mut page50,
+                            ),
                             client.sentiment(s)
                         );
                         (p, senti.ok())
@@ -321,7 +352,7 @@ pub async fn run(
                     _ => (
                         fetch_feed_page(
                             client,
-                            Feed::News(symbol.as_deref()),
+                            Feed::News(symbol.as_deref(), min_relevance),
                             cursor.as_deref(),
                             &mut page50,
                         )
@@ -336,6 +367,7 @@ pub async fn run(
                         side: sentiment.map(FeedPayload::Sentiment),
                         next_cursor: p.next_cursor,
                         append,
+                        min_relevance,
                     },
                     Err(e) => error_event(key, e, append),
                 };
@@ -357,6 +389,7 @@ pub async fn run(
                         side: None,
                         next_cursor: None,
                         append: false,
+                        min_relevance: None,
                     },
                     Err(e) => Event::Error { key, error: format!("{e:#}") },
                 };
@@ -364,7 +397,7 @@ pub async fn run(
                     return;
                 }
             }
-            Cmd::FetchInsider { symbol, cursor } => {
+            Cmd::FetchInsider { symbol, cursor, min_relevance } => {
                 let key = insider_key(&symbol);
                 let Some(client) = &client else {
                     send_error(&tx, key, "no AlphaAI API key configured");
@@ -374,7 +407,12 @@ pub async fn run(
                 let (page, summary) = match append {
                     false => {
                         let (p, s) = tokio::join!(
-                            fetch_feed_page(client, Feed::Insider(&symbol), None, &mut page50),
+                            fetch_feed_page(
+                                client,
+                                Feed::Insider(&symbol, min_relevance),
+                                None,
+                                &mut page50,
+                            ),
                             client.insider_summary(&symbol)
                         );
                         (p, s.ok())
@@ -382,7 +420,7 @@ pub async fn run(
                     true => (
                         fetch_feed_page(
                             client,
-                            Feed::Insider(&symbol),
+                            Feed::Insider(&symbol, min_relevance),
                             cursor.as_deref(),
                             &mut page50,
                         )
@@ -397,6 +435,7 @@ pub async fn run(
                         side: summary.map(FeedPayload::Insider),
                         next_cursor: p.next_cursor,
                         append,
+                        min_relevance,
                     },
                     Err(e) => error_event(key, e, append),
                 };
@@ -449,6 +488,65 @@ pub struct Article {
     /// symbol-scoped feed and on rows predating the field.
     #[serde(default)]
     pub sources_count: Option<i64>,
+    /// Insider feed only: the structured Form 4 event behind this row.
+    /// None on news rows and on insider rows without transaction data.
+    #[serde(default)]
+    pub insider: Option<InsiderEvent>,
+}
+
+/// Structured SEC Form 4 event on an insider-feed row: the aggregate of the
+/// filing's whole transaction group (a 10b5-1 ladder is one event: shares and
+/// value are summed, the price is value-weighted). Replaces deriving the
+/// trade side from the templated headline.
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct InsiderEvent {
+    /// "buy" (code P) / "sell" (S) / "other" — note code D (sale back to the
+    /// issuer, a buyback) is "other", not a market disposition.
+    #[serde(default)]
+    pub side: Option<String>,
+    #[serde(default)]
+    pub transaction_code: Option<String>,
+    /// Decimal string, like the money fields below (both nullable when the
+    /// filing prices no tranche).
+    #[serde(default)]
+    pub shares: Option<String>,
+    #[serde(default)]
+    pub avg_price_usd: Option<String>,
+    #[serde(default)]
+    pub total_value_usd: Option<String>,
+    #[serde(default)]
+    pub is_10b5_1: bool,
+    #[serde(default)]
+    pub insider_name: String,
+    #[serde(default)]
+    pub insider_title: String,
+    #[serde(default)]
+    pub is_officer: bool,
+    #[serde(default)]
+    pub is_director: bool,
+    #[serde(default)]
+    pub is_ten_percent_owner: bool,
+    /// "YYYY-MM-DD".
+    #[serde(default)]
+    pub transaction_date: Option<String>,
+}
+
+impl InsiderEvent {
+    /// The reporting owner's role: their title when the filing carries one,
+    /// otherwise derived from the role flags.
+    pub fn role(&self) -> &str {
+        if !self.insider_title.is_empty() {
+            &self.insider_title
+        } else if self.is_officer {
+            "Officer"
+        } else if self.is_director {
+            "Director"
+        } else if self.is_ten_percent_owner {
+            "10% owner"
+        } else {
+            ""
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -696,6 +794,23 @@ pub struct TopInsider {
     pub net_value: Option<String>,
 }
 
+/// "25000.0000" (API decimal string) -> "25,000"; fractional shares round.
+/// Unparsable input passes through untouched, like `fmt_usd`.
+pub fn fmt_shares(decimal: &str) -> String {
+    let Ok(v) = decimal.parse::<f64>() else {
+        return decimal.to_string();
+    };
+    let digits = format!("{:.0}", v.abs());
+    let mut out = String::new();
+    for (i, c) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    if v < 0.0 { format!("-{out}") } else { out }
+}
+
 /// "1234567.89" (API decimal string) -> "$1.2M"; sign kept in front.
 pub fn fmt_usd(decimal: &str) -> String {
     let Ok(v) = decimal.parse::<f64>() else {
@@ -841,6 +956,60 @@ mod tests {
         let plain: Article =
             serde_json::from_str(r#"{"original": {"title": "no form"}}"#).unwrap();
         assert_eq!(plain.original.ownership_form, None);
+        assert!(plain.insider.is_none(), "legacy rows must parse without the block");
+    }
+
+    #[test]
+    fn parses_structured_insider_block() {
+        let raw = r#"{
+          "original": {"title": "STEVENS MARK A sold shares"},
+          "insider": {
+            "side": "sell",
+            "transaction_code": "S",
+            "shares": "25000.0000",
+            "avg_price_usd": "187.3200",
+            "total_value_usd": "4683000.00",
+            "is_10b5_1": true,
+            "insider_name": "STEVENS MARK A",
+            "insider_title": "Director",
+            "is_officer": false,
+            "is_director": true,
+            "is_ten_percent_owner": false,
+            "transaction_date": "2026-07-09"
+          }
+        }"#;
+        let a: Article = serde_json::from_str(raw).unwrap();
+        let t = a.insider.as_ref().unwrap();
+        assert_eq!(t.side.as_deref(), Some("sell"));
+        assert_eq!(t.transaction_code.as_deref(), Some("S"));
+        assert_eq!(fmt_shares(t.shares.as_deref().unwrap()), "25,000");
+        assert_eq!(fmt_usd(t.total_value_usd.as_deref().unwrap()), "$4.7M");
+        assert!(t.is_10b5_1);
+        assert_eq!(t.role(), "Director");
+        assert_eq!(t.transaction_date.as_deref(), Some("2026-07-09"));
+
+        // Unpriced filings null the money fields; the block still parses.
+        let raw = r#"{
+          "original": {"title": "grant"},
+          "insider": {"side": "other", "shares": "100", "is_10b5_1": false,
+                      "insider_name": "X", "insider_title": "",
+                      "is_officer": true, "is_director": false,
+                      "is_ten_percent_owner": false,
+                      "avg_price_usd": null, "total_value_usd": null}
+        }"#;
+        let a: Article = serde_json::from_str(raw).unwrap();
+        let t = a.insider.as_ref().unwrap();
+        assert_eq!(t.total_value_usd, None);
+        assert_eq!(t.role(), "Officer");
+    }
+
+    #[test]
+    fn shares_formatting_groups_thousands() {
+        assert_eq!(fmt_shares("25000.0000"), "25,000");
+        assert_eq!(fmt_shares("512"), "512");
+        assert_eq!(fmt_shares("1234567"), "1,234,567");
+        assert_eq!(fmt_shares("-2500"), "-2,500");
+        assert_eq!(fmt_shares("garbage"), "garbage");
     }
 
     #[test]
@@ -911,18 +1080,26 @@ mod tests {
     async fn live_api_smoke() {
         let key = std::env::var("ALPHAI_API_KEY").expect("set ALPHAI_API_KEY");
         let client = Client::new(key).unwrap();
-        let news = client.news(Some("NVDA"), None, None).await.unwrap();
+        // min_relevance 4 mirrors the server default, so the filter param is
+        // exercised without changing what the feed returns.
+        let news = client.news(Some("NVDA"), None, None, Some(4)).await.unwrap();
         assert!(!news.results.is_empty(), "empty NVDA news feed");
         assert!(news.results[0].original.title.len() > 3);
         // The feed is deeper than one page, so the cursor must be present
         // and must fetch an older second page.
         let cursor = news.next_cursor.expect("no next_cursor on page 1");
-        let page2 = client.news(Some("NVDA"), Some(&cursor), None).await.unwrap();
+        let page2 = client.news(Some("NVDA"), Some(&cursor), None, Some(4)).await.unwrap();
         assert!(!page2.results.is_empty(), "empty second news page");
         let senti = client.sentiment("NVDA").await.unwrap();
         assert!(senti.days > 0);
-        let filings = client.insider_news("NVDA", None, None).await.unwrap();
+        let filings = client.insider_news("NVDA", None, None, Some(4)).await.unwrap();
         assert!(!filings.results.is_empty(), "empty NVDA insider feed");
+        // Every Form 4 row is backed by transaction data, so the structured
+        // block must be present on the live feed.
+        assert!(
+            filings.results.iter().any(|a| a.insider.is_some()),
+            "no structured insider block on the live feed"
+        );
         let summary = client.insider_summary("NVDA").await.unwrap();
         assert!(summary.days > 0);
         let trending = client.trending().await.unwrap();

@@ -70,6 +70,10 @@ pub struct UiConfig {
     pub default_view: Option<String>,
     pub news_layout: Option<String>,
     pub news_scope: Option<String>,
+    /// Raw i64 rather than u8: an out-of-range number must degrade to a
+    /// warning in `resolve`, not fail deserializing the whole file.
+    pub news_min_score: Option<i64>,
+    pub insider_min_score: Option<i64>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -122,12 +126,23 @@ impl Default for ChartDefaults {
     }
 }
 
+/// Startup default of the news score filter: relevance 7 and up (the API
+/// itself defaults to 4; +/- adjust it live, `[ui] news_min_score` seeds it).
+pub const DEFAULT_NEWS_MIN_SCORE: u8 = 7;
+
+/// Startup default of the insider score filter. Insider rows are scored from
+/// the event's dollar value, so this is a trade-size filter; 4 matches the
+/// server default and keeps every filing the feed used to show.
+pub const DEFAULT_INSIDER_MIN_SCORE: u8 = 4;
+
 /// Validated `[ui]` startup values.
 #[derive(Clone, Debug, PartialEq)]
 pub struct UiDefaults {
     pub view_idx: usize,
     pub news_layout: NewsLayout,
     pub news_scope: NewsScope,
+    pub news_min_score: u8,
+    pub insider_min_score: u8,
 }
 
 impl Default for UiDefaults {
@@ -136,6 +151,8 @@ impl Default for UiDefaults {
             view_idx: ui::view_index(ui::ViewId::Split),
             news_layout: NewsLayout::default(),
             news_scope: NewsScope::default(),
+            news_min_score: DEFAULT_NEWS_MIN_SCORE,
+            insider_min_score: DEFAULT_INSIDER_MIN_SCORE,
         }
     }
 }
@@ -255,7 +272,26 @@ fn resolve_ui(raw: Option<&UiConfig>, warnings: &mut Vec<String>) -> UiDefaults 
             )),
         }
     }
+    out.news_min_score = min_score(raw.news_min_score, out.news_min_score, "news_min_score", warnings);
+    out.insider_min_score = min_score(
+        raw.insider_min_score,
+        out.insider_min_score,
+        "insider_min_score",
+        warnings,
+    );
     out
+}
+
+/// One `[ui] *_min_score` entry: 1..=10 or a warning plus the default.
+fn min_score(raw: Option<i64>, default: u8, name: &str, warnings: &mut Vec<String>) -> u8 {
+    match raw {
+        Some(n) if (1..=10).contains(&n) => n as u8,
+        Some(n) => {
+            warnings.push(format!("[ui] {name}: {n} is outside 1..=10, keeping {default}"));
+            default
+        }
+        None => default,
+    }
 }
 
 impl Config {
@@ -381,6 +417,8 @@ mod tests {
                 default_view: Some("news".into()),
                 news_layout: Some("stacked".into()),
                 news_scope: None,
+                news_min_score: Some(6),
+                insider_min_score: Some(5),
             }),
             chart: Some(ChartConfig {
                 style: Some("line".into()),
@@ -522,6 +560,30 @@ mod tests {
         assert_eq!(resolved.ui.view_idx, ui::view_index(ui::ViewId::Split));
         assert_eq!(warnings.len(), 1, "{warnings:?}");
         assert!(warnings[0].contains("nwes"), "{warnings:?}");
+    }
+
+    #[test]
+    fn news_min_score_validates_per_entry() {
+        let cfg: Config =
+            toml::from_str("[ui]\nnews_min_score = 4\ninsider_min_score = 8").unwrap();
+        let (resolved, warnings) = resolve(&cfg);
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(resolved.ui.news_min_score, 4);
+        assert_eq!(resolved.ui.insider_min_score, 8);
+
+        // Out of range warns and keeps the default; a number outside u8 must
+        // not fail the whole file (the raw field is i64 for exactly that).
+        for bad in ["0", "11", "300", "-2"] {
+            let cfg: Config =
+                toml::from_str(&format!("[ui]\nnews_min_score = {bad}")).expect("must parse");
+            let (resolved, warnings) = resolve(&cfg);
+            assert_eq!(resolved.ui.news_min_score, DEFAULT_NEWS_MIN_SCORE, "at {bad}");
+            assert_eq!(warnings.len(), 1, "at {bad}: {warnings:?}");
+        }
+
+        let defaults = UiDefaults::default();
+        assert_eq!(defaults.news_min_score, DEFAULT_NEWS_MIN_SCORE);
+        assert_eq!(defaults.insider_min_score, DEFAULT_INSIDER_MIN_SCORE);
     }
 
     /// Every ```toml block in the README must parse as a Config and resolve

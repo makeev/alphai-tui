@@ -225,9 +225,11 @@ fn render_price_line(
 
     let mut datasets = Vec::new();
     if !prev_close_points.is_empty() {
+        // Braille, not Dot: the Dot marker fills every column with a heavy
+        // bullet; braille keeps the reference a thin line under the data.
         datasets.push(
             Dataset::default()
-                .marker(symbols::Marker::Dot)
+                .marker(symbols::Marker::Braille)
                 .graph_type(GraphType::Line)
                 .style(Style::new().fg(app.theme.ref_line))
                 .data(&prev_close_points),
@@ -394,32 +396,40 @@ fn render_price_candles(
         }
     }
 
-    // SMA overlay: one dot per column, threading between candles (bodies win
-    // shared cells). Slow first so the fast line wins where they cross.
+    // SMA overlay: connected braille lines threading between candles (bodies
+    // win shared cells). Slow first so the fast line wins where they cross.
     // Computed over the full series; `sample_idx` entries index into
     // `visible`, hence the `cut` offset. Values pushed outside the visible
-    // y-range by warm-up history are skipped, not pinned to the edge.
+    // y-range by warm-up history break the line instead of pinning to the edge.
     if app.show_sma {
         let closes: Vec<f64> = data.candles.iter().map(|c| c.close).collect();
+        let mut overlay = BrailleOverlay::new(plot.width, plot.height);
         for (period, color) in [
             (app.chart.sma_slow, app.theme.sma_slow),
             (app.chart.sma_fast, app.theme.sma_fast),
         ] {
             let line = indicators::sma(&closes, period);
+            let mut prev: Option<(i32, i32)> = None;
             for (i, &raw) in sample_idx.iter().enumerate() {
-                let Some(v) = line[cut + raw] else { continue };
-                if v < y_lo || v > y_hi {
-                    continue;
-                }
-                let row = (scale(v, y_lo, y_hi, plot.height as usize * 2) / 2) as u16;
                 let x = slot_x(i) + (slot - body_w) + body_w / 2;
-                if let Some(cell) = buf.cell_mut((x, plot.y + row))
-                    && matches!(cell.symbol(), " " | "│" | "╵" | "╷" | "╌" | "·")
-                {
-                    cell.set_char('·').set_fg(color);
+                let point = line[cut + raw]
+                    .filter(|&v| (y_lo..=y_hi).contains(&v))
+                    .map(|v| {
+                        (
+                            (x - plot.x) as i32 * 2,
+                            scale(v, y_lo, y_hi, plot.height as usize * 4) as i32,
+                        )
+                    });
+                match (prev, point) {
+                    (Some(a), Some(b)) => overlay.line(a, b, color),
+                    // A lone point (line break on either side) still shows.
+                    (None, Some(b)) => overlay.dot(b.0, b.1, color),
+                    _ => {}
                 }
+                prev = point;
             }
         }
+        overlay.blit(buf, plot);
     }
 
     // Axes: price labels right-aligned in the gutter, three time labels below.
@@ -446,6 +456,91 @@ fn render_price_candles(
 /// Price -> subrow index in `[0, sub_rows)`, 0 = top.
 fn scale(v: f64, y_lo: f64, y_hi: f64, sub_rows: usize) -> usize {
     (((y_hi - v) / (y_hi - y_lo) * sub_rows as f64) as usize).min(sub_rows - 1)
+}
+
+// -- braille overlay ----------------------------------------------------------
+
+/// Unicode braille bit for the dot at (dx in 0..2, dy in 0..4) of a cell.
+const BRAILLE_BITS: [[u8; 2]; 4] = [[0x01, 0x08], [0x02, 0x10], [0x04, 0x20], [0x40, 0x80]];
+
+/// Braille canvas over the candle plot, 2x4 dots per terminal cell. The SMA
+/// overlay draws its segments here and `blit` merges the result into the
+/// frame, with candle bodies keeping their cells.
+struct BrailleOverlay {
+    cols: u16,
+    rows: u16,
+    /// Per cell: accumulated dot mask + the color of the last line to touch
+    /// it (so the fast SMA wins where the two cross, like the old dots did).
+    cells: Vec<(u8, Color)>,
+}
+
+impl BrailleOverlay {
+    fn new(cols: u16, rows: u16) -> Self {
+        Self {
+            cols,
+            rows,
+            cells: vec![(0, Color::Reset); cols as usize * rows as usize],
+        }
+    }
+
+    /// Set one dot in dot coordinates (x in 0..cols*2, y in 0..rows*4);
+    /// out-of-range dots are dropped, not clamped.
+    fn dot(&mut self, x: i32, y: i32, color: Color) {
+        if x < 0 || y < 0 {
+            return;
+        }
+        let (cx, cy) = (x as u16 / 2, y as u16 / 4);
+        if cx >= self.cols || cy >= self.rows {
+            return;
+        }
+        let cell = &mut self.cells[cy as usize * self.cols as usize + cx as usize];
+        cell.0 |= BRAILLE_BITS[y as usize % 4][x as usize % 2];
+        cell.1 = color;
+    }
+
+    /// Straight segment between two dots (integer Bresenham).
+    fn line(&mut self, (x0, y0): (i32, i32), (x1, y1): (i32, i32), color: Color) {
+        let (dx, dy) = ((x1 - x0).abs(), -(y1 - y0).abs());
+        let (sx, sy) = (if x0 < x1 { 1 } else { -1 }, if y0 < y1 { 1 } else { -1 });
+        let (mut x, mut y, mut err) = (x0, y0, dx + dy);
+        loop {
+            self.dot(x, y, color);
+            if x == x1 && y == y1 {
+                return;
+            }
+            let e2 = 2 * err;
+            if e2 >= dy {
+                err += dy;
+                x += sx;
+            }
+            if e2 <= dx {
+                err += dx;
+                y += sy;
+            }
+        }
+    }
+
+    /// Merge into the frame at `plot`. Candle bodies keep their cells; wicks
+    /// and the prev-close dashes give way, exactly like the old per-column
+    /// dots did.
+    fn blit(&self, buf: &mut ratatui::buffer::Buffer, plot: Rect) {
+        for cy in 0..self.rows {
+            for cx in 0..self.cols {
+                let (mask, color) = self.cells[cy as usize * self.cols as usize + cx as usize];
+                if mask == 0 {
+                    continue;
+                }
+                let Some(cell) = buf.cell_mut((plot.x + cx, plot.y + cy)) else {
+                    continue;
+                };
+                if matches!(cell.symbol(), "█" | "▀" | "▄") {
+                    continue;
+                }
+                let ch = char::from_u32(0x2800 + mask as u32).unwrap_or('·');
+                cell.set_char(ch).set_fg(color);
+            }
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -570,10 +665,12 @@ fn render_rsi(f: &mut Frame, area: Rect, data: &TickerData, cut: usize, period: 
         .collect();
 
     let mut datasets = Vec::new();
+    // Braille, not Dot, for the same reason as the prev-close reference:
+    // the 30/70 levels must read as thin lines, not rows of bullets.
     for refline in [&ref30[..], &ref70[..]] {
         datasets.push(
             Dataset::default()
-                .marker(symbols::Marker::Dot)
+                .marker(symbols::Marker::Braille)
                 .graph_type(GraphType::Line)
                 .style(Style::new().fg(theme.ref_line))
                 .data(refline),
@@ -680,6 +777,41 @@ mod tests {
 
         let m = aggregate(&[candle(1.0, 2.0, 0.5, 1.5)]);
         assert_eq!(m.volume, None);
+    }
+
+    #[test]
+    fn braille_overlay_draws_lines_and_yields_to_bodies() {
+        use ratatui::buffer::Buffer;
+
+        // A horizontal segment across the top dot row of a 2x1 plot: both
+        // cells get the two upper dots (0x01 | 0x08 = '⠉').
+        let mut o = BrailleOverlay::new(2, 1);
+        o.line((0, 0), (3, 0), Color::Red);
+        let plot = Rect::new(0, 0, 2, 1);
+        let mut buf = Buffer::empty(plot);
+        buf.cell_mut((0, 0)).unwrap().set_char('█'); // candle body
+        o.blit(&mut buf, plot);
+        assert_eq!(buf.cell((0, 0)).unwrap().symbol(), "█", "body lost its cell");
+        assert_eq!(buf.cell((1, 0)).unwrap().symbol(), "⠉");
+        assert_eq!(buf.cell((1, 0)).unwrap().fg, Color::Red);
+
+        // Where two lines share a cell the later one wins the color but the
+        // earlier dots stay merged into the glyph.
+        let mut o = BrailleOverlay::new(1, 1);
+        o.dot(0, 0, Color::Red);
+        o.dot(0, 3, Color::Blue);
+        let plot = Rect::new(0, 0, 1, 1);
+        let mut buf = Buffer::empty(plot);
+        o.blit(&mut buf, plot);
+        let cell = buf.cell((0, 0)).unwrap();
+        assert_eq!(cell.symbol(), "⡁"); // 0x01 | 0x40
+        assert_eq!(cell.fg, Color::Blue);
+
+        // Out-of-range dots are dropped, never wrapped onto other cells.
+        let mut o = BrailleOverlay::new(1, 1);
+        o.dot(-1, 0, Color::Red);
+        o.dot(2, 5, Color::Red);
+        assert!(o.cells.iter().all(|&(mask, _)| mask == 0));
     }
 
     #[test]

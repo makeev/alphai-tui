@@ -18,21 +18,28 @@ Built in Rust with [ratatui](https://ratatui.rs).
   list next to a full article card with the complete AI analysis: price
   impact prediction with confidence, relevance and novelty scores,
   actionability, background context, key entities and a contrarian view.
-  `x` flips the layout between side-by-side and list-over-card, `v` expands
-  the card to full screen, PgUp/PgDn scroll it. Pressing down on the last
-  row loads the next page of the feed; the page size adapts to your plan
-  automatically (10 per page, 50 on Pro keys). Market and trending scopes
-  collapse syndicated reprints to one row per story and show how many
-  outlets carry it (`×7`). Enter opens the article page on alphai.io; a
-  settings toggle switches that to the original source site. A 7-day
-  bullish/bearish rollup tops the ticker scope.
+  The feed shows articles with a relevance score of 7 and up by default;
+  `+` and `-` move that bar live (1 to 10, filtered server-side, the block
+  title shows the active value) and `[ui] news_min_score` sets the startup
+  default. Articles fresher than 15 minutes light up their age in the
+  accent color. `x` flips the layout between side-by-side and
+  list-over-card, `v` expands the card to full screen, PgUp/PgDn scroll it.
+  On terminals narrower than 90 columns the side layout gives the whole
+  width to the list and `v` remains the way to read the card. Pressing
+  down on the last row loads the next page of the feed; the page size
+  adapts to your plan automatically (10 per page, 50 on Pro keys). Market
+  and trending scopes collapse syndicated reprints to one row per story
+  and show how many outlets carry it (`×7`). Enter opens the article page
+  on alphai.io; a settings toggle switches that to the original source
+  site. A 7-day bullish/bearish rollup tops the ticker scope.
 
   ![alphai-tui news view: article list next to the full AI analysis card with price impact, trading value, context and a contrarian view](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/news.png)
 
 - **Table**: watchlist with price, change, day range and unicode sparklines.
 - **Chart**: candlestick chart of the selected ticker at half-block
   resolution, with a previous-close reference line, SMA 20/100 overlays and
-  an RSI(14) panel. `c` switches to the classic Braille line chart, `m` and
+  an RSI(14) panel. The SMA overlays thread through the candles as thin
+  braille lines. `c` switches to the classic Braille line chart, `m` and
   `i` toggle the indicators, `t` cycles interval presets on the fly.
   The client quietly fetches extra history beyond the visible window, so
   the SMA and RSI lines are fully drawn from the first candle on screen
@@ -40,9 +47,17 @@ Built in Rust with [ratatui](https://ratatui.rs).
 - **Insider**: SEC Form 4 activity for the selected ticker. A 30-day rollup
   (buys vs sells, dollar volumes, share of pre-arranged 10b5-1 plan trades,
   most active insiders with their transaction counts) above the stream of
-  filing events. Each filing row carries a buy/sell glyph and a `D`/`I`
-  marker for direct or indirect ownership. The stream pages like the news
-  feed: down on the last row loads more.
+  filing events. Each filing row shows the trade side straight from the
+  filing (a buy/sell glyph; a sale back to the issuer stays neutral instead
+  of reading as a market sale), a `D`/`I` marker for direct or indirect
+  ownership, a `p` flag on pre-arranged 10b5-1 plan trades and the total
+  trade value. The article card breaks the event down further: shares, the
+  value-weighted average price, the SEC transaction code, who traded and
+  their role, and the transaction date. Insider rows are scored from the
+  trade size, so `+` and `-` filter the stream by dollar value
+  (`[ui] insider_min_score` sets the startup default; 7 keeps roughly the
+  $10M+ trades). The stream pages like the news feed: down on the last row
+  loads more.
 
   ![alphai-tui insider view: 30-day Form 4 rollup with top insiders above the filing stream, article card open on a 10b5-1 plan sale](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/insider.png)
 
@@ -125,6 +140,7 @@ defaults. API keys can also come from env vars, which win over the config:
 | `PgUp` `PgDn` | news | scroll the article card pane |
 | `↓` / `j` on the last row | news, insider | load the next page of the feed |
 | `f` | news, split | cycle news scope: selected ticker, whole market, trending |
+| `+` / `-` | news, insider, split | raise / lower the visible feed's score filter (news: relevance, starts at 7; insider: trade size, starts at 4) |
 | `c` | chart, split | toggle candlestick / line chart |
 | `m` | chart, split | toggle SMA 20 and SMA 100 overlays |
 | `i` | chart, split | toggle the RSI(14) panel |
@@ -204,7 +220,9 @@ on a free key keep an eye on how many such panes you open.
   that budget: it fetches only what the visible view needs (the trending
   scope is one extra request), caches each response for 5 minutes, loads
   further pages only when you ask for them, and the article card reuses
-  data already fetched with the list. Feeds page 10 articles at a time (50
+  data already fetched with the list. The relevance filter is applied by
+  the server, so filtered-out articles never occupy page slots; moving it
+  with `+`/`-` refetches the visible feed, one request per press at most. Feeds page 10 articles at a time (50
   on Pro keys, detected automatically). Paging back past your plan's
   archive horizon (30 days on Free, 90 on Basic) shows an upgrade hint
   instead of older articles. Full API reference:
@@ -223,8 +241,8 @@ persists the watchlist on screen. Every key is optional. A misspelled value
 in the `[ui]`, `[chart]` or `[theme]` sections prints a warning on startup
 and keeps that entry's default; only a TOML syntax error makes the whole
 file fall back to defaults. The `[ui]` and `[chart]` sections set startup
-defaults; the session keys (`x`, `f`, `c`, `m`, `i`, `t`) still change
-everything live without persisting it:
+defaults; the session keys (`x`, `f`, `+`, `-`, `c`, `m`, `i`, `t`) still
+change everything live without persisting it:
 
 ```toml
 source = "yahoo"
@@ -244,6 +262,8 @@ alpaca_secret = ""
 default_view = "split"    # split | news | table | chart | insider
 news_layout = "side"      # side | stacked
 news_scope = "ticker"     # ticker | market | trending
+news_min_score = 7        # minimum relevance score in news feeds, 1 to 10
+insider_min_score = 4     # insider feed filter; the score tracks trade size
 
 [chart]
 style = "candles"         # candles | line
