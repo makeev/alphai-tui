@@ -103,8 +103,9 @@ alphai-tui -s finnhub NVDA  # explicit source for one run
 | `--once` | | Print quotes to stdout and exit |
 | `--config` | | Use an alternate config file (Save writes back to it) |
 
-`-r` and `-i` set the startup window; the `t` key cycles preset combinations
-for the session without persisting them.
+`-r` and `-i` set the startup window; the `t` key cycles the preset
+combinations (configurable as `[chart] presets`) for the session without
+persisting them.
 
 CLI arguments win over the config file; the config file wins over built-in
 defaults. API keys can also come from env vars, which win over the config:
@@ -127,7 +128,7 @@ defaults. API keys can also come from env vars, which win over the config:
 | `c` | chart, split | toggle candlestick / line chart |
 | `m` | chart, split | toggle SMA 20 and SMA 100 overlays |
 | `i` | chart, split | toggle the RSI(14) panel |
-| `t` / `T` | everywhere | cycle candle interval presets forward / back (`5m` `15m` `60m` `1d`, each with a matching history window) |
+| `t` / `T` | everywhere | cycle candle interval presets forward / back (each interval with a matching history window; the list is configurable as `[chart] presets`) |
 | `r` | everywhere | refresh prices and the visible news view |
 | `s` | everywhere | settings |
 | `q` / `Esc` / `Ctrl-C` | everywhere | quit |
@@ -213,7 +214,7 @@ Ticker forms follow the US/Yahoo convention (`AAPL`, `BTC-USD`, `VOD.L`),
 which is also what AlphaAI uses. Finnhub-specific symbols like
 `BINANCE:BTCUSDT` will not have news attached.
 
-## Config file
+## Configuration
 
 `~/.config/alphai-tui/config.toml` on Linux and macOS (`%APPDATA%` on
 Windows), created by the settings screen with mode 0600 since it can hold
@@ -287,6 +288,15 @@ rsi_line = "cyan"        # RSI line
 ref_line = "darkgray"    # previous close and RSI 30/70 reference lines
 ```
 
+### Not configurable on purpose
+
+The AlphaAI response cache (5 minutes), the feed page sizes, the 2 second
+poll floor and the chart warm-up factors are fixed. They keep the app a
+fair citizen of the free API tiers, and a config knob for them would turn
+an innocent-looking file into an abuse vector. `ALPACA_FEED`,
+`ALPHAI_API_URL` and `ALPACA_DATA_URL` stay env-only debug overrides for
+the same reason.
+
 ## Architecture
 
 ```
@@ -319,7 +329,8 @@ src/
 
 Data flows one way: background tasks (price poller, AlphaAI fetcher) push
 events over an mpsc channel into `App::apply`; views are stateless renderers
-over `&mut App`. The UI never blocks on the network.
+over `&mut App`. The UI never blocks on the network, and every AlphaAI
+request-budget guard lives in one file (`app/feeds.rs`).
 
 ### Adding a price source
 
