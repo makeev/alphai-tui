@@ -1,6 +1,6 @@
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Rect};
-use ratatui::style::{Color, Modifier, Style, Stylize};
+use ratatui::style::{Modifier, Style, Stylize};
 use ratatui::widgets::{Block, Cell, Row, Table};
 
 use crate::app::App;
@@ -32,7 +32,7 @@ pub fn render_table(f: &mut Frame, area: Rect, app: &mut App) {
         .map(|symbol| {
             let Some(data) = app.data.get(symbol) else {
                 let status = if app.errors.contains_key(symbol) {
-                    Cell::from("error").style(Style::new().fg(Color::Red))
+                    Cell::from("error").style(Style::new().fg(app.theme.error))
                 } else {
                     Cell::from("…").dim()
                 };
@@ -41,8 +41,8 @@ pub fn render_table(f: &mut Frame, area: Rect, app: &mut App) {
 
             let q = &data.quote;
             let dir_style = match q.change() {
-                Some(c) if c > 0.0 => Style::new().fg(Color::Green),
-                Some(c) if c < 0.0 => Style::new().fg(Color::Red),
+                Some(c) if c > 0.0 => Style::new().fg(app.theme.up),
+                Some(c) if c < 0.0 => Style::new().fg(app.theme.down),
                 _ => Style::new().dim(),
             };
             let change = q

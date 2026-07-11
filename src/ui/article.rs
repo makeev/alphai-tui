@@ -5,12 +5,13 @@
 
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Style, Stylize};
+use ratatui::style::{Style, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Clear, Paragraph, Wrap};
 
 use crate::alphai::Article;
 use crate::app::App;
+use crate::theme::Theme;
 use crate::ui::{centered, news};
 
 /// The fullscreen card overlay (v in the News/Insider views).
@@ -32,8 +33,8 @@ pub fn render(f: &mut Frame, app: &mut App) {
     f.render_widget(Clear, area);
     let block = Block::bordered()
         .title(" Article ")
-        .border_style(Style::new().fg(Color::Cyan));
-    let lines = card_lines(a, app.selected_symbol());
+        .border_style(Style::new().fg(app.theme.accent));
+    let lines = card_lines(a, app.selected_symbol(), &app.theme);
     let mut scroll = app.article_overlay.scroll;
     render_card(f, area, block, lines, &mut scroll);
     app.article_overlay.scroll = scroll;
@@ -41,13 +42,20 @@ pub fn render(f: &mut Frame, app: &mut App) {
 
 /// The card as an embedded pane (News view layouts). Scrolls via
 /// `app.card_scroll`; an empty selection renders a bare frame.
-pub fn render_pane(f: &mut Frame, area: Rect, article: Option<&Article>, symbol: &str, scroll: &mut u16) {
+pub fn render_pane(
+    f: &mut Frame,
+    area: Rect,
+    article: Option<&Article>,
+    symbol: &str,
+    scroll: &mut u16,
+    theme: &Theme,
+) {
     let block = Block::bordered().title(" card · pgup/pgdn scroll · v full ");
     let Some(a) = article else {
         f.render_widget(block, area);
         return;
     };
-    let lines = card_lines(a, symbol);
+    let lines = card_lines(a, symbol, theme);
     render_card(f, area, block, lines, scroll);
 }
 
@@ -71,7 +79,7 @@ fn render_card(f: &mut Frame, area: Rect, block: Block, lines: Vec<Line<'static>
 
 /// The card body: title, meta, summary, then every enrichment section that
 /// exists for this article (all of them optional on the wire).
-fn card_lines(a: &Article, symbol: &str) -> Vec<Line<'static>> {
+fn card_lines(a: &Article, symbol: &str, theme: &Theme) -> Vec<Line<'static>> {
     let mut lines = vec![
         Line::from(a.original.title.clone()).bold(),
         Line::from(news::meta_line(a, symbol).join(" · ")).dim(),
@@ -87,9 +95,9 @@ fn card_lines(a: &Article, symbol: &str) -> Vec<Line<'static>> {
             lines.push(Line::from(""));
             let mut head = vec![Span::styled(
                 t.ticker.clone(),
-                Style::new().fg(Color::Cyan).bold(),
+                Style::new().fg(theme.accent).bold(),
             )];
-            head.push(sentiment_span(i.sentiment.as_deref()));
+            head.push(sentiment_span(i.sentiment.as_deref(), theme));
             if let Some(c) = &i.confidence {
                 head.push(Span::raw(format!(" · {c} confidence")).dim());
             }
@@ -115,7 +123,7 @@ fn card_lines(a: &Article, symbol: &str) -> Vec<Line<'static>> {
             }
             if !parts.is_empty() {
                 lines.push(Line::from(""));
-                lines.push(section("Trading value"));
+                lines.push(section("Trading value", theme));
                 lines.push(Line::from(format!("  {}", parts.join(" · "))));
             }
         }
@@ -148,7 +156,7 @@ fn card_lines(a: &Article, symbol: &str) -> Vec<Line<'static>> {
         }
         if !body.is_empty() {
             lines.push(Line::from(""));
-            lines.push(section("Context"));
+            lines.push(section("Context", theme));
             lines.extend(body);
         }
     }
@@ -168,7 +176,7 @@ fn card_lines(a: &Article, symbol: &str) -> Vec<Line<'static>> {
         }
         if !body.is_empty() {
             lines.push(Line::from(""));
-            lines.push(section("Other views"));
+            lines.push(section("Other views", theme));
             lines.extend(body);
         }
     }
@@ -176,17 +184,17 @@ fn card_lines(a: &Article, symbol: &str) -> Vec<Line<'static>> {
     lines
 }
 
-fn section(title: &str) -> Line<'static> {
+fn section(title: &str, theme: &Theme) -> Line<'static> {
     Line::from(Span::styled(
         title.to_string(),
-        Style::new().fg(Color::Cyan),
+        Style::new().fg(theme.accent),
     ))
 }
 
-fn sentiment_span(sentiment: Option<&str>) -> Span<'static> {
+fn sentiment_span(sentiment: Option<&str>, theme: &Theme) -> Span<'static> {
     match sentiment {
-        Some("positive") => Span::styled(" ▲ positive", Style::new().fg(Color::Green)),
-        Some("negative") => Span::styled(" ▼ negative", Style::new().fg(Color::Red)),
+        Some("positive") => Span::styled(" ▲ positive", Style::new().fg(theme.pos)),
+        Some("negative") => Span::styled(" ▼ negative", Style::new().fg(theme.neg)),
         Some(other) => Span::raw(format!(" · {other}")).dim(),
         None => Span::raw(""),
     }

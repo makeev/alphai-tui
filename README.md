@@ -233,6 +233,33 @@ alpaca_key_id = ""
 alpaca_secret = ""
 ```
 
+### Colors
+
+Every color the views draw comes from a named slot, and the optional
+`[theme]` table recolors any of them. Values are ANSI color names
+(case-insensitive, `light-blue`, `grey`), `#RRGGBB` hex, or an ANSI-256
+index written as a string like `"245"`. A bad color or a misspelled slot
+prints a warning on startup and keeps that slot's default; it never breaks
+the config file. The defaults are the values shown:
+
+```toml
+[theme]
+accent = "cyan"          # header title, active tab, overlay borders, headings
+accent_text = "black"    # text on the active tab
+up = "green"             # price up: candles, deltas, sparklines
+down = "red"             # price down
+flat = "gray"            # unchanged / no data
+pos = "green"            # bullish sentiment, insider buys
+neg = "red"              # bearish sentiment, insider sells
+error = "red"            # error messages
+warn = "yellow"          # notices and the editing highlight
+score_high = "yellow"    # relevance score 8 to 10
+sma_fast = "yellow"      # SMA 20 overlay
+sma_slow = "magenta"     # SMA 100 overlay
+rsi_line = "cyan"        # RSI line
+ref_line = "darkgray"    # previous close and RSI 30/70 reference lines
+```
+
 ## Architecture
 
 ```

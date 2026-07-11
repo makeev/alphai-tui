@@ -43,6 +43,26 @@ pub struct Config {
     /// key this binary does not know (say, a config written by a newer
     /// version) survives a load -> save round trip instead of being dropped.
     pub keys: BTreeMap<String, String>,
+    /// `[theme]` color overrides by slot name (see `theme::Theme`). Kept as
+    /// raw strings: validation happens in `resolve`, per slot, so one typo
+    /// never degrades the whole file.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub theme: Option<BTreeMap<String, String>>,
+}
+
+/// Everything derived and validated from the raw config. Semantic problems
+/// in these sections warn and fall back per entry; only a TOML syntax error
+/// degrades the whole file (in `load`).
+pub struct Resolved {
+    pub theme: crate::theme::Theme,
+}
+
+/// Validate the raw config into ready-to-use values plus human-readable
+/// warnings (printed to stderr before the TUI starts).
+pub fn resolve(cfg: &Config) -> (Resolved, Vec<String>) {
+    let mut warnings = Vec::new();
+    let theme = crate::theme::Theme::from_config(cfg.theme.as_ref(), &mut warnings);
+    (Resolved { theme }, warnings)
 }
 
 impl Config {
@@ -162,6 +182,7 @@ mod tests {
                 ("alpaca_key_id".to_string(), "PKTEST123".to_string()),
                 ("alpaca_secret".to_string(), "alpaca-secret-x".to_string()),
             ]),
+            theme: Some(BTreeMap::from([("accent".to_string(), "magenta".to_string())])),
         };
         save_to(&p, &cfg).unwrap();
         let loaded = load_from(&p).unwrap().unwrap();
@@ -219,5 +240,29 @@ mod tests {
         let raw = toml::to_string_pretty(&cfg).unwrap();
         let again: Config = toml::from_str(&raw).unwrap();
         assert_eq!(again.keys.get("newsource").map(String::as_str), Some("k"));
+    }
+
+    /// Unknown sections and keys are tolerated on load: a typo never takes
+    /// the whole file (and its API keys) down.
+    #[test]
+    fn unknown_sections_and_fields_are_tolerated() {
+        let cfg: Config =
+            toml::from_str("nonsense = 1\n[thme]\naccent = \"red\"").expect("must parse");
+        assert_eq!(cfg, Config::default());
+    }
+
+    #[test]
+    fn theme_section_resolves_and_stays_absent_by_default() {
+        let cfg: Config = toml::from_str("[theme]\naccent = \"magenta\"").unwrap();
+        let (resolved, warnings) = resolve(&cfg);
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(resolved.theme.accent, ratatui::style::Color::Magenta);
+
+        let (_, warnings) = resolve(&toml::from_str::<Config>("[theme]\nup = \"banana\"").unwrap());
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+
+        // No [theme] in the file: Save must not spray an empty table in.
+        let bare = toml::to_string_pretty(&Config::default()).unwrap();
+        assert!(!bare.contains("[theme]"), "{bare}");
     }
 }

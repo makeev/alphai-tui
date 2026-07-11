@@ -1,12 +1,13 @@
 use chrono::Utc;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style, Stylize};
+use ratatui::style::{Modifier, Style, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Cell, Paragraph, Row, Table};
 
 use crate::alphai::{Article, InsiderSummary, fmt_usd, insider_key};
 use crate::app::{App, FeedKind};
+use crate::theme::Theme;
 use crate::ui::{View, ViewId};
 use crate::ui::news::{feed_bottom_hint, render_detail, render_gate, score_cell, sentiment_cell};
 
@@ -42,6 +43,7 @@ impl View for InsiderView {
             return;
         }
         let bundle = &app.feeds[&key];
+        let theme = app.theme;
         let at_edge = app.news_selected + 1 >= bundle.articles.len();
         if let Some(hint) = feed_bottom_hint(
             bundle.gated,
@@ -49,6 +51,7 @@ impl View for InsiderView {
             bundle.next_cursor.is_some(),
             app.is_loading(&key),
             at_edge,
+            &theme,
         ) {
             block = block.title_bottom(hint);
         }
@@ -60,7 +63,7 @@ impl View for InsiderView {
         ])
         .areas(area);
 
-        f.render_widget(summary_lines(bundle.insider_summary()), head);
+        f.render_widget(summary_lines(bundle.insider_summary(), &theme), head);
 
         if bundle.articles.is_empty() {
             let msg = format!("no Form 4 activity for {symbol} in the feed");
@@ -72,7 +75,7 @@ impl View for InsiderView {
         let rows: Vec<Row> = bundle
             .articles
             .iter()
-            .map(|a| filing_row(a, &symbol, now))
+            .map(|a| filing_row(a, &symbol, now, &theme))
             .collect();
         let widths = [
             Constraint::Length(4),
@@ -97,18 +100,18 @@ impl View for InsiderView {
 /// marker, title colored by trade side when known. The glyph reports the
 /// trade direction, so the deterministic title template wins over the AI
 /// sentiment call (which can rate a routine sale as neutral).
-fn filing_row(a: &Article, symbol: &str, now: chrono::DateTime<Utc>) -> Row<'static> {
+fn filing_row(a: &Article, symbol: &str, now: chrono::DateTime<Utc>, theme: &Theme) -> Row<'static> {
     let side = side_from_title(&a.original.title)
         .or_else(|| a.sentiment_for(symbol).map(str::to_string));
     let title_style = match side.as_deref() {
-        Some("positive") => Style::new().fg(Color::Green),
-        Some("negative") => Style::new().fg(Color::Red),
+        Some("positive") => Style::new().fg(theme.pos),
+        Some("negative") => Style::new().fg(theme.neg),
         _ => Style::new(),
     };
     Row::new(vec![
         Cell::from(a.age(now)).dim(),
-        score_cell(a.score()),
-        sentiment_cell(side.as_deref()),
+        score_cell(a.score(), theme),
+        sentiment_cell(side.as_deref(), theme),
         ownership_cell(a.original.ownership_form.as_deref()),
         Cell::from(a.original.title.clone()).style(title_style),
     ])
@@ -139,7 +142,7 @@ fn ownership_cell(form: Option<&str>) -> Cell<'static> {
     }
 }
 
-fn summary_lines(summary: Option<&InsiderSummary>) -> Paragraph<'static> {
+fn summary_lines(summary: Option<&InsiderSummary>, theme: &Theme) -> Paragraph<'static> {
     let Some(s) = summary else {
         return Paragraph::new(Line::from(" 30d summary unavailable").dim());
     };
@@ -158,12 +161,12 @@ fn summary_lines(summary: Option<&InsiderSummary>) -> Paragraph<'static> {
         Span::raw(format!("{} filings · ", s.total_transactions)),
         Span::styled(
             format!("▲ {} buys{buys}", s.buy_count),
-            Style::new().fg(Color::Green),
+            Style::new().fg(theme.pos),
         ),
         Span::raw(" · ").dim(),
         Span::styled(
             format!("▼ {} sells{sells}", s.sell_count),
-            Style::new().fg(Color::Red),
+            Style::new().fg(theme.neg),
         ),
         Span::raw(format!(" · {}% under 10b5-1 plans", s.pct_10b5_1)).dim(),
     ]);

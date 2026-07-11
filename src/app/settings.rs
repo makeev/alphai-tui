@@ -11,7 +11,7 @@ use std::sync::LazyLock;
 use crossterm::event::{KeyCode, KeyEvent};
 
 use crate::alphai;
-use crate::config::{self, ALPHAI_KEY_FIELD, KeyField};
+use crate::config::{self, ALPHAI_KEY_FIELD, Config, KeyField};
 use crate::source::{make_source, registry};
 
 use super::App;
@@ -162,7 +162,10 @@ impl App {
         };
     }
 
-    fn settings_save(&mut self) {
+    /// The full config Save persists: everything loaded from disk, with
+    /// only the fields this screen edits (and the live watchlist) replaced.
+    /// Config-file-only sections like `[theme]` survive a Save untouched.
+    pub(crate) fn settings_merged_config(&self) -> Config {
         let mut cfg = self.config.clone();
         cfg.source = Some(self.settings.source_choice.clone());
         // A cleared key leaves the file entirely instead of writing "".
@@ -178,6 +181,11 @@ impl App {
         // Saving persists the watchlist on screen, so a bare `alphai-tui`
         // reopens exactly this setup.
         cfg.watchlist = self.symbols.clone();
+        cfg
+    }
+
+    fn settings_save(&mut self) {
+        let cfg = self.settings_merged_config();
 
         // A swap to another source, or an edit to the selected source's own
         // keys, rebuilds it. Comparing the env-layered values means editing

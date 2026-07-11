@@ -1,5 +1,5 @@
 use ratatui::Frame;
-use ratatui::style::{Color, Modifier, Style, Stylize};
+use ratatui::style::{Modifier, Style, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Clear, Paragraph, Wrap};
 
@@ -28,7 +28,7 @@ pub fn render(f: &mut Frame, app: &App) {
         ));
         lines.push(Line::from(vec![
             Span::raw(" "),
-            Span::styled("https://alphai.io", Style::new().fg(Color::Cyan)),
+            Span::styled("https://alphai.io", Style::new().fg(app.theme.accent)),
             Span::raw(" (Account -> API keys) and paste it below."),
         ]));
         lines.push(Line::from(""));
@@ -70,7 +70,7 @@ pub fn render(f: &mut Frame, app: &App) {
         };
         let editing = selected && s.editing;
         let value_style = if editing {
-            Style::new().fg(Color::Yellow)
+            Style::new().fg(app.theme.warn)
         } else if selected {
             Style::new().add_modifier(Modifier::REVERSED)
         } else {
@@ -89,7 +89,7 @@ pub fn render(f: &mut Frame, app: &App) {
     if let Some(msg) = &s.message {
         lines.push(Line::from(Span::styled(
             format!("  {msg}"),
-            Style::new().fg(Color::Red),
+            Style::new().fg(app.theme.error),
         )));
     } else {
         lines.push(Line::from(""));
@@ -101,7 +101,7 @@ pub fn render(f: &mut Frame, app: &App) {
 
     let block = Block::bordered()
         .title(" Settings ")
-        .border_style(Style::new().fg(Color::Cyan));
+        .border_style(Style::new().fg(app.theme.accent));
     f.render_widget(
         Paragraph::new(lines).wrap(Wrap { trim: false }).block(block),
         area,

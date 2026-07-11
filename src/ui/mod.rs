@@ -8,7 +8,7 @@ pub mod table;
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style, Stylize};
+use ratatui::style::{Modifier, Style, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
@@ -109,12 +109,12 @@ pub(crate) fn centered(r: Rect, width: u16, height: u16) -> Rect {
 
 fn header_line(app: &App) -> Paragraph<'static> {
     let mut spans = vec![
-        Span::styled(" alphai-tui ", Style::new().bold().fg(Color::Cyan)),
+        Span::styled(" alphai-tui ", Style::new().bold().fg(app.theme.accent)),
         Span::raw(format!("· {} ", app.source_name)).dim(),
     ];
     for (i, view) in VIEWS.iter().enumerate() {
         let style = if i == app.view_idx {
-            Style::new().fg(Color::Black).bg(Color::Cyan)
+            Style::new().fg(app.theme.accent_text).bg(app.theme.accent)
         } else {
             Style::new().dim()
         };
@@ -151,7 +151,7 @@ fn footer_line(app: &App) -> Paragraph<'static> {
         msg.truncate(120);
         spans.push(Span::styled(
             msg,
-            Style::new().fg(Color::Red).add_modifier(Modifier::BOLD),
+            Style::new().fg(app.theme.error).add_modifier(Modifier::BOLD),
         ));
     }
     Paragraph::new(Line::from(spans))

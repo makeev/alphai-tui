@@ -11,6 +11,7 @@ use crate::app::{App, AppInit, ChartStyle, FeedBundle, NewsLayout, NewsScope};
 use crate::config::Config;
 use crate::domain::{Candle, Interval, Quote, Range, TickerData};
 use crate::source::make_source;
+use crate::theme::Theme;
 use crate::ui;
 
 fn empty_app(symbols: Vec<String>) -> App {
@@ -37,6 +38,7 @@ fn empty_app_with_cmds(
         refresh: Arc::new(Notify::new()),
         alphai_tx,
         config: Config::default(),
+        theme: Theme::default(),
         alphai_enabled: true,
         first_run: false,
     });
@@ -809,6 +811,42 @@ fn ttl_refetch_waits_for_top_row() {
     );
 }
 
+/// Empty config = the default look; a remapped accent slot recolors the
+/// brand cell in the header.
+#[test]
+fn theme_accent_recolors_the_header() {
+    use ratatui::style::Color;
+    let mut app = fake_app();
+    let fg_of_brand = |app: &mut App| {
+        let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        terminal.draw(|f| ui::draw(f, app)).unwrap();
+        terminal.backend().buffer().cell((1, 0)).unwrap().fg
+    };
+    assert_eq!(fg_of_brand(&mut app), Color::Cyan);
+    app.theme.accent = Color::Magenta;
+    assert_eq!(fg_of_brand(&mut app), Color::Magenta);
+}
+
+/// Save must start from the loaded config and replace only the settings
+/// screen's own fields, so file-only sections like [theme] survive it.
+#[test]
+fn settings_save_merge_preserves_file_only_sections() {
+    let mut app = fake_app();
+    app.config.theme = Some(std::collections::BTreeMap::from([(
+        "accent".to_string(),
+        "magenta".to_string(),
+    )]));
+    app.open_settings();
+    app.settings.key_values.insert("alphai", "ak_live_new".into());
+    let merged = app.settings_merged_config();
+    assert_eq!(
+        merged.theme.as_ref().and_then(|t| t.get("accent")).map(String::as_str),
+        Some("magenta")
+    );
+    assert_eq!(merged.keys.get("alphai").map(String::as_str), Some("ak_live_new"));
+    assert_eq!(merged.watchlist, vec!["AAPL".to_string(), "MSFT".to_string()]);
+}
+
 /// The single-copy guards must hold for every feed kind: the insider TTL
 /// refetch also waits for the reader to return to the top row.
 #[test]
@@ -880,6 +918,7 @@ fn first_run_opens_settings_with_welcome() {
         refresh: Arc::new(Notify::new()),
         alphai_tx,
         config: Config::default(),
+        theme: Theme::default(),
         alphai_enabled: false,
         first_run: true,
     });

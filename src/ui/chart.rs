@@ -9,6 +9,7 @@ use ratatui::widgets::{Axis, Block, Chart, Dataset, GraphType, Paragraph};
 use crate::app::{App, ChartStyle};
 use crate::domain::{Candle, Quote, Range, TickerData, fmt_price};
 use crate::indicators::{self, SMA_FAST, SMA_SLOW};
+use crate::theme::Theme;
 use crate::ui::{View, ViewId};
 
 pub struct ChartView;
@@ -35,8 +36,6 @@ impl View for ChartView {
     }
 }
 
-const SMA_FAST_COLOR: Color = Color::Yellow;
-const SMA_SLOW_COLOR: Color = Color::Magenta;
 const RSI_PERIOD: usize = 14;
 const RSI_PANEL_HEIGHT: u16 = 8;
 /// Below this total height the RSI panel is dropped so the price chart keeps
@@ -51,7 +50,9 @@ pub fn render_chart(f: &mut Frame, area: Rect, app: &App) {
 
     let Some(data) = app.data.get(&symbol) else {
         let msg = match app.errors.get(&symbol) {
-            Some(e) => Line::from(format!("{symbol}: {e}")).style(Style::new().fg(Color::Red)),
+            Some(e) => {
+                Line::from(format!("{symbol}: {e}")).style(Style::new().fg(app.theme.error))
+            }
             None => Line::from(format!("{symbol}: loading…")).dim(),
         };
         f.render_widget(
@@ -84,7 +85,7 @@ pub fn render_chart(f: &mut Frame, area: Rect, app: &App) {
         ChartStyle::Candles => render_price_candles(f, price_area, app, &symbol, data, cut),
     }
     if let Some(r) = rsi_area {
-        render_rsi(f, r, data, cut);
+        render_rsi(f, r, data, cut, &app.theme);
     }
 }
 
@@ -101,18 +102,24 @@ fn visible_from(candles: &[Candle], range: Range) -> usize {
     cut.min(candles.len().saturating_sub(2))
 }
 
-fn dir_color(q: &Quote) -> Color {
+fn dir_color(q: &Quote, theme: &Theme) -> Color {
     match q.change() {
-        Some(c) if c < 0.0 => Color::Red,
-        Some(_) => Color::Green,
-        None => Color::Gray,
+        Some(c) if c < 0.0 => theme.down,
+        Some(_) => theme.up,
+        None => theme.flat,
     }
 }
 
 /// Legend labels appear only for SMA lines that actually have points on
 /// screen: an SMA needs `period` candles of history, which short series
 /// (finnhub's growing synthetic one, thin symbols) may not have yet.
-fn chart_title(symbol: &str, q: &Quote, data: &TickerData, show_sma: bool) -> Line<'static> {
+fn chart_title(
+    symbol: &str,
+    q: &Quote,
+    data: &TickerData,
+    show_sma: bool,
+    theme: &Theme,
+) -> Line<'static> {
     let change_str = match (q.change(), q.change_pct()) {
         (Some(c), Some(p)) => format!("{c:+.2} ({p:+.2}%)"),
         _ => "—".into(),
@@ -124,10 +131,10 @@ fn chart_title(symbol: &str, q: &Quote, data: &TickerData, show_sma: bool) -> Li
             fmt_price(q.price),
             q.currency.as_deref().unwrap_or("")
         )),
-        Span::styled(format!("{change_str} "), Style::new().fg(dir_color(q))),
+        Span::styled(format!("{change_str} "), Style::new().fg(dir_color(q, theme))),
     ];
     if show_sma {
-        for (period, color) in [(SMA_FAST, SMA_FAST_COLOR), (SMA_SLOW, SMA_SLOW_COLOR)] {
+        for (period, color) in [(SMA_FAST, theme.sma_fast), (SMA_SLOW, theme.sma_slow)] {
             if data.candles.len() >= period {
                 spans.push(Span::styled(format!("SMA{period} "), Style::new().fg(color)));
             }
@@ -208,11 +215,11 @@ fn render_price_line(
             Dataset::default()
                 .marker(symbols::Marker::Dot)
                 .graph_type(GraphType::Line)
-                .style(Style::new().fg(Color::DarkGray))
+                .style(Style::new().fg(app.theme.ref_line))
                 .data(&prev_close_points),
         );
     }
-    for (pts, color) in [(&sma_slow, SMA_SLOW_COLOR), (&sma_fast, SMA_FAST_COLOR)] {
+    for (pts, color) in [(&sma_slow, app.theme.sma_slow), (&sma_fast, app.theme.sma_fast)] {
         if !pts.is_empty() {
             datasets.push(
                 Dataset::default()
@@ -227,7 +234,7 @@ fn render_price_line(
         Dataset::default()
             .marker(symbols::Marker::Braille)
             .graph_type(GraphType::Line)
-            .style(Style::new().fg(dir_color(q)))
+            .style(Style::new().fg(dir_color(q, &app.theme)))
             .data(&points),
     );
 
@@ -245,7 +252,7 @@ fn render_price_line(
     ];
 
     let chart = Chart::new(datasets)
-        .block(Block::bordered().title(chart_title(symbol, q, data, app.show_sma)))
+        .block(Block::bordered().title(chart_title(symbol, q, data, app.show_sma, &app.theme)))
         .x_axis(
             Axis::default()
                 .bounds([0.0, x_hi])
@@ -276,7 +283,7 @@ fn render_price_candles(
 ) {
     let q = &data.quote;
     let visible = &data.candles[cut..];
-    let block = Block::bordered().title(chart_title(symbol, q, data, app.show_sma));
+    let block = Block::bordered().title(chart_title(symbol, q, data, app.show_sma, &app.theme));
     let inner = block.inner(area);
     f.render_widget(block, area);
 
@@ -334,14 +341,14 @@ fn render_price_candles(
         let row = (scale(pc, y_lo, y_hi, plot.height as usize * 2) / 2) as u16;
         for x in (plot.x..plot.x + plot.width).step_by(2) {
             if let Some(cell) = buf.cell_mut((x, plot.y + row)) {
-                cell.set_char('╌').set_fg(Color::DarkGray);
+                cell.set_char('╌').set_fg(app.theme.ref_line);
             }
         }
     }
 
     for (i, c) in display.iter().enumerate() {
         let prev_close = (i > 0).then(|| display[i - 1].close);
-        let color = candle_color(c, prev_close);
+        let color = candle_color(c, prev_close, &app.theme);
         let body_x = slot_x(i) + (slot - body_w);
         let wick_x = body_x + body_w / 2;
         for (row, ch) in candle_column(c, y_lo, y_hi, plot.height) {
@@ -366,7 +373,7 @@ fn render_price_candles(
     // y-range by warm-up history are skipped, not pinned to the edge.
     if app.show_sma {
         let closes: Vec<f64> = data.candles.iter().map(|c| c.close).collect();
-        for (period, color) in [(SMA_SLOW, SMA_SLOW_COLOR), (SMA_FAST, SMA_FAST_COLOR)] {
+        for (period, color) in [(SMA_SLOW, app.theme.sma_slow), (SMA_FAST, app.theme.sma_fast)] {
             let line = indicators::sma(&closes, period);
             for (i, &raw) in sample_idx.iter().enumerate() {
                 let Some(v) = line[cut + raw] else { continue };
@@ -462,16 +469,16 @@ fn body_only(ch: char) -> char {
 
 /// Finnhub synthesizes flat o=h=l=c candles, so a doji falls back to the
 /// direction against the previous candle's close.
-fn candle_color(c: &Candle, prev_close: Option<f64>) -> Color {
+fn candle_color(c: &Candle, prev_close: Option<f64>, theme: &Theme) -> Color {
     if c.close > c.open {
-        Color::Green
+        theme.up
     } else if c.close < c.open {
-        Color::Red
+        theme.down
     } else {
         match prev_close {
-            Some(p) if c.close < p => Color::Red,
-            Some(_) => Color::Green,
-            None => Color::Gray,
+            Some(p) if c.close < p => theme.down,
+            Some(_) => theme.up,
+            None => theme.flat,
         }
     }
 }
@@ -508,7 +515,7 @@ fn aggregate(chunk: &[Candle]) -> Candle {
 
 // -- RSI panel ----------------------------------------------------------------
 
-fn render_rsi(f: &mut Frame, area: Rect, data: &TickerData, cut: usize) {
+fn render_rsi(f: &mut Frame, area: Rect, data: &TickerData, cut: usize, theme: &Theme) {
     let closes: Vec<f64> = data.candles.iter().map(|c| c.close).collect();
     let rsi = indicators::rsi(&closes, RSI_PERIOD);
     let Some(last) = rsi.last().copied().flatten() else {
@@ -539,7 +546,7 @@ fn render_rsi(f: &mut Frame, area: Rect, data: &TickerData, cut: usize) {
             Dataset::default()
                 .marker(symbols::Marker::Dot)
                 .graph_type(GraphType::Line)
-                .style(Style::new().fg(Color::DarkGray))
+                .style(Style::new().fg(theme.ref_line))
                 .data(refline),
         );
     }
@@ -547,16 +554,17 @@ fn render_rsi(f: &mut Frame, area: Rect, data: &TickerData, cut: usize) {
         Dataset::default()
             .marker(symbols::Marker::Braille)
             .graph_type(GraphType::Line)
-            .style(Style::new().fg(Color::Cyan))
+            .style(Style::new().fg(theme.rsi_line))
             .data(&points),
     );
 
+    // Overbought reads bearish, oversold bullish; between them, neutral.
     let val_color = if last >= 70.0 {
-        Color::Red
+        theme.down
     } else if last <= 30.0 {
-        Color::Green
+        theme.up
     } else {
-        Color::Gray
+        theme.flat
     };
     let title = Line::from(vec![
         Span::styled(format!(" RSI({RSI_PERIOD}) "), Style::new().bold()),
@@ -647,12 +655,13 @@ mod tests {
 
     #[test]
     fn candle_colors() {
-        assert_eq!(candle_color(&candle(1.0, 2.0, 1.0, 2.0), None), Color::Green);
-        assert_eq!(candle_color(&candle(2.0, 2.0, 1.0, 1.0), None), Color::Red);
-        // Doji: direction against the previous close, gray without one.
+        let t = Theme::default();
+        assert_eq!(candle_color(&candle(1.0, 2.0, 1.0, 2.0), None, &t), t.up);
+        assert_eq!(candle_color(&candle(2.0, 2.0, 1.0, 1.0), None, &t), t.down);
+        // Doji: direction against the previous close, flat without one.
         let doji = candle(5.0, 5.0, 5.0, 5.0);
-        assert_eq!(candle_color(&doji, Some(6.0)), Color::Red);
-        assert_eq!(candle_color(&doji, Some(4.0)), Color::Green);
-        assert_eq!(candle_color(&doji, None), Color::Gray);
+        assert_eq!(candle_color(&doji, Some(6.0), &t), t.down);
+        assert_eq!(candle_color(&doji, Some(4.0), &t), t.up);
+        assert_eq!(candle_color(&doji, None, &t), t.flat);
     }
 }

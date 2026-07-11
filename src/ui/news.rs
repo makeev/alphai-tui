@@ -1,12 +1,13 @@
 use chrono::{DateTime, Utc};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style, Stylize};
+use ratatui::style::{Modifier, Style, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Cell, Paragraph, Row, Table, Wrap};
 
 use crate::alphai::Article;
 use crate::app::{App, FeedKind, NewsScope};
+use crate::theme::Theme;
 use crate::ui::{View, ViewId};
 
 pub struct NewsView;
@@ -71,6 +72,7 @@ impl View for NewsView {
             }
         };
 
+        let theme = app.theme;
         let at_edge = app.news_selected + 1 >= bundle.articles.len();
         if let Some(hint) = feed_bottom_hint(
             bundle.gated,
@@ -78,6 +80,7 @@ impl View for NewsView {
             bundle.next_cursor.is_some(),
             app.is_loading(&key),
             at_edge,
+            &theme,
         ) {
             block = block.title_bottom(hint);
         }
@@ -86,7 +89,7 @@ impl View for NewsView {
         let rows: Vec<Row> = bundle
             .articles
             .iter()
-            .map(|a| article_row(a, scope, &symbol, now, full))
+            .map(|a| article_row(a, scope, &symbol, now, full, &theme))
             .collect();
 
         let table = Table::new(rows, article_widths(scope, full))
@@ -103,6 +106,7 @@ impl View for NewsView {
             bundle.articles.get(app.news_selected),
             &symbol,
             &mut app.card_scroll,
+            &theme,
         );
     }
 }
@@ -117,15 +121,16 @@ pub(crate) fn feed_bottom_hint(
     has_more: bool,
     loading: bool,
     at_edge: bool,
+    theme: &Theme,
 ) -> Option<Line<'static>> {
     if gated {
         return Some(
             Line::from(format!(" {} ", crate::alphai::ARCHIVE_GATE_MSG))
-                .style(Style::new().fg(Color::Yellow)),
+                .style(Style::new().fg(theme.warn)),
         );
     }
     if let Some(e) = page_error {
-        return Some(Line::from(format!(" {e} ")).style(Style::new().fg(Color::Red)));
+        return Some(Line::from(format!(" {e} ")).style(Style::new().fg(theme.error)));
     }
     if loading {
         return Some(Line::from(" loading… ").dim());
@@ -135,7 +140,7 @@ pub(crate) fn feed_bottom_hint(
     }
     let hint = Line::from(" ↓ load older articles ");
     Some(if at_edge {
-        hint.style(Style::new().fg(Color::Cyan))
+        hint.style(Style::new().fg(theme.accent))
     } else {
         hint.dim()
     })
@@ -178,7 +183,7 @@ pub fn render_panel(f: &mut Frame, area: Rect, app: &mut App) {
     let rows: Vec<Row> = bundle
         .articles
         .iter()
-        .map(|a| article_row(a, scope, app.selected_symbol(), now, false))
+        .map(|a| article_row(a, scope, app.selected_symbol(), now, false, &app.theme))
         .collect();
     f.render_widget(
         Table::new(rows, article_widths(scope, false)).block(block),
@@ -195,13 +200,14 @@ fn article_row(
     symbol: &str,
     now: DateTime<Utc>,
     full: bool,
+    theme: &Theme,
 ) -> Row<'static> {
-    let mut cells = vec![Cell::from(a.age(now)).dim(), score_cell(a.score())];
+    let mut cells = vec![Cell::from(a.age(now)).dim(), score_cell(a.score(), theme)];
     if full {
         cells.push(novelty_cell(a.novelty()));
     }
     if scope == NewsScope::Ticker {
-        cells.push(sentiment_cell(a.sentiment_for(symbol)));
+        cells.push(sentiment_cell(a.sentiment_for(symbol), theme));
     } else {
         let tickers: Vec<&str> = a.enrichment.tickers.iter().take(2).map(String::as_str).collect();
         cells.push(Cell::from(tickers.join(",")).bold());
@@ -252,11 +258,11 @@ fn head_line(app: &App, sentiment: Option<&crate::alphai::SentimentSummary>) -> 
     };
     Paragraph::new(Line::from(vec![
         Span::raw(format!(" {}d sentiment  ", s.days)).dim(),
-        Span::styled(format!("▲ {} bullish", s.bullish), Style::new().fg(Color::Green)),
+        Span::styled(format!("▲ {} bullish", s.bullish), Style::new().fg(app.theme.pos)),
         Span::raw(" · ").dim(),
         Span::raw(format!("{} neutral", s.neutral)).dim(),
         Span::raw(" · ").dim(),
-        Span::styled(format!("▼ {} bearish", s.bearish), Style::new().fg(Color::Red)),
+        Span::styled(format!("▼ {} bearish", s.bearish), Style::new().fg(app.theme.neg)),
         Span::raw(format!("  ({} scored)", s.total)).dim(),
     ]))
 }
@@ -281,7 +287,7 @@ pub fn render_gate(f: &mut Frame, area: Rect, block: &Block, app: &App, key: &st
             Line::from(""),
             Line::from(Span::styled(
                 format!("  {err}"),
-                Style::new().fg(Color::Red),
+                Style::new().fg(app.theme.error),
             )),
             Line::from(""),
             Line::from("  press r to retry").dim(),
@@ -374,19 +380,19 @@ pub fn meta_line(a: &Article, ticker: &str) -> Vec<String> {
     meta
 }
 
-pub fn score_cell(score: i64) -> Cell<'static> {
+pub fn score_cell(score: i64, theme: &Theme) -> Cell<'static> {
     let style = match score {
-        8..=10 => Style::new().fg(Color::Yellow).bold(),
+        8..=10 => Style::new().fg(theme.score_high).bold(),
         6..=7 => Style::new(),
         _ => Style::new().dim(),
     };
     Cell::from(format!("{score:>2}")).style(style)
 }
 
-pub(crate) fn sentiment_cell(sentiment: Option<&str>) -> Cell<'static> {
+pub(crate) fn sentiment_cell(sentiment: Option<&str>, theme: &Theme) -> Cell<'static> {
     match sentiment {
-        Some("positive") => Cell::from("▲").style(Style::new().fg(Color::Green)),
-        Some("negative") => Cell::from("▼").style(Style::new().fg(Color::Red)),
+        Some("positive") => Cell::from("▲").style(Style::new().fg(theme.pos)),
+        Some("negative") => Cell::from("▼").style(Style::new().fg(theme.neg)),
         Some(_) => Cell::from("·").dim(),
         None => Cell::from(" "),
     }

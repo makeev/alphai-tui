@@ -5,6 +5,7 @@ mod domain;
 mod indicators;
 mod poller;
 mod source;
+mod theme;
 mod ui;
 
 use std::sync::{Arc, RwLock};
@@ -52,6 +53,12 @@ struct Args {
 fn main() -> Result<()> {
     let args = Args::parse();
     let (cfg, cfg_existed) = config::load();
+    // Validation warnings go to stderr before the TUI takes the terminal,
+    // so they stay readable in scrollback after exit.
+    let (resolved, warnings) = config::resolve(&cfg);
+    for w in &warnings {
+        eprintln!("warning: {w}");
+    }
 
     let symbols: Vec<String> = if !args.symbols.is_empty() {
         args.symbols.iter().map(|s| s.to_uppercase()).collect()
@@ -111,6 +118,7 @@ fn main() -> Result<()> {
         refresh,
         alphai_tx,
         config: cfg,
+        theme: resolved.theme,
         alphai_enabled: alphai_key.is_some(),
         first_run: !cfg_existed,
     });

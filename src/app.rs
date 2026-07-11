@@ -23,6 +23,7 @@ use crate::alphai::{self, Article};
 use crate::config::Config;
 use crate::domain::{Interval, Range, TickerData};
 use crate::poller::{SharedParams, SharedSource, SourceEvent};
+use crate::theme::Theme;
 use crate::ui;
 
 /// How the price chart draws history: candlesticks or the classic close line.
@@ -120,6 +121,7 @@ pub struct AppInit {
     pub refresh: Arc<Notify>,
     pub alphai_tx: UnboundedSender<alphai::Cmd>,
     pub config: Config,
+    pub theme: Theme,
     pub alphai_enabled: bool,
     pub first_run: bool,
 }
@@ -153,6 +155,7 @@ pub struct App {
     pub article_overlay: ArticleOverlay,
     pub settings: SettingsState,
     pub config: Config,
+    pub theme: Theme,
     source: SharedSource,
     params: SharedParams,
     inflight: HashSet<String>,
@@ -188,6 +191,7 @@ impl App {
             article_overlay: ArticleOverlay::default(),
             settings: SettingsState::default(),
             config: init.config,
+            theme: init.theme,
             source: init.source,
             params: init.params,
             inflight: HashSet::new(),
