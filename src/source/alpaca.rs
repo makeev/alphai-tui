@@ -1,7 +1,6 @@
 use std::collections::HashMap;
-use std::time::Duration;
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Result};
 use async_trait::async_trait;
 use chrono::{SecondsFormat, Utc};
 use reqwest::StatusCode;
@@ -10,7 +9,7 @@ use serde::Deserialize;
 use serde::de::DeserializeOwned;
 
 use crate::domain::{Candle, Interval, Quote, Range, TickerData};
-use crate::source::DataSource;
+use crate::source::{DataSource, candle_from_ohlc, http, sort_ascending};
 
 pub const DEFAULT_DATA_URL: &str = "https://data.alpaca.markets";
 
@@ -37,11 +36,7 @@ impl Alpaca {
             "APCA-API-SECRET-KEY",
             HeaderValue::from_str(&secret).context("invalid Alpaca secret")?,
         );
-        let client = reqwest::Client::builder()
-            .user_agent(concat!("alphai-tui/", env!("CARGO_PKG_VERSION")))
-            .default_headers(headers)
-            .timeout(Duration::from_secs(10))
-            .build()?;
+        let client = http::client_with(http::APP_UA, Some(headers))?;
         let base = std::env::var("ALPACA_DATA_URL")
             .ok()
             .filter(|u| !u.trim().is_empty())
@@ -56,19 +51,8 @@ impl Alpaca {
     }
 
     async fn get_json<T: DeserializeOwned>(&self, path: &str, query: &[(&str, &str)]) -> Result<T> {
-        let resp = self
-            .client
-            .get(format!("{}{}", self.base, path))
-            .query(query)
-            .send()
-            .await
-            .context("request failed")?;
-        let status = resp.status();
-        if !status.is_success() {
-            let body = resp.text().await.unwrap_or_default();
-            bail!("{}", error_message(status, &body));
-        }
-        resp.json().await.context("bad JSON from alpaca")
+        let url = format!("{}{}", self.base, path);
+        http::get_json(&self.client, "alpaca", &url, query, error_message).await
     }
 
     async fn fetch_stock(&self, symbol: &str, timeframe: &str, start: &str) -> Result<TickerData> {
@@ -120,7 +104,7 @@ impl Alpaca {
             .snapshots
             .unwrap_or_default()
             .remove(pair)
-            .ok_or_else(|| anyhow!("no data for '{symbol}' (unknown symbol?)"))?;
+            .ok_or_else(|| http::unknown_symbol(symbol, None))?;
         let bars = bars?.bars.unwrap_or_default().remove(pair).unwrap_or_default();
         Ok(TickerData {
             quote: quote_from_snapshot(symbol, &snap)?,
@@ -180,7 +164,7 @@ fn quote_from_snapshot(symbol: &str, snap: &Snapshot) -> Result<Quote> {
         .or_else(|| close(&snap.minute_bar))
         .or_else(|| close(&snap.daily_bar));
     let Some(price) = price else {
-        bail!("no data for '{symbol}' (unknown symbol?)");
+        return Err(http::unknown_symbol(symbol, None));
     };
     Ok(Quote {
         symbol: symbol.to_string(),
@@ -191,33 +175,24 @@ fn quote_from_snapshot(symbol: &str, snap: &Snapshot) -> Result<Quote> {
     })
 }
 
-/// Bars arrive newest-first (`sort=desc`); the UI assumes ascending ts, so
-/// reverse after parsing. Bars without a close are dropped.
+/// Bars arrive newest-first (`sort=desc`); the UI assumes ascending ts.
+/// Bars without a parseable timestamp or a close are dropped.
 fn candles_from_desc(bars: Vec<AlpacaBar>) -> Vec<Candle> {
     let mut candles: Vec<Candle> = bars
         .into_iter()
         .filter_map(|b| {
             let ts = chrono::DateTime::parse_from_rfc3339(&b.t).ok()?.timestamp();
-            let close = b.c?;
-            Some(Candle {
-                ts,
-                open: b.o.unwrap_or(close),
-                high: b.h.unwrap_or(close),
-                low: b.l.unwrap_or(close),
-                close,
-                volume: b.v,
-            })
+            candle_from_ohlc(ts, b.o, b.h, b.l, b.c, b.v)
         })
         .collect();
-    candles.reverse();
+    sort_ascending(&mut candles);
     candles
 }
 
 fn error_message(status: StatusCode, body: &str) -> String {
-    let msg = serde_json::from_str::<ErrorBody>(body)
-        .ok()
-        .and_then(|e| e.message)
-        .unwrap_or_else(|| body.chars().take(120).collect());
+    // Bad keys answer 401 with an nginx HTML page: body_message returns None
+    // there and the snippet fallback keeps the raw noise out of the 401 arm.
+    let msg = http::body_message(body).unwrap_or_else(|| http::snippet(body));
     // The data-plan error ("subscription does not permit querying recent SIP
     // data") comes back as 403 from snapshots and 422 from other endpoints;
     // it must not be mistaken for a bad key. The message itself is clear,
@@ -231,9 +206,7 @@ fn error_message(status: StatusCode, body: &str) -> String {
              (free keys: alpaca.markets)"
                 .into()
         }
-        429 => "Alpaca rate limit hit (200 req/min on the free plan), \
-                raise --every or drop tickers"
-            .into(),
+        429 => http::rate_limit_msg("Alpaca rate limit hit (200 req/min on the free plan)"),
         _ => format!("Alpaca API {status}: {msg}"),
     }
 }
@@ -286,12 +259,6 @@ struct CryptoSnapshots {
 #[serde(default)]
 struct CryptoBars {
     bars: Option<HashMap<String, Vec<AlpacaBar>>>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(default)]
-struct ErrorBody {
-    message: Option<String>,
 }
 
 #[cfg(test)]

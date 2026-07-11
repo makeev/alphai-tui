@@ -1,13 +1,13 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
-use std::time::Duration;
 
-use anyhow::{Context, Result, bail};
+use anyhow::Result;
 use async_trait::async_trait;
+use reqwest::StatusCode;
 use serde::Deserialize;
 
 use crate::domain::{Candle, Interval, Quote, Range, TickerData};
-use crate::source::DataSource;
+use crate::source::{DataSource, http};
 
 /// Cap on the per-symbol synthetic history (~2.5h at 15s polls).
 const MAX_HISTORY: usize = 600;
@@ -24,11 +24,8 @@ pub struct Finnhub {
 
 impl Finnhub {
     pub fn new(token: String) -> Result<Self> {
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(10))
-            .build()?;
         Ok(Self {
-            client,
+            client: http::client()?,
             token,
             history: Mutex::new(HashMap::new()),
         })
@@ -42,23 +39,26 @@ impl DataSource for Finnhub {
     }
 
     async fn fetch(&self, symbol: &str, _range: Range, _interval: Interval) -> Result<TickerData> {
-        let resp = self
-            .client
-            .get("https://finnhub.io/api/v1/quote")
-            .query(&[("symbol", symbol), ("token", &self.token)])
-            .send()
-            .await
-            .context("request failed")?;
-
-        if resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
-            bail!("finnhub rate limit hit (60 req/min free tier), raise --every or drop tickers");
-        }
-        let resp = resp.error_for_status().context("finnhub returned an error status")?;
-        let q: FhQuote = resp.json().await.context("bad JSON from finnhub")?;
+        let q: FhQuote = http::get_json(
+            &self.client,
+            "finnhub",
+            "https://finnhub.io/api/v1/quote",
+            &[("symbol", symbol), ("token", &self.token)],
+            |status, _| match status {
+                StatusCode::TOO_MANY_REQUESTS => {
+                    http::rate_limit_msg("finnhub rate limit hit (60 req/min free tier)")
+                }
+                _ => format!("finnhub API {status}"),
+            },
+        )
+        .await?;
 
         // Finnhub answers unknown symbols with HTTP 200 and all-zero fields.
         if q.c == 0.0 && q.pc == 0.0 && q.t == 0 {
-            bail!("no data for '{symbol}' (unknown symbol? crypto needs EXCHANGE:PAIR, e.g. BINANCE:BTCUSDT)");
+            return Err(http::unknown_symbol(
+                symbol,
+                Some("crypto needs EXCHANGE:PAIR, e.g. BINANCE:BTCUSDT"),
+            ));
         }
 
         let candle = Candle {

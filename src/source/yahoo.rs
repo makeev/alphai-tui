@@ -1,11 +1,14 @@
-use std::time::Duration;
-
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Result, anyhow, bail};
 use async_trait::async_trait;
 use serde::Deserialize;
 
 use crate::domain::{Candle, Interval, Quote, Range, TickerData};
-use crate::source::DataSource;
+use crate::source::{DataSource, candle_from_ohlc, http};
+
+/// Yahoo blocks obvious non-browser agents, so this client masquerades as
+/// Chrome. Do not swap in `http::APP_UA`.
+const BROWSER_UA: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 \
+                          (KHTML, like Gecko) Chrome/124.0 Safari/537.36";
 
 /// Yahoo Finance v8 chart endpoint: no API key, ~15 min delayed quotes.
 /// One request per symbol returns both the latest price and the candle
@@ -16,14 +19,9 @@ pub struct Yahoo {
 
 impl Yahoo {
     pub fn new() -> Result<Self> {
-        let client = reqwest::Client::builder()
-            .user_agent(
-                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 \
-                 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
-            )
-            .timeout(Duration::from_secs(10))
-            .build()?;
-        Ok(Self { client })
+        Ok(Self {
+            client: http::client_with(BROWSER_UA, None)?,
+        })
     }
 }
 
@@ -35,17 +33,17 @@ impl DataSource for Yahoo {
 
     async fn fetch(&self, symbol: &str, range: Range, interval: Interval) -> Result<TickerData> {
         let url = format!("https://query1.finance.yahoo.com/v8/finance/chart/{symbol}");
-        let resp = self
-            .client
-            .get(&url)
-            .query(&[("range", range.as_str()), ("interval", interval.as_str())])
-            .send()
-            .await
-            .context("request failed")?
-            .error_for_status()
-            .context("yahoo returned an error status")?;
-
-        let body: ChartResponse = resp.json().await.context("bad JSON from yahoo")?;
+        let body: ChartResponse = http::get_json(
+            &self.client,
+            "yahoo",
+            &url,
+            &[("range", range.as_str()), ("interval", interval.as_str())],
+            |status, body| match http::body_message(body) {
+                Some(msg) => format!("yahoo API {status}: {msg}"),
+                None => format!("yahoo API {status}"),
+            },
+        )
+        .await?;
 
         if let Some(err) = body.chart.error {
             bail!(
@@ -108,17 +106,15 @@ fn build_candles(result: &ChartResult) -> Vec<Candle> {
         .iter()
         .enumerate()
         .filter_map(|(i, &ts)| {
-            // Halted/empty minutes come back as nulls; a candle without a
-            // close is useless for us, so drop it.
-            let close = series(&quote.close, i)?;
-            Some(Candle {
+            // Halted/empty minutes come back as null closes and are dropped.
+            candle_from_ohlc(
                 ts,
-                open: series(&quote.open, i).unwrap_or(close),
-                high: series(&quote.high, i).unwrap_or(close),
-                low: series(&quote.low, i).unwrap_or(close),
-                close,
-                volume: series(&quote.volume, i),
-            })
+                series(&quote.open, i),
+                series(&quote.high, i),
+                series(&quote.low, i),
+                series(&quote.close, i),
+                series(&quote.volume, i),
+            )
         })
         .collect()
 }
