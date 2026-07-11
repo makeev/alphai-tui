@@ -71,6 +71,12 @@ use the [AlphaAI](https://alphai.io) API and need a free key.
 
 ## Install
 
+Homebrew (macOS and Linux):
+
+```sh
+brew install makeev/tap/alphai-tui
+```
+
 Prebuilt binaries for macOS, Linux and Windows, no Rust needed:
 
 ```sh
