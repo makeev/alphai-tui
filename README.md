@@ -248,7 +248,9 @@ src/
   alphai.rs      AlphaAI API client + demand-driven fetch task (TTL cache)
   indicators.rs  SMA and RSI (Wilder smoothing)
   poller.rs      fetches all symbols concurrently on a timer -> mpsc channel
-  app.rs         App state + key handling + event loop + settings logic
+  app.rs         App state, event loop, key handling
+    app/feeds.rs     feed cache and every AlphaAI request-budget guard
+    app/settings.rs  settings overlay state, rows derived from the registry
   ui/            View trait + implementations
     table.rs     watchlist table
     chart.rs     candlestick + line chart, SMA overlays, RSI panel

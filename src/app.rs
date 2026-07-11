@@ -1,6 +1,15 @@
-use std::collections::{BTreeMap, HashMap, HashSet};
-use std::sync::{Arc, LazyLock};
-use std::time::Instant;
+//! App state and the event loop. Feed caching with its request-budget
+//! guards lives in `feeds`, the settings overlay in `settings`; views under
+//! `crate::ui` are stateless renderers over `&mut App`.
+
+mod feeds;
+mod settings;
+
+pub use feeds::{FeedBundle, FeedKind};
+pub use settings::{SettingsRow, SettingsState, settings_rows};
+
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use anyhow::Result;
 use chrono::{DateTime, Local};
@@ -10,127 +19,17 @@ use ratatui::widgets::TableState;
 use tokio::sync::Notify;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
-use crate::alphai::{self, Article, FeedPayload, InsiderSummary, SentimentSummary};
-use crate::config::{self, ALPHAI_KEY_FIELD, Config, KeyField};
+use crate::alphai::{self, Article};
+use crate::config::Config;
 use crate::domain::{Interval, Range, TickerData};
 use crate::poller::{SharedParams, SharedSource, SourceEvent};
-use crate::source::{make_source, registry};
 use crate::ui;
-
-/// Cached pageable feed for one cache key: a symbol, `alphai::MARKET_KEY`
-/// or `alphai::TRENDING_KEY` for news, `ins:SYM` for insider — the same key
-/// `inflight` and `alphai_errors` use.
-pub struct FeedBundle {
-    pub articles: Vec<Article>,
-    /// Side payload of the head fetch (pages never refetch it).
-    pub side: Option<FeedPayload>,
-    /// Cursor for the next (older) page; None = end of the feed (or gated).
-    pub next_cursor: Option<String>,
-    /// Last load-more failure, shown under the list without dropping it.
-    pub page_error: Option<String>,
-    /// Paging hit the plan's archive horizon: stop offering more pages.
-    pub gated: bool,
-    pub fetched: Instant,
-}
-
-impl FeedBundle {
-    pub fn new(
-        articles: Vec<Article>,
-        side: Option<FeedPayload>,
-        next_cursor: Option<String>,
-    ) -> Self {
-        Self {
-            articles,
-            side,
-            next_cursor,
-            page_error: None,
-            gated: false,
-            fetched: Instant::now(),
-        }
-    }
-
-    /// Typed side-payload accessors: a view cannot silently read the wrong
-    /// rollup off a mismatched bundle, it just renders no rollup.
-    pub fn sentiment(&self) -> Option<&SentimentSummary> {
-        match &self.side {
-            Some(FeedPayload::Sentiment(s)) => Some(s),
-            _ => None,
-        }
-    }
-
-    pub fn insider_summary(&self) -> Option<&InsiderSummary> {
-        match &self.side {
-            Some(FeedPayload::Insider(s)) => Some(s),
-            _ => None,
-        }
-    }
-}
-
-/// State of the settings overlay; the cursor walks `settings_rows()`.
-#[derive(Default)]
-pub struct SettingsState {
-    pub open: bool,
-    /// True on the very first launch (no config file yet): the overlay opens
-    /// by itself and shows a short welcome text.
-    pub first_run: bool,
-    pub cursor: usize,
-    pub editing: bool,
-    pub input: String,
-    pub source_choice: String,
-    /// Edit buffers for the `Key` rows, by `KeyField::config_name`.
-    pub key_values: BTreeMap<&'static str, String>,
-    /// "alphai" (article page on alphai.io) or "original" (source site).
-    pub news_open_choice: String,
-    pub message: Option<String>,
-}
-
-/// One row of the settings overlay, in cursor order.
-#[derive(Clone, Copy)]
-pub enum SettingsRow {
-    /// The price-source picker (cycles the registry).
-    SourceChoice,
-    /// An editable, masked credential.
-    Key(&'static KeyField),
-    /// Where Enter opens a news article.
-    NewsOpen,
-    /// The save button.
-    Save,
-}
-
-/// Rows of the settings overlay: the source picker, every registered
-/// source's key fields in registry order, the app-level AlphaAI key, the
-/// news-open toggle, Save. Derived from the registry, so a new source's key
-/// rows appear (and persist, and mask) with no settings-code changes.
-pub fn settings_rows() -> &'static [SettingsRow] {
-    static ROWS: LazyLock<Vec<SettingsRow>> = LazyLock::new(|| {
-        let mut rows = vec![SettingsRow::SourceChoice];
-        rows.extend(
-            registry::SOURCES
-                .iter()
-                .flat_map(|s| s.key_fields)
-                .map(SettingsRow::Key),
-        );
-        rows.push(SettingsRow::Key(&ALPHAI_KEY_FIELD));
-        rows.push(SettingsRow::NewsOpen);
-        rows.push(SettingsRow::Save);
-        rows
-    });
-    &ROWS
-}
 
 /// How the price chart draws history: candlesticks or the classic close line.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ChartStyle {
     Candles,
     Line,
-}
-
-/// The AlphaAI feeds a view can display (`View::feed_shown`). Trending is
-/// not a kind: it is a news scope, a different cache key of the news feed.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum FeedKind {
-    News,
-    Insider,
 }
 
 /// News feed scope the f key cycles: the selected ticker, the whole market
@@ -312,76 +211,6 @@ impl App {
         ui::VIEWS[self.view_idx].id()
     }
 
-    /// Cache key the News view is currently looking at.
-    pub fn news_cache_key(&self) -> String {
-        match self.news_scope {
-            NewsScope::Ticker => self.selected_symbol().to_string(),
-            NewsScope::Market => alphai::MARKET_KEY.to_string(),
-            NewsScope::Trending => alphai::TRENDING_KEY.to_string(),
-        }
-    }
-
-    /// Whether a fetch for this cache key is in flight (drives the
-    /// "loading…" hint under the feed lists).
-    pub(crate) fn is_loading(&self, key: &str) -> bool {
-        self.inflight.contains(key)
-    }
-
-    /// The feed the visible view displays: (cache key, kind). The single
-    /// source of truth behind the demand-driven fetch, pagination, refresh
-    /// and the article accessors.
-    fn active_feed(&self) -> Option<(String, FeedKind)> {
-        let kind = ui::VIEWS[self.view_idx].feed_shown()?;
-        let key = match kind {
-            FeedKind::News => self.news_cache_key(),
-            FeedKind::Insider => alphai::insider_key(self.selected_symbol()),
-        };
-        Some((key, kind))
-    }
-
-    /// Head fetch (first page plus side payload) for a feed of `kind`.
-    fn head_cmd(&self, kind: FeedKind) -> alphai::Cmd {
-        match kind {
-            FeedKind::News => match self.news_scope {
-                NewsScope::Ticker => alphai::Cmd::FetchNews {
-                    symbol: Some(self.selected_symbol().to_string()),
-                    cursor: None,
-                },
-                NewsScope::Market => alphai::Cmd::FetchNews { symbol: None, cursor: None },
-                NewsScope::Trending => alphai::Cmd::FetchTrending,
-            },
-            FeedKind::Insider => alphai::Cmd::FetchInsider {
-                symbol: self.selected_symbol().to_string(),
-                cursor: None,
-            },
-        }
-    }
-
-    /// Next-page fetch continuing an already shown feed.
-    fn page_cmd(&self, kind: FeedKind, cursor: String) -> alphai::Cmd {
-        match kind {
-            FeedKind::News => alphai::Cmd::FetchNews {
-                symbol: (self.news_scope == NewsScope::Ticker)
-                    .then(|| self.selected_symbol().to_string()),
-                cursor: Some(cursor),
-            },
-            FeedKind::Insider => alphai::Cmd::FetchInsider {
-                symbol: self.selected_symbol().to_string(),
-                cursor: Some(cursor),
-            },
-        }
-    }
-
-    /// Articles behind the current News/Insider view, if fetched. The Split
-    /// strip is read-only and exposes none (v and Enter stay inert there).
-    pub fn visible_articles(&self) -> Option<&[Article]> {
-        if !ui::VIEWS[self.view_idx].navigates_articles() {
-            return None;
-        }
-        let (key, _) = self.active_feed()?;
-        self.feeds.get(&key).map(|b| b.articles.as_slice())
-    }
-
     pub fn run(&mut self, terminal: &mut DefaultTerminal) -> Result<()> {
         loop {
             while let Ok(ev) = self.rx.try_recv() {
@@ -412,93 +241,6 @@ impl App {
             }
             SourceEvent::Alphai(ev) => self.apply_alphai(ev),
         }
-    }
-
-    pub(crate) fn apply_alphai(&mut self, event: alphai::Event) {
-        match event {
-            alphai::Event::Feed { key, articles, side, next_cursor, append } => {
-                self.inflight.remove(&key);
-                self.alphai_errors.remove(&key);
-                match self.feeds.get_mut(&key) {
-                    // A page extends the shown feed (the side payload stays
-                    // from the head fetch); a fresh fetch replaces the bundle.
-                    Some(b) if append => {
-                        b.next_cursor = next_cursor;
-                        b.page_error = None;
-                        append_page(&mut b.articles, articles);
-                    }
-                    _ => {
-                        self.feeds.insert(key, FeedBundle::new(articles, side, next_cursor));
-                    }
-                }
-            }
-            alphai::Event::PageError { key, error, gated } => {
-                self.inflight.remove(&key);
-                let Some(b) = self.feeds.get_mut(&key) else { return };
-                b.page_error = Some(error);
-                if gated {
-                    b.gated = true;
-                    b.next_cursor = None;
-                }
-            }
-            alphai::Event::Error { key, error } => {
-                self.inflight.remove(&key);
-                self.alphai_errors.insert(key, error);
-            }
-        }
-    }
-
-    /// Demand-driven AlphaAI fetching: only the data behind the visible view,
-    /// only when missing or older than `CACHE_TTL`, never while a fetch for
-    /// the same key is in flight, and never on top of an error (manual `r`
-    /// clears the error and retries) — the free tier is 100 requests/day.
-    pub(crate) fn ensure_alphai_data(&mut self) {
-        // The overlay gate also keeps a TTL refetch from swapping the article
-        // out from under the reader mid-scroll.
-        if !self.alphai_enabled
-            || self.settings.open
-            || self.article_overlay.open
-            || self.symbols.is_empty()
-        {
-            return;
-        }
-        // The view declares which feed it shows (`View::feed_shown`); the
-        // guards below are the single copy for every feed kind.
-        let Some((key, kind)) = self.active_feed() else { return };
-        // A TTL refetch replaces the whole bundle, dropping loaded pages, so
-        // it waits until the reader is back at the top row (missing bundles
-        // fetch regardless; the Split strip has no selection and stays at 0).
-        let at_top = self.news_selected == 0;
-        let stale = match self.feeds.get(&key) {
-            None => true,
-            Some(b) => at_top && b.fetched.elapsed() > alphai::CACHE_TTL,
-        };
-        if stale && !self.inflight.contains(&key) && !self.alphai_errors.contains_key(&key) {
-            let cmd = self.head_cmd(kind);
-            self.inflight.insert(key);
-            let _ = self.alphai_tx.send(cmd);
-        }
-    }
-
-    /// j at the last row: ask for the feed's next page (explicitly
-    /// user-driven, one request per keypress at most; the shared `inflight`
-    /// key also blocks a concurrent TTL refetch of the same feed).
-    fn request_more_articles(&mut self) {
-        // Only views that navigate articles page; the Split strip never does.
-        if !ui::VIEWS[self.view_idx].navigates_articles() {
-            return;
-        }
-        let Some((key, kind)) = self.active_feed() else { return };
-        // A gated feed carries no cursor (the archive guard cleared it).
-        let Some(cursor) = self.feeds.get(&key).and_then(|b| b.next_cursor.clone()) else {
-            return;
-        };
-        if self.inflight.contains(&key) {
-            return;
-        }
-        let cmd = self.page_cmd(kind, cursor);
-        self.inflight.insert(key);
-        let _ = self.alphai_tx.send(cmd);
     }
 
     /// Returns true when the app should quit.
@@ -666,205 +408,6 @@ impl App {
         *self.params.write().unwrap() = (range, interval);
         self.refresh.notify_one();
     }
-
-    /// `r`: immediate price cycle, plus drop the visible AlphaAI bundle (and
-    /// any error) so it refetches — this is also the retry path after 401/429.
-    fn manual_refresh(&mut self) {
-        self.refresh.notify_one();
-        if let Some((key, _)) = self.active_feed() {
-            self.feeds.remove(&key);
-            self.alphai_errors.remove(&key);
-        }
-    }
-
-    // -- settings ----------------------------------------------------------
-
-    pub fn open_settings(&mut self) {
-        let key_values = settings_rows()
-            .iter()
-            .filter_map(|row| match row {
-                SettingsRow::Key(field) => Some((
-                    field.config_name,
-                    self.config.keys.get(field.config_name).cloned().unwrap_or_default(),
-                )),
-                _ => None,
-            })
-            .collect();
-        let s = &mut self.settings;
-        s.open = true;
-        s.cursor = 0;
-        s.editing = false;
-        s.message = None;
-        s.source_choice = self.source_name.to_string();
-        s.key_values = key_values;
-        s.news_open_choice = if self.config.news_open_original() {
-            "original".to_string()
-        } else {
-            "alphai".to_string()
-        };
-    }
-
-    fn handle_settings_key(&mut self, key: KeyEvent) -> bool {
-        if self.settings.editing {
-            let s = &mut self.settings;
-            match key.code {
-                KeyCode::Enter => {
-                    let value = s.input.trim().to_string();
-                    if let SettingsRow::Key(field) = settings_rows()[s.cursor] {
-                        s.key_values.insert(field.config_name, value);
-                    }
-                    s.editing = false;
-                }
-                KeyCode::Esc => s.editing = false,
-                KeyCode::Backspace => {
-                    s.input.pop();
-                }
-                KeyCode::Char(c) if !c.is_control() && !c.is_whitespace() => s.input.push(c),
-                _ => {}
-            }
-            return false;
-        }
-        match key.code {
-            KeyCode::Char('q') => return true,
-            KeyCode::Esc => {
-                self.settings.open = false;
-                self.settings.first_run = false;
-            }
-            KeyCode::Up | KeyCode::Char('k') => {
-                self.settings.cursor = self.settings.cursor.saturating_sub(1)
-            }
-            KeyCode::Down | KeyCode::Char('j') | KeyCode::Tab => {
-                self.settings.cursor = (self.settings.cursor + 1).min(settings_rows().len() - 1)
-            }
-            KeyCode::Left | KeyCode::Right | KeyCode::Char(' ') => {
-                match settings_rows()[self.settings.cursor] {
-                    SettingsRow::SourceChoice => self.toggle_source_choice(),
-                    SettingsRow::NewsOpen => self.toggle_news_open_choice(),
-                    _ => {}
-                }
-            }
-            KeyCode::Enter => match settings_rows()[self.settings.cursor] {
-                SettingsRow::SourceChoice => self.toggle_source_choice(),
-                SettingsRow::NewsOpen => self.toggle_news_open_choice(),
-                SettingsRow::Key(field) => {
-                    let s = &mut self.settings;
-                    s.input = s.key_values.get(field.config_name).cloned().unwrap_or_default();
-                    s.editing = true;
-                }
-                SettingsRow::Save => self.settings_save(),
-            },
-            _ => {}
-        }
-        false
-    }
-
-    fn toggle_source_choice(&mut self) {
-        let s = &mut self.settings;
-        s.source_choice = next_source(&s.source_choice).to_string();
-    }
-
-    fn toggle_news_open_choice(&mut self) {
-        let s = &mut self.settings;
-        s.news_open_choice = if s.news_open_choice == "original" {
-            "alphai".to_string()
-        } else {
-            "original".to_string()
-        };
-    }
-
-    fn settings_save(&mut self) {
-        let mut cfg = self.config.clone();
-        cfg.source = Some(self.settings.source_choice.clone());
-        // A cleared key leaves the file entirely instead of writing "".
-        for (name, value) in &self.settings.key_values {
-            let value = value.trim();
-            if value.is_empty() {
-                cfg.keys.remove(*name);
-            } else {
-                cfg.keys.insert((*name).to_string(), value.to_string());
-            }
-        }
-        cfg.news_open = Some(self.settings.news_open_choice.clone());
-        // Saving persists the watchlist on screen, so a bare `alphai-tui`
-        // reopens exactly this setup.
-        cfg.watchlist = self.symbols.clone();
-
-        // A swap to another source, or an edit to the selected source's own
-        // keys, rebuilds it. Comparing the env-layered values means editing
-        // a file key that an env var shadows does not trigger a rebuild.
-        let keys_changed = registry::find(&self.settings.source_choice).is_some_and(|info| {
-            info.key_fields
-                .iter()
-                .any(|field| cfg.key_value(field) != self.config.key_value(field))
-        });
-        let source_changed = !self
-            .settings
-            .source_choice
-            .eq_ignore_ascii_case(self.source_name)
-            || keys_changed;
-        if source_changed {
-            match make_source(&self.settings.source_choice, &cfg) {
-                Ok(src) => {
-                    self.source_name = src.name();
-                    *self.source.write().unwrap() = src;
-                    self.data.clear();
-                    self.errors.clear();
-                    self.refresh.notify_one();
-                }
-                Err(e) => {
-                    self.settings.message = Some(format!("{e:#}"));
-                    return;
-                }
-            }
-        }
-
-        if cfg.alphai_key() != self.config.alphai_key() {
-            let key = cfg.alphai_key();
-            self.alphai_enabled = key.is_some();
-            let _ = self.alphai_tx.send(alphai::Cmd::SetKey(key));
-            self.feeds.clear();
-            self.alphai_errors.clear();
-            self.inflight.clear();
-        }
-
-        match config::save(&cfg) {
-            Ok(_) => {
-                self.config = cfg;
-                self.settings.open = false;
-                self.settings.first_run = false;
-            }
-            Err(e) => {
-                // Applied live but not persisted; keep the overlay open so the
-                // problem is visible.
-                self.config = cfg;
-                self.settings.message = Some(format!("could not write config: {e:#}"));
-            }
-        }
-    }
-}
-
-/// Extend a feed with the next page, dropping rows already shown (a fresh
-/// article can shift the window between requests and repeat on the page
-/// boundary). Rows without a uid cannot be matched and are kept.
-fn append_page(articles: &mut Vec<Article>, page: Vec<Article>) {
-    let seen: HashSet<String> = articles
-        .iter()
-        .map(|a| a.original.uid.clone())
-        .filter(|uid| !uid.is_empty())
-        .collect();
-    articles.extend(
-        page.into_iter()
-            .filter(|a| a.original.uid.is_empty() || !seen.contains(&a.original.uid)),
-    );
-}
-
-/// Settings source toggle: cycles the registry in order; unknown names
-/// reset to the keyless default.
-fn next_source(cur: &str) -> &'static str {
-    match registry::SOURCES.iter().position(|s| s.id == cur) {
-        Some(i) => registry::SOURCES[(i + 1) % registry::SOURCES.len()].id,
-        None => registry::SOURCES[0].id,
-    }
 }
 
 /// Tag an outgoing article link with this client as the traffic source, so
@@ -912,27 +455,8 @@ pub fn open_url(url: &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::{RANGE_PRESETS, next_preset, next_source, with_utm};
+    use super::{RANGE_PRESETS, next_preset, with_utm};
     use crate::domain::{Interval, Range};
-
-    #[test]
-    fn source_cycle_covers_all_and_wraps() {
-        use crate::source::registry::SOURCES;
-        let mut cur = SOURCES[0].id;
-        let mut seen = vec![cur];
-        for _ in 1..SOURCES.len() {
-            cur = next_source(cur);
-            seen.push(cur);
-        }
-        // Every registered source is reachable exactly once, then it wraps.
-        let mut ids: Vec<&str> = SOURCES.iter().map(|s| s.id).collect();
-        seen.sort_unstable();
-        ids.sort_unstable();
-        assert_eq!(seen, ids);
-        assert_eq!(next_source(cur), SOURCES[0].id);
-        // Anything unexpected resets to the keyless default.
-        assert_eq!(next_source("weird"), SOURCES[0].id);
-    }
 
     #[test]
     fn range_presets_wrap_both_ways() {
