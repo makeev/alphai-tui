@@ -1,0 +1,25 @@
+# Called by the dist-generated Release workflow after every artifact is
+# built and uploaded (see publish-jobs in dist-workspace.toml): publishes
+# the tagged version to crates.io. Needs the CRATES_IO_TOKEN repo secret.
+name: publish-crates
+
+on:
+  workflow_call:
+    inputs:
+      plan:
+        required: true
+        type: string
+
+jobs:
+  crates:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+      - name: Install Rust
+        run: rustup update stable --no-self-update && rustup default stable
+      - name: Publish to crates.io
+        run: cargo publish
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
