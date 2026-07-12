@@ -2,9 +2,10 @@
 //!
 //! The free tier allows 20 requests/min and 100/day, so fetching is
 //! demand-driven: only the feed behind the visible view, only when missing
-//! or older than `CACHE_TTL`, never while a fetch for the same key is in
-//! flight, never on top of an error (`r` retries), and paging costs at most
-//! one request per explicit keypress. Keep every one of those guards here.
+//! or older than the TTL (`app.alphai_ttl`, default `alphai::CACHE_TTL`,
+//! `[ui] alphai_ttl_secs` overrides), never while a fetch for the same key
+//! is in flight, never on top of an error (`r` retries), and paging costs
+//! at most one request per explicit keypress. Keep every guard here.
 
 use std::collections::HashSet;
 use std::time::Instant;
@@ -193,7 +194,7 @@ impl App {
     }
 
     /// Demand-driven AlphaAI fetching: only the data behind the visible view,
-    /// only when missing or older than `CACHE_TTL`, never while a fetch for
+    /// only when missing or older than the TTL, never while a fetch for
     /// the same key is in flight, and never on top of an error (manual `r`
     /// clears the error and retries) — the free tier is 100 requests/day.
     pub(crate) fn ensure_alphai_data(&mut self) {
@@ -228,7 +229,7 @@ impl App {
             None => true,
             Some(b) => match (b.min_score, wanted) {
                 (Some(have), Some(want)) if have != want => true,
-                _ => at_top && b.fetched.elapsed() > alphai::CACHE_TTL,
+                _ => at_top && b.fetched.elapsed() > self.alphai_ttl,
             },
         };
         if stale && !self.inflight.contains(&key) && !self.alphai_errors.contains_key(&key) {

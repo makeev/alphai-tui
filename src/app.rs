@@ -11,6 +11,7 @@ pub use settings::{SettingsRow, SettingsState, settings_rows};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::Result;
 use chrono::{DateTime, Local};
@@ -169,6 +170,9 @@ pub struct App {
     /// this filters by dollar value. Seeded from `[ui] insider_min_score`;
     /// +/- adjust whichever feed the visible view shows.
     pub insider_min_score: u8,
+    /// How long a fetched AlphaAI bundle stays fresh. Seeded from
+    /// `[ui] alphai_ttl_secs` (default `alphai::CACHE_TTL`), file-only.
+    pub alphai_ttl: Duration,
     /// Scroll of the embedded card pane (News view); reset on selection moves.
     pub card_scroll: u16,
     pub news_table_state: TableState,
@@ -211,6 +215,7 @@ impl App {
             news_layout: init.ui.news_layout,
             news_min_score: init.ui.news_min_score,
             insider_min_score: init.ui.insider_min_score,
+            alphai_ttl: init.ui.alphai_ttl,
             card_scroll: 0,
             news_table_state: TableState::default(),
             article_overlay: ArticleOverlay::default(),

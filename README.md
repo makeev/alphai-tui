@@ -250,7 +250,8 @@ get a sourced brief without leaving the terminal.
   from SEC EDGAR Form 4 filings, one row per economic event. The free tier
   (no card) allows 20 requests/min and 100/day. The app is careful with
   that budget: it fetches only what the visible view needs (the trending
-  scope is one extra request), caches each response for 5 minutes, loads
+  scope is one extra request), caches each response for 5 minutes
+  (`[ui] alphai_ttl_secs` in the config changes that), loads
   further pages only when you ask for them, and the article card reuses
   data already fetched with the list. The relevance filter is applied by
   the server, so filtered-out articles never occupy page slots; moving it
@@ -296,6 +297,7 @@ news_layout = "side"      # side | stacked
 news_scope = "ticker"     # ticker | market | trending
 news_min_score = 7        # minimum relevance score in news feeds, 1 to 10
 insider_min_score = 4     # insider feed filter; the score tracks trade size
+alphai_ttl_secs = 300     # news/sentiment/insider cache lifetime, 30 to 86400
 
 [chart]
 style = "candles"         # candles | line

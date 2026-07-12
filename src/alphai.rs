@@ -23,6 +23,8 @@ pub const DEFAULT_BASE_URL: &str = "https://api.alphai.io";
 pub const SITE_URL: &str = "https://alphai.io";
 
 /// How long a fetched bundle stays fresh before a view triggers a re-fetch.
+/// This is the default; `[ui] alphai_ttl_secs` overrides it per user, with
+/// a floor guarding the request budget (`config::ALPHAI_TTL_RANGE`).
 pub const CACHE_TTL: Duration = Duration::from_secs(300);
 
 /// Cache key for the market-wide (unfiltered) news feed.

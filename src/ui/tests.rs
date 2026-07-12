@@ -1073,6 +1073,7 @@ fn config_defaults_seed_startup_state() {
             news_scope: NewsScope::Market,
             news_min_score: 6,
             insider_min_score: 5,
+            ..Default::default()
         },
         alphai_enabled: false,
         first_run: false,

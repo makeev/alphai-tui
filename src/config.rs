@@ -1,11 +1,13 @@
 use std::collections::BTreeMap;
 use std::ops::RangeInclusive;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 
+use crate::alphai;
 use crate::app::{ChartStyle, NewsLayout, NewsScope, RANGE_PRESETS};
 use crate::domain::{Interval, Range};
 use crate::indicators;
@@ -74,6 +76,10 @@ pub struct UiConfig {
     /// warning in `resolve`, not fail deserializing the whole file.
     pub news_min_score: Option<i64>,
     pub insider_min_score: Option<i64>,
+    /// How long fetched AlphaAI data (news, sentiment, insider) stays fresh
+    /// before the visible view re-fetches it. Seconds; raw i64 for the same
+    /// warning-not-error reason as the scores.
+    pub alphai_ttl_secs: Option<i64>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -135,6 +141,11 @@ pub const DEFAULT_NEWS_MIN_SCORE: u8 = 7;
 /// server default and keeps every filing the feed used to show.
 pub const DEFAULT_INSIDER_MIN_SCORE: u8 = 4;
 
+/// Accepted `[ui] alphai_ttl_secs` values. The floor keeps a typo (or "5"
+/// meant as minutes) from burning the free request budget; the ceiling is
+/// one day, past which the value is surely a mistake.
+pub const ALPHAI_TTL_RANGE: RangeInclusive<i64> = 30..=86_400;
+
 /// Validated `[ui]` startup values.
 #[derive(Clone, Debug, PartialEq)]
 pub struct UiDefaults {
@@ -143,6 +154,7 @@ pub struct UiDefaults {
     pub news_scope: NewsScope,
     pub news_min_score: u8,
     pub insider_min_score: u8,
+    pub alphai_ttl: Duration,
 }
 
 impl Default for UiDefaults {
@@ -153,6 +165,7 @@ impl Default for UiDefaults {
             news_scope: NewsScope::default(),
             news_min_score: DEFAULT_NEWS_MIN_SCORE,
             insider_min_score: DEFAULT_INSIDER_MIN_SCORE,
+            alphai_ttl: alphai::CACHE_TTL,
         }
     }
 }
@@ -279,6 +292,18 @@ fn resolve_ui(raw: Option<&UiConfig>, warnings: &mut Vec<String>) -> UiDefaults 
         "insider_min_score",
         warnings,
     );
+    if let Some(secs) = raw.alphai_ttl_secs {
+        if ALPHAI_TTL_RANGE.contains(&secs) {
+            out.alphai_ttl = Duration::from_secs(secs as u64);
+        } else {
+            warnings.push(format!(
+                "[ui] alphai_ttl_secs: {secs} is outside {}..={}, keeping {}",
+                ALPHAI_TTL_RANGE.start(),
+                ALPHAI_TTL_RANGE.end(),
+                alphai::CACHE_TTL.as_secs()
+            ));
+        }
+    }
     out
 }
 
@@ -419,6 +444,7 @@ mod tests {
                 news_scope: None,
                 news_min_score: Some(6),
                 insider_min_score: Some(5),
+                alphai_ttl_secs: Some(120),
             }),
             chart: Some(ChartConfig {
                 style: Some("line".into()),
@@ -584,6 +610,26 @@ mod tests {
         let defaults = UiDefaults::default();
         assert_eq!(defaults.news_min_score, DEFAULT_NEWS_MIN_SCORE);
         assert_eq!(defaults.insider_min_score, DEFAULT_INSIDER_MIN_SCORE);
+    }
+
+    #[test]
+    fn alphai_ttl_validates_per_entry() {
+        let cfg: Config = toml::from_str("[ui]\nalphai_ttl_secs = 60").unwrap();
+        let (resolved, warnings) = resolve(&cfg);
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(resolved.ui.alphai_ttl, Duration::from_secs(60));
+
+        // Below the budget floor, above a day, or negative: warn and keep
+        // the default. "5" is the likely minutes-vs-seconds slip.
+        for bad in ["5", "29", "86401", "-300"] {
+            let cfg: Config =
+                toml::from_str(&format!("[ui]\nalphai_ttl_secs = {bad}")).expect("must parse");
+            let (resolved, warnings) = resolve(&cfg);
+            assert_eq!(resolved.ui.alphai_ttl, alphai::CACHE_TTL, "at {bad}");
+            assert_eq!(warnings.len(), 1, "at {bad}: {warnings:?}");
+        }
+
+        assert_eq!(UiDefaults::default().alphai_ttl, alphai::CACHE_TTL);
     }
 
     /// Every ```toml block in the README must parse as a Config and resolve
