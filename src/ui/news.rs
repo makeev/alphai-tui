@@ -111,7 +111,7 @@ impl View for NewsView {
         let rows: Vec<Row> = bundle
             .articles
             .iter()
-            .map(|a| article_row(a, scope, &symbol, now, full, &theme))
+            .map(|a| article_row(a, scope, &symbol, now, full, &theme, app.is_unseen(&key, a)))
             .collect();
 
         let table = Table::new(rows, article_widths(scope, full))
@@ -219,7 +219,9 @@ pub fn render_panel(f: &mut Frame, area: Rect, app: &mut App) {
     let rows: Vec<Row> = bundle
         .articles
         .iter()
-        .map(|a| article_row(a, scope, app.selected_symbol(), now, false, &app.theme))
+        .map(|a| {
+            article_row(a, scope, app.selected_symbol(), now, false, &app.theme, app.is_unseen(&key, a))
+        })
         .collect();
     f.render_widget(
         Table::new(rows, article_widths(scope, false)).block(block),
@@ -237,6 +239,7 @@ fn article_row(
     now: DateTime<Utc>,
     full: bool,
     theme: &Theme,
+    unseen: bool,
 ) -> Row<'static> {
     // Breaking rows stand out: a fresh age renders in the accent color.
     let age = if is_fresh(a, now) {
@@ -256,8 +259,26 @@ fn article_row(
         cells.push(sources_cell(a.sources_badge()));
     }
     cells.push(Cell::from(short_category(a)).dim());
-    cells.push(Cell::from(a.original.title.clone()));
+    cells.push(title_cell(a.original.title.clone(), Style::new(), unseen, theme));
     Row::new(cells)
+}
+
+/// Title cell of a feed row; rows new since the reader last looked carry
+/// the accent unseen marker until the cursor rests on them.
+pub(crate) fn title_cell(
+    title: String,
+    style: Style,
+    unseen: bool,
+    theme: &Theme,
+) -> Cell<'static> {
+    if unseen {
+        Cell::from(Line::from(vec![
+            Span::styled("● ", Style::new().fg(theme.accent)),
+            Span::styled(title, style),
+        ]))
+    } else {
+        Cell::from(Span::styled(title, style))
+    }
 }
 
 fn article_widths(scope: NewsScope, full: bool) -> Vec<Constraint> {

@@ -111,6 +111,9 @@ pub fn view_index(id: ViewId) -> usize {
 }
 
 pub fn draw(f: &mut Frame, app: &mut App) {
+    // Before rows are built, so the hovered row renders without its unseen
+    // marker on this very frame.
+    app.mark_selected_seen();
     let [header, body, footer] =
         Layout::vertical([Constraint::Length(1), Constraint::Min(0), Constraint::Length(1)])
             .areas(f.area());

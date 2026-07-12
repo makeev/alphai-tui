@@ -157,6 +157,13 @@ pub struct App {
     // AlphaAI feed state: every fetched feed by cache key (news under the
     // symbol/market/trending keys, insider under `ins:SYM`)
     pub feeds: HashMap<String, FeedBundle>,
+    /// Uids the reader has had under the cursor, plus the baseline of each
+    /// feed's first fetch, by feed cache key. Rows outside this set are new
+    /// since the user last looked and render the unseen marker; resting the
+    /// cursor on a row retires it (`mark_selected_seen`). Session-only and
+    /// survives bundle replacement, so markers live through TTL refetches
+    /// and manual `r`.
+    pub feed_seen: HashMap<String, HashSet<String>>,
     pub alphai_errors: HashMap<String, String>,
     pub alphai_enabled: bool,
     pub news_selected: usize,
@@ -208,6 +215,7 @@ impl App {
             show_rsi: init.chart.rsi,
             chart: init.chart,
             feeds: HashMap::new(),
+            feed_seen: HashMap::new(),
             alphai_errors: HashMap::new(),
             alphai_enabled: init.alphai_enabled,
             news_selected: 0,

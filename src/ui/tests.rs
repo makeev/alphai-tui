@@ -955,14 +955,30 @@ fn insider_j_at_last_row_requests_next_page() {
     }
 }
 
+/// A minimal row with a uid, as every real API article carries one (the
+/// richer `article` fixture leaves it empty, staying invisible to the
+/// unseen-marker tracking).
+fn uid_article(uid: &str, title: &str) -> Article {
+    serde_json::from_str(&format!(
+        r#"{{"original": {{"uid": "{uid}", "title": "{title}"}}}}"#
+    ))
+    .unwrap()
+}
+
+/// A head (non-append) news fetch for `key`, as the AlphaAI task delivers it.
+fn head_fetch(app: &mut App, key: &str, articles: Vec<Article>, min_relevance: Option<u8>) {
+    app.apply_alphai(alphai::Event::Feed {
+        key: key.into(),
+        articles,
+        side: None,
+        next_cursor: None,
+        append: false,
+        min_relevance,
+    });
+}
+
 #[test]
 fn page_append_extends_list_and_dedupes() {
-    fn uid_article(uid: &str, title: &str) -> Article {
-        serde_json::from_str(&format!(
-            r#"{{"original": {{"uid": "{uid}", "title": "{title}"}}}}"#
-        ))
-        .unwrap()
-    }
     let mut app = empty_app(vec!["AAPL".into()]);
     app.feeds.insert(
         "AAPL".into(),
@@ -980,6 +996,110 @@ fn page_append_extends_list_and_dedupes() {
     assert_eq!(b.articles.len(), 2, "page boundary duplicate not dropped");
     assert_eq!(b.articles[1].original.title, "Second");
     assert_eq!(b.next_cursor.as_deref(), Some("c2"));
+}
+
+/// Rows brought in by a refetch carry the unseen marker until the cursor
+/// rests on them; the first fetch of a feed is a baseline and marks nothing.
+#[test]
+fn refetch_marks_new_rows_until_hovered() {
+    let mut app = empty_app(vec!["AAPL".into()]);
+    app.view_idx = ui::view_index(ui::ViewId::News);
+    head_fetch(
+        &mut app,
+        "AAPL",
+        vec![uid_article("aaa", "First"), uid_article("bbb", "Second")],
+        Some(7),
+    );
+    assert!(
+        !app.is_unseen("AAPL", &app.feeds["AAPL"].articles[0]),
+        "first fetch marked its own baseline"
+    );
+
+    head_fetch(
+        &mut app,
+        "AAPL",
+        vec![
+            uid_article("ccc", "Breaking story"),
+            uid_article("aaa", "First"),
+            uid_article("bbb", "Second"),
+        ],
+        Some(7),
+    );
+    assert!(app.is_unseen("AAPL", &app.feeds["AAPL"].articles[0]), "new row unmarked");
+    assert!(!app.is_unseen("AAPL", &app.feeds["AAPL"].articles[1]), "old row marked");
+
+    // The marker renders while the cursor is parked elsewhere...
+    app.news_selected = 1;
+    let screen = render(&mut app);
+    assert!(screen.contains("● Breaking story"), "marker missing:\n{screen}");
+    // ...and hovering the row retires it.
+    app.news_selected = 0;
+    let screen = render(&mut app);
+    assert!(!screen.contains("●"), "marker survived the hover:\n{screen}");
+
+    // Manual r drops the bundle but not the seen set: the refetch after it
+    // still marks only what is genuinely new.
+    press(&mut app, KeyCode::Char('r'));
+    head_fetch(
+        &mut app,
+        "AAPL",
+        vec![uid_article("ddd", "Newer still"), uid_article("ccc", "Breaking story")],
+        Some(7),
+    );
+    assert!(app.is_unseen("AAPL", &app.feeds["AAPL"].articles[0]), "post-r new row unmarked");
+    assert!(!app.is_unseen("AAPL", &app.feeds["AAPL"].articles[1]), "post-r hovered row marked");
+}
+
+/// Paged-in older rows and a refetch after moving the score filter are the
+/// reader asking for more, not news arriving: neither marks.
+#[test]
+fn pagination_and_filter_moves_never_mark() {
+    let mut app = empty_app(vec!["AAPL".into()]);
+    app.view_idx = ui::view_index(ui::ViewId::News);
+    head_fetch(&mut app, "AAPL", vec![uid_article("aaa", "First")], Some(7));
+    app.apply_alphai(alphai::Event::Feed {
+        key: "AAPL".into(),
+        articles: vec![uid_article("old1", "Older story")],
+        side: None,
+        next_cursor: None,
+        append: true,
+        min_relevance: Some(7),
+    });
+    assert!(
+        !app.is_unseen("AAPL", &app.feeds["AAPL"].articles[1]),
+        "paged-in row marked as new"
+    );
+
+    // Loosening the filter reveals lower-scored rows: old news, no markers.
+    head_fetch(
+        &mut app,
+        "AAPL",
+        vec![uid_article("aaa", "First"), uid_article("low", "Low score story")],
+        Some(6),
+    );
+    assert!(
+        !app.is_unseen("AAPL", &app.feeds["AAPL"].articles[1]),
+        "filter-revealed row marked as new"
+    );
+}
+
+/// The Split strip shows the markers but has no cursor, so rendering it
+/// never retires them.
+#[test]
+fn split_strip_shows_markers_without_clearing() {
+    let mut app = empty_app(vec!["AAPL".into()]);
+    head_fetch(&mut app, "AAPL", vec![uid_article("aaa", "First")], Some(7));
+    head_fetch(
+        &mut app,
+        "AAPL",
+        vec![uid_article("ccc", "Breaking story"), uid_article("aaa", "First")],
+        Some(7),
+    );
+    app.view_idx = ui::view_index(ui::ViewId::Split);
+    let screen = render(&mut app);
+    assert!(screen.contains("● Breaking story"), "marker missing:\n{screen}");
+    let screen = render(&mut app);
+    assert!(screen.contains("● Breaking story"), "the strip retired a marker:\n{screen}");
 }
 
 #[test]

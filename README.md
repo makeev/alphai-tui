@@ -22,7 +22,9 @@ Built in Rust with [ratatui](https://ratatui.rs).
   `+` and `-` move that bar live (1 to 10, filtered server-side, the block
   title shows the active value) and `[ui] news_min_score` sets the startup
   default. Articles fresher than 15 minutes light up their age in the
-  accent color. `x` flips the layout between side-by-side and
+  accent color, and rows that appeared since you last looked at the feed
+  carry a `●` marker that goes out once the cursor rests on them (insider
+  rows get the same treatment). `x` flips the layout between side-by-side and
   list-over-card, `v` expands the card to full screen, PgUp/PgDn scroll it.
   On terminals narrower than 90 columns the side layout gives the whole
   width to the list and `v` remains the way to read the card. Pressing

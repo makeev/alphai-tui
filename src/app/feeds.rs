@@ -168,11 +168,32 @@ impl App {
                     Some(b) if append => {
                         b.next_cursor = next_cursor;
                         b.page_error = None;
+                        // Paged-in rows are older articles the reader asked
+                        // for, not news arriving: never mark them unseen.
+                        self.feed_seen
+                            .entry(key)
+                            .or_default()
+                            .extend(uids(&articles));
                         append_page(&mut b.articles, articles);
                     }
                     _ => {
                         let mut b = FeedBundle::new(articles, side, next_cursor);
                         b.min_score = min_relevance;
+                        // Unseen markers: the first sight of a feed is a
+                        // baseline, and a refetch caused by moving the score
+                        // filter is the reader slicing differently, so both
+                        // count as already seen. A plain TTL or manual
+                        // refetch leaves genuinely new uids outside
+                        // `feed_seen` and they render marked until hovered.
+                        let filter_moved = self
+                            .feeds
+                            .get(&key)
+                            .is_some_and(|old| old.min_score != min_relevance);
+                        let first_sight = !self.feed_seen.contains_key(&key);
+                        let seen = self.feed_seen.entry(key.clone()).or_default();
+                        if first_sight || filter_moved {
+                            seen.extend(uids(&b.articles));
+                        }
                         self.feeds.insert(key, b);
                     }
                 }
@@ -281,6 +302,7 @@ impl App {
 
     /// `r`: immediate price cycle, plus drop the visible AlphaAI bundle (and
     /// any error) so it refetches — this is also the retry path after 401/429.
+    /// `feed_seen` stays: the refetch marks what is actually new.
     pub(super) fn manual_refresh(&mut self) {
         self.refresh.notify_one();
         if let Some((key, _)) = self.active_feed() {
@@ -288,6 +310,47 @@ impl App {
             self.alphai_errors.remove(&key);
         }
     }
+
+    /// The row under the cursor counts as read: called on every frame from
+    /// `ui::draw`, it retires the row's unseen marker. Views that do not
+    /// navigate articles (the Split strip) have no cursor and never clear
+    /// markers.
+    pub(crate) fn mark_selected_seen(&mut self) {
+        if !ui::VIEWS[self.view_idx].navigates_articles() {
+            return;
+        }
+        let Some((key, _)) = self.active_feed() else { return };
+        let Some(uid) = self
+            .feeds
+            .get(&key)
+            .and_then(|b| b.articles.get(self.news_selected))
+            .map(|a| a.original.uid.clone())
+            .filter(|u| !u.is_empty())
+        else {
+            return;
+        };
+        self.feed_seen.entry(key).or_default().insert(uid);
+    }
+
+    /// Whether a row is new since the reader last looked at this feed:
+    /// fetched after the feed's baseline and not hovered yet. Rows without
+    /// a uid cannot be tracked and never mark.
+    pub(crate) fn is_unseen(&self, key: &str, a: &Article) -> bool {
+        !a.original.uid.is_empty()
+            && self
+                .feed_seen
+                .get(key)
+                .is_some_and(|seen| !seen.contains(&a.original.uid))
+    }
+}
+
+/// Non-empty uids of a batch of articles (rows without one cannot be
+/// tracked by the unseen markers).
+fn uids(articles: &[Article]) -> impl Iterator<Item = String> + '_ {
+    articles
+        .iter()
+        .map(|a| a.original.uid.clone())
+        .filter(|u| !u.is_empty())
 }
 
 /// Extend a feed with the next page, dropping rows already shown (a fresh

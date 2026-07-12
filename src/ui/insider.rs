@@ -11,7 +11,7 @@ use crate::keymap::Action;
 use crate::theme::Theme;
 use crate::ui::{Hint, View, ViewId};
 use crate::ui::news::{
-    feed_bottom_hint, is_fresh, render_detail, render_gate, score_cell, sentiment_cell,
+    feed_bottom_hint, is_fresh, render_detail, render_gate, score_cell, sentiment_cell, title_cell,
 };
 
 pub struct InsiderView;
@@ -99,7 +99,7 @@ impl View for InsiderView {
         let rows: Vec<Row> = bundle
             .articles
             .iter()
-            .map(|a| filing_row(a, &symbol, now, &theme))
+            .map(|a| filing_row(a, &symbol, now, &theme, app.is_unseen(&key, a)))
             .collect();
         let widths = [
             Constraint::Length(4),
@@ -125,7 +125,13 @@ impl View for InsiderView {
 /// One Form 4 filing as a row: age, score, buy/sell glyph, direct/indirect
 /// marker, a 10b5-1 plan flag, the trade value, title colored by trade side
 /// when known.
-fn filing_row(a: &Article, symbol: &str, now: chrono::DateTime<Utc>, theme: &Theme) -> Row<'static> {
+fn filing_row(
+    a: &Article,
+    symbol: &str,
+    now: chrono::DateTime<Utc>,
+    theme: &Theme,
+    unseen: bool,
+) -> Row<'static> {
     let side = filing_side(a, symbol);
     let title_style = match side.as_deref() {
         Some("positive") => Style::new().fg(theme.pos),
@@ -155,7 +161,7 @@ fn filing_row(a: &Article, symbol: &str, now: chrono::DateTime<Utc>, theme: &The
         ownership_cell(a.original.ownership_form.as_deref()),
         plan,
         value,
-        Cell::from(a.original.title.clone()).style(title_style),
+        title_cell(a.original.title.clone(), title_style, unseen, theme),
     ])
 }
 
