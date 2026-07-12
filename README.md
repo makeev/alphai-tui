@@ -7,7 +7,7 @@ Terminal dashboard for watching stocks: live quotes and charts next to
 AI-scored financial news, sentiment and SEC Form 4 insider activity.
 Built in Rust with [ratatui](https://ratatui.rs).
 
-![alphai-tui split view: watchlist with sparklines, candlestick chart with SMA 20/100 and RSI(14), AI-scored news feed](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/split.png)
+![alphai-tui demo: news list with the AI analysis card, market and trending scopes, SEC Form 4 insider stream, candlestick chart with SMA and RSI, split dashboard](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/demo.gif)
 
 ## What you get
 
