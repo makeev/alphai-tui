@@ -224,6 +224,7 @@ impl App {
         if !self.alphai_enabled
             || self.settings.open
             || self.article_overlay.open
+            || self.help.open
             || self.symbols.is_empty()
         {
             return;

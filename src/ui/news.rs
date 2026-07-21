@@ -37,7 +37,9 @@ impl View for NewsView {
             Hint::act(&[Action::CycleScope], "scope"),
             Hint::act(&[Action::ScoreUp, Action::ScoreDown], "score"),
             Hint::act(&[Action::Refresh], "refresh"),
-            Hint::act(&[Action::Settings], "settings"),
+            // No settings hint: the widest footer of the app, it must fit
+            // 110 columns and the help overlay lists s anyway.
+            Hint::act(&[Action::Help], "help"),
         ];
         HINTS
     }

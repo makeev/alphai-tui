@@ -31,6 +31,7 @@ impl View for SplitView {
             Hint::act(&[Action::NextPreset], "interval"),
             Hint::act(&[Action::Refresh], "refresh"),
             Hint::act(&[Action::Settings], "settings"),
+            Hint::act(&[Action::Help], "help"),
         ];
         HINTS
     }

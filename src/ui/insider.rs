@@ -36,6 +36,7 @@ impl View for InsiderView {
             Hint::act(&[Action::ScoreUp, Action::ScoreDown], "size"),
             Hint::act(&[Action::Refresh], "refresh"),
             Hint::act(&[Action::Settings], "settings"),
+            Hint::act(&[Action::Help], "help"),
         ];
         HINTS
     }

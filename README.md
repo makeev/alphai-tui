@@ -169,6 +169,7 @@ defaults. API keys can also come from env vars, which win over the config:
 | `t` / `T` | everywhere | cycle candle interval presets forward / back (each interval with a matching history window; the list is configurable as `[chart] presets`) |
 | `r` | everywhere | refresh prices and the visible news view |
 | `s` | everywhere | settings |
+| `?` | everywhere | help overlay: every action with its current keys |
 | `q` / `Esc` / `Ctrl-C` | everywhere | quit |
 
 ## A tmux workspace
@@ -365,10 +366,11 @@ character or one of the named keys: `esc`, `enter`, `tab`, `backtab`,
 means the uppercase letter (`shift-t` equals `T`), and `shift-tab` equals
 `backtab`.
 
-The actions: `quit`, `next_view`, `prev_view`, `settings`, `refresh`,
-`up`, `down`, `left`, `right`, `page_up`, `page_down`, `open`, `card`,
-`cycle_scope`, `cycle_layout`, `score_up`, `score_down`, `chart_style`,
-`toggle_sma`, `toggle_rsi`, `next_preset`, `prev_preset`.
+The actions: `quit`, `next_view`, `prev_view`, `settings`, `help`,
+`refresh`, `up`, `down`, `left`, `right`, `page_up`, `page_down`, `open`,
+`card`, `cycle_scope`, `cycle_layout`, `score_up`, `score_down`,
+`chart_style`, `toggle_sma`, `toggle_rsi`, `next_preset`, `prev_preset`.
+The `?` help overlay shows this list with the current keys next to it.
 
 Reserved and never remappable: `ctrl-c` (force quit), `esc`, the digits
 `1` to `9` (view hotkeys), and the keys inside the settings form. A bad or

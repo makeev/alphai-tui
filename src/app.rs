@@ -73,6 +73,13 @@ pub struct ArticleOverlay {
     pub scroll: u16,
 }
 
+/// State of the help overlay (? anywhere): the full key table.
+#[derive(Default)]
+pub struct HelpOverlay {
+    pub open: bool,
+    pub scroll: u16,
+}
+
 /// Where the News view puts the article card pane relative to the list
 /// (x cycles). Session-only, like the chart options.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -186,6 +193,7 @@ pub struct App {
     pub card_scroll: u16,
     pub news_table_state: TableState,
     pub article_overlay: ArticleOverlay,
+    pub help: HelpOverlay,
     pub settings: SettingsState,
     pub config: Config,
     pub config_path: Option<PathBuf>,
@@ -229,6 +237,7 @@ impl App {
             card_scroll: 0,
             news_table_state: TableState::default(),
             article_overlay: ArticleOverlay::default(),
+            help: HelpOverlay::default(),
             settings: SettingsState::default(),
             config: init.config,
             config_path: init.config_path,
@@ -303,6 +312,9 @@ impl App {
         if self.article_overlay.open {
             return self.handle_overlay_key(key);
         }
+        if self.help.open {
+            return self.handle_help_key(key);
+        }
         if key.code == KeyCode::Esc {
             return true;
         }
@@ -327,6 +339,7 @@ impl App {
                 self.switch_view((self.view_idx + ui::VIEWS.len() - 1) % ui::VIEWS.len())
             }
             Action::Settings => self.open_settings(),
+            Action::Help => self.help = HelpOverlay { open: true, scroll: 0 },
             Action::Refresh => self.manual_refresh(),
             // News/Insider: up/down scroll articles, left/right switch ticker.
             Action::Up if news_view => {
@@ -432,6 +445,26 @@ impl App {
                     open_url(&self.article_url(a));
                 }
             }
+            _ => {}
+        }
+        false
+    }
+
+    /// Keys while the help overlay is open; like the article card it swallows
+    /// everything. Esc or ? closes, q still quits.
+    fn handle_help_key(&mut self, key: KeyEvent) -> bool {
+        if key.code == KeyCode::Esc {
+            self.help = HelpOverlay::default();
+            return false;
+        }
+        match self.keymap.resolve(&key) {
+            Some(Action::Quit) => return true,
+            Some(Action::Help) => self.help = HelpOverlay::default(),
+            Some(Action::Up) => self.help.scroll = self.help.scroll.saturating_sub(1),
+            // The render pass clamps the scroll to the table's real height.
+            Some(Action::Down) => self.help.scroll = self.help.scroll.saturating_add(1),
+            Some(Action::PageUp) => self.help.scroll = self.help.scroll.saturating_sub(10),
+            Some(Action::PageDown) => self.help.scroll = self.help.scroll.saturating_add(10),
             _ => {}
         }
         false

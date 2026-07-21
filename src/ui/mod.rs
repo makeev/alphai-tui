@@ -1,5 +1,6 @@
 pub mod article;
 pub mod chart;
+pub mod help;
 pub mod insider;
 pub mod news;
 pub mod settings;
@@ -54,6 +55,7 @@ pub static DEFAULT_HINTS: &[Hint] = &[
     Hint::act(&[Action::NextPreset], "interval"),
     Hint::act(&[Action::Refresh], "refresh"),
     Hint::act(&[Action::Settings], "settings"),
+    Hint::act(&[Action::Help], "help"),
 ];
 
 /// A display mode. Views are stateless renderers: all mutable state
@@ -124,6 +126,9 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     if app.article_overlay.open {
         article::render(f, app);
     }
+    if app.help.open {
+        help::render(f, app);
+    }
     if app.settings.open {
         settings::render(f, app);
     }
@@ -177,6 +182,8 @@ fn footer_line(app: &App) -> Paragraph<'static> {
         " ↑↓ move · enter edit/toggle/save · esc close".to_string()
     } else if app.article_overlay.open {
         " ↑↓/jk scroll · pgup/pgdn page · ⏎ open in browser · esc/v close".to_string()
+    } else if app.help.open {
+        " ↑↓/jk scroll · pgup/pgdn page · esc/? close".to_string()
     } else {
         let parts: Vec<String> = VIEWS[app.view_idx]
             .hints()

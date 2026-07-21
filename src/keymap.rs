@@ -20,6 +20,7 @@ pub enum Action {
     NextView,
     PrevView,
     Settings,
+    Help,
     Refresh,
     Up,
     Down,
@@ -42,11 +43,12 @@ pub enum Action {
 
 /// Every action with its snake_case config name, the single source of truth
 /// for `[keybindings]` parsing and for the coverage test.
-pub const ACTIONS: [(Action, &str); 22] = [
+pub const ACTIONS: [(Action, &str); 23] = [
     (Action::Quit, "quit"),
     (Action::NextView, "next_view"),
     (Action::PrevView, "prev_view"),
     (Action::Settings, "settings"),
+    (Action::Help, "help"),
     (Action::Refresh, "refresh"),
     (Action::Up, "up"),
     (Action::Down, "down"),
@@ -105,6 +107,7 @@ fn default_keys(action: Action) -> Vec<KeyCombo> {
         Action::NextView => vec![plain(KeyCode::Tab)],
         Action::PrevView => vec![plain(KeyCode::BackTab)],
         Action::Settings => vec![ch('s')],
+        Action::Help => vec![ch('?')],
         Action::Refresh => vec![ch('r')],
         Action::Up => vec![plain(KeyCode::Up), ch('k')],
         Action::Down => vec![plain(KeyCode::Down), ch('j')],
@@ -236,9 +239,21 @@ impl Keymap {
             .and_then(|(_, keys)| keys.first())
             .map(combo_label)
     }
+
+    /// Every key of an action, space-separated ("↑ k"), for the help
+    /// overlay. Empty when the action lost all keys to conflicts.
+    pub fn action_labels(&self, action: Action) -> String {
+        self.bindings
+            .iter()
+            .find(|(a, _)| *a == action)
+            .map(|(_, keys)| keys.iter().map(combo_label).collect::<Vec<_>>().join(" "))
+            .unwrap_or_default()
+    }
 }
 
-fn action_name(action: Action) -> &'static str {
+/// The snake_case `[keybindings]` name of an action (the help overlay
+/// shows it next to each key).
+pub fn action_name(action: Action) -> &'static str {
     ACTIONS
         .iter()
         .find(|(a, _)| *a == action)

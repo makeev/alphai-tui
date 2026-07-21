@@ -448,6 +448,34 @@ fn footer_and_dispatch_follow_a_remap() {
     assert!(app.article_overlay.open, "the remapped key did not fire");
 }
 
+/// ? opens the help overlay listing every action with its live keys and
+/// its [keybindings] name; esc closes it, q still quits. The coverage walk
+/// over ACTIONS keeps the table exhaustive: a new action cannot ship
+/// without a help row.
+#[test]
+fn help_overlay_lists_every_action() {
+    let mut app = fake_app();
+    press(&mut app, KeyCode::Char('?'));
+    assert!(app.help.open);
+    let screen = render_sized(&mut app, 90, 45);
+    for (_, name) in crate::keymap::ACTIONS.iter() {
+        assert!(screen.contains(name), "action {name} missing:\n{screen}");
+    }
+    assert!(screen.contains("ctrl-c"), "screen:\n{screen}");
+    assert!(screen.contains("[keybindings]"), "screen:\n{screen}");
+    // Esc closes the overlay without quitting the app.
+    assert!(!app.handle_key(KeyEvent::from(KeyCode::Esc)));
+    assert!(!app.help.open);
+    // A remap shows up in the table: the overlay reads the live keymap.
+    app.keymap =
+        crate::keymap::Keymap::from_config([("refresh", vec!["f5"])], &mut Vec::new());
+    press(&mut app, KeyCode::Char('?'));
+    let screen = render_sized(&mut app, 90, 45);
+    assert!(screen.contains("f5"), "screen:\n{screen}");
+    // q inside the overlay still quits.
+    assert!(app.handle_key(KeyEvent::from(KeyCode::Char('q'))));
+}
+
 /// Split embeds the news strip, but j/k must keep driving the watchlist
 /// selection and must never page the feed (budget guard).
 #[test]
