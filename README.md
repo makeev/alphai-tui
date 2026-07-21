@@ -273,9 +273,9 @@ which is also what AlphaAI uses. Finnhub-specific symbols like
 Windows), created by the settings screen with mode 0600 since it can hold
 keys; `--config PATH` points at a different file. Saving the settings also
 persists the watchlist on screen. Every key is optional. A misspelled value
-in the `[ui]`, `[chart]` or `[theme]` sections prints a warning on startup
-and keeps that entry's default; only a TOML syntax error makes the whole
-file fall back to defaults. The `[ui]` and `[chart]` sections set startup
+in the `[ui]`, `[chart]`, `[theme]` or `[keybindings]` sections prints a
+warning on startup and keeps that entry's default; only a TOML syntax error
+makes the whole file fall back to defaults. The `[ui]` and `[chart]` sections set startup
 defaults; the session keys (`x`, `f`, `+`, `-`, `c`, `m`, `i`, `t`) still
 change everything live without persisting it:
 
@@ -343,6 +343,38 @@ sma_slow = "magenta"     # SMA 100 overlay
 rsi_line = "cyan"        # RSI line
 ref_line = "darkgray"    # previous close and RSI 30/70 reference lines
 ```
+
+### Custom keybindings
+
+The optional `[keybindings]` table rebinds any action. An action you list
+replaces its default keys entirely; actions you leave out keep theirs. The
+value is one key or a list of keys:
+
+```toml
+[keybindings]
+quit = "ctrl-q"
+open = ["enter", "z"]
+next_preset = "]"
+prev_preset = "["
+```
+
+A key is written as `[ctrl-][alt-][shift-]<base>`, where base is a single
+character or one of the named keys: `esc`, `enter`, `tab`, `backtab`,
+`space`, `up`, `down`, `left`, `right`, `home`, `end`, `pgup`, `pgdn`,
+`backspace`, `delete`, `insert`, `f1` to `f12`. `shift-` plus a letter
+means the uppercase letter (`shift-t` equals `T`), and `shift-tab` equals
+`backtab`.
+
+The actions: `quit`, `next_view`, `prev_view`, `settings`, `refresh`,
+`up`, `down`, `left`, `right`, `page_up`, `page_down`, `open`, `card`,
+`cycle_scope`, `cycle_layout`, `score_up`, `score_down`, `chart_style`,
+`toggle_sma`, `toggle_rsi`, `next_preset`, `prev_preset`.
+
+Reserved and never remappable: `ctrl-c` (force quit), `esc`, the digits
+`1` to `9` (view hotkeys), and the keys inside the settings form. A bad or
+reserved key, an unknown action, or a key claimed by two actions prints a
+warning on startup and falls back safely; the footer always shows the keys
+that are actually bound.
 
 ### Not configurable on purpose
 

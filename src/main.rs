@@ -130,6 +130,7 @@ fn main() -> Result<()> {
         theme: resolved.theme,
         chart: resolved.chart,
         ui: resolved.ui,
+        keymap: resolved.keymap,
         alphai_enabled: alphai_key.is_some(),
         first_run: !cfg_existed,
     });

@@ -42,6 +42,7 @@ fn empty_app_with_cmds(
         theme: Theme::default(),
         chart: ChartDefaults::default(),
         ui: UiDefaults::default(),
+        keymap: crate::keymap::Keymap::default(),
         alphai_enabled: true,
         first_run: false,
     });
@@ -415,6 +416,36 @@ fn footer_shows_bound_keys() {
     let screen = render(&mut app);
     assert!(screen.contains("⏎ open"), "screen:\n{screen}");
     assert!(screen.contains("x layout"), "screen:\n{screen}");
+}
+
+/// A `[keybindings]` remap flows through to the footer and to dispatch:
+/// the hint shows the new key and pressing it fires the action.
+#[test]
+fn footer_and_dispatch_follow_a_remap() {
+    let mut app = fake_app();
+    let mut warnings = Vec::new();
+    app.keymap = crate::keymap::Keymap::from_config(
+        [("open", vec!["z"]), ("card", vec!["b"])],
+        &mut warnings,
+    );
+    assert!(warnings.is_empty(), "{warnings:?}");
+    app.view_idx = ui::view_index(ui::ViewId::News);
+    app.feeds.insert(
+        "AAPL".into(),
+        FeedBundle::new(
+            vec![article("Apple beats expectations", "AAPL", 9, "positive")],
+            None,
+            None,
+        ),
+    );
+    let screen = render(&mut app);
+    assert!(screen.contains("z open"), "screen:\n{screen}");
+    assert!(!screen.contains("⏎ open"), "screen:\n{screen}");
+    // The new key drives the action, the old one is gone.
+    press(&mut app, KeyCode::Char('v'));
+    assert!(!app.article_overlay.open, "the replaced default still fired");
+    press(&mut app, KeyCode::Char('b'));
+    assert!(app.article_overlay.open, "the remapped key did not fire");
 }
 
 /// Split embeds the news strip, but j/k must keep driving the watchlist
@@ -1195,6 +1226,7 @@ fn config_defaults_seed_startup_state() {
             insider_min_score: 5,
             ..Default::default()
         },
+        keymap: crate::keymap::Keymap::default(),
         alphai_enabled: false,
         first_run: false,
     });
@@ -1347,6 +1379,7 @@ fn first_run_opens_settings_with_welcome() {
         theme: Theme::default(),
         chart: ChartDefaults::default(),
         ui: UiDefaults::default(),
+        keymap: crate::keymap::Keymap::default(),
         alphai_enabled: false,
         first_run: true,
     });

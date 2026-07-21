@@ -11,6 +11,7 @@ use crate::alphai;
 use crate::app::{ChartStyle, NewsLayout, NewsScope, RANGE_PRESETS};
 use crate::domain::{Interval, Range};
 use crate::indicators;
+use crate::keymap::Keymap;
 use crate::theme::Theme;
 use crate::ui;
 
@@ -64,6 +65,28 @@ pub struct Config {
     /// never degrades the whole file.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub theme: Option<BTreeMap<String, String>>,
+    /// `[keybindings]` overrides by action name (see `keymap::ACTIONS`).
+    /// Raw specs; `resolve` validates per entry, so one bad key never
+    /// degrades the whole file.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub keybindings: Option<BTreeMap<String, KeysSpec>>,
+}
+
+/// Keys of one `[keybindings]` action: a bare string or a list of them.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum KeysSpec {
+    One(String),
+    Many(Vec<String>),
+}
+
+impl KeysSpec {
+    fn as_list(&self) -> Vec<&str> {
+        match self {
+            Self::One(s) => vec![s.as_str()],
+            Self::Many(v) => v.iter().map(String::as_str).collect(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -102,6 +125,7 @@ pub struct Resolved {
     pub theme: Theme,
     pub chart: ChartDefaults,
     pub ui: UiDefaults,
+    pub keymap: Keymap,
 }
 
 /// Validated `[chart]` values; `Default` is the traditional look. The
@@ -177,7 +201,14 @@ pub fn resolve(cfg: &Config) -> (Resolved, Vec<String>) {
     let theme = Theme::from_config(cfg.theme.as_ref(), &mut warnings);
     let chart = resolve_chart(cfg.chart.as_ref(), &mut warnings);
     let ui = resolve_ui(cfg.ui.as_ref(), &mut warnings);
-    (Resolved { theme, chart, ui }, warnings)
+    let keymap = Keymap::from_config(
+        cfg.keybindings
+            .iter()
+            .flatten()
+            .map(|(name, spec)| (name.as_str(), spec.as_list())),
+        &mut warnings,
+    );
+    (Resolved { theme, chart, ui, keymap }, warnings)
 }
 
 fn resolve_chart(raw: Option<&ChartConfig>, warnings: &mut Vec<String>) -> ChartDefaults {
@@ -453,6 +484,13 @@ mod tests {
                 ..Default::default()
             }),
             theme: Some(BTreeMap::from([("accent".to_string(), "magenta".to_string())])),
+            keybindings: Some(BTreeMap::from([
+                ("quit".to_string(), KeysSpec::One("ctrl-q".into())),
+                (
+                    "open".to_string(),
+                    KeysSpec::Many(vec!["enter".into(), "z".into()]),
+                ),
+            ])),
         };
         save_to(&p, &cfg).unwrap();
         let loaded = load_from(&p).unwrap().unwrap();
@@ -534,9 +572,52 @@ mod tests {
         // Absent sections must not serialize: Save would spray empty tables
         // into every config otherwise.
         let bare = toml::to_string_pretty(&Config::default()).unwrap();
-        for section in ["[theme]", "[ui]", "[chart]"] {
+        for section in ["[theme]", "[ui]", "[chart]", "[keybindings]"] {
             assert!(!bare.contains(section), "{bare}");
         }
+    }
+
+    #[test]
+    fn keybindings_section_resolves_per_entry() {
+        use crossterm::event::{KeyCode, KeyEvent};
+        use crate::keymap::Action;
+
+        // A bare string and a list both parse; the keymap follows.
+        let cfg: Config =
+            toml::from_str("[keybindings]\nrefresh = \"f5\"\nopen = [\"enter\", \"z\"]").unwrap();
+        let (resolved, warnings) = resolve(&cfg);
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(
+            resolved.keymap.resolve(&KeyEvent::from(KeyCode::F(5))),
+            Some(Action::Refresh)
+        );
+        assert_eq!(
+            resolved.keymap.resolve(&KeyEvent::from(KeyCode::Char('z'))),
+            Some(Action::Open)
+        );
+        assert_eq!(resolved.keymap.resolve(&KeyEvent::from(KeyCode::Char('r'))), None);
+
+        // A bad entry warns and keeps the default; the good one still lands.
+        let cfg: Config =
+            toml::from_str("[keybindings]\nquit = \"supr\"\ncard = \"b\"").unwrap();
+        let (resolved, warnings) = resolve(&cfg);
+        assert_eq!(warnings.len(), 2, "{warnings:?}");
+        assert_eq!(
+            resolved.keymap.resolve(&KeyEvent::from(KeyCode::Char('q'))),
+            Some(Action::Quit)
+        );
+        assert_eq!(
+            resolved.keymap.resolve(&KeyEvent::from(KeyCode::Char('b'))),
+            Some(Action::Card)
+        );
+
+        // No section at all: the untouched defaults.
+        let (resolved, warnings) = resolve(&Config::default());
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(
+            resolved.keymap.resolve(&KeyEvent::from(KeyCode::Char('q'))),
+            Some(Action::Quit)
+        );
     }
 
     #[test]

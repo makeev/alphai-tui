@@ -133,6 +133,8 @@ pub struct AppInit {
     pub theme: Theme,
     pub chart: ChartDefaults,
     pub ui: UiDefaults,
+    /// Resolved from `[keybindings]` (defaults when the section is absent).
+    pub keymap: Keymap,
     pub alphai_enabled: bool,
     pub first_run: bool,
 }
@@ -231,7 +233,7 @@ impl App {
             config: init.config,
             config_path: init.config_path,
             theme: init.theme,
-            keymap: Keymap::default(),
+            keymap: init.keymap,
             source: init.source,
             params: init.params,
             inflight: HashSet::new(),
