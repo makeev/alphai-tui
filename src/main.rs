@@ -100,11 +100,13 @@ fn main() -> Result<()> {
     let refresh = Arc::new(tokio::sync::Notify::new());
     let shared: poller::SharedSource = Arc::new(RwLock::new(source.clone()));
     let params: poller::SharedParams = Arc::new(RwLock::new((range, interval)));
+    let shared_every: poller::SharedEvery =
+        Arc::new(RwLock::new(Duration::from_secs(every.max(2))));
     rt.spawn(poller::run(
         shared.clone(),
         symbols.clone(),
         params.clone(),
-        Duration::from_secs(every.max(2)),
+        shared_every.clone(),
         resolved.chart.sma_slow,
         tx.clone(),
         refresh.clone(),
@@ -122,6 +124,7 @@ fn main() -> Result<()> {
         range,
         interval,
         params,
+        every: shared_every,
         rx,
         refresh,
         alphai_tx,

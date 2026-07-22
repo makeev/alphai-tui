@@ -24,6 +24,10 @@ pub type SharedSource = Arc<RwLock<Arc<dyn DataSource>>>;
 /// keys. Same pattern as `SharedSource`: re-read at the top of every cycle.
 pub type SharedParams = Arc<RwLock<(Range, Interval)>>;
 
+/// The poll interval, editable at runtime from the settings screen. Same
+/// pattern as `SharedSource`: re-read before every sleep.
+pub type SharedEvery = Arc<RwLock<Duration>>;
+
 /// Polls every symbol concurrently, then sleeps until the next cycle or a
 /// manual refresh. Streaming sources will bypass this and push straight into
 /// the same channel. `slow_bars` is the slowest indicator period, sizing
@@ -32,7 +36,7 @@ pub async fn run(
     source: SharedSource,
     symbols: Vec<String>,
     params: SharedParams,
-    every: Duration,
+    every: SharedEvery,
     slow_bars: usize,
     tx: UnboundedSender<SourceEvent>,
     refresh: Arc<Notify>,
@@ -65,8 +69,9 @@ pub async fn run(
                 return; // UI is gone
             }
         }
+        let sleep = *every.read().unwrap();
         tokio::select! {
-            _ = tokio::time::sleep(every) => {}
+            _ = tokio::time::sleep(sleep) => {}
             _ = refresh.notified() => {}
         }
     }

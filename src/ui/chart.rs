@@ -1,7 +1,7 @@
 use chrono::{DateTime, Local};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
-use ratatui::style::{Color, Style, Stylize};
+use ratatui::style::{Color, Modifier, Style, Stylize};
 use ratatui::symbols;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Axis, Block, Chart, Dataset, GraphType, Paragraph};
@@ -98,7 +98,7 @@ pub fn render_chart(f: &mut Frame, area: Rect, app: &App) {
         ChartStyle::Candles => render_price_candles(f, price_area, app, &symbol, data, cut),
     }
     if let Some(r) = rsi_area {
-        render_rsi(f, r, data, cut, app.chart.rsi_period, &app.theme);
+        render_rsi(f, r, data, cut, &app.chart, &app.theme);
     }
 }
 
@@ -113,6 +113,42 @@ fn visible_from(candles: &[Candle], range: Range) -> usize {
     let cut = candles.partition_point(|c| c.ts <= cutoff);
     // Never trim below a drawable pair of candles.
     cut.min(candles.len().saturating_sub(2))
+}
+
+/// Columns of the plot kept free right of the newest candle (`[chart]
+/// right_margin_pct`). The candle zone always keeps at least 2 columns.
+fn margin_cols(width: u16, pct: u16) -> u16 {
+    (width as u32 * pct as u32 / 100).min(width.saturating_sub(2) as u32) as u16
+}
+
+/// The x-axis upper bound stretched so the data occupies (100-pct)% of the
+/// width and the rest stays free on the right.
+fn x_with_margin(x_hi: f64, pct: u16) -> f64 {
+    if pct == 0 { x_hi } else { x_hi * 100.0 / (100.0 - pct as f64) }
+}
+
+/// Timestamp at fractional candle index `x`; past the last candle it
+/// extrapolates with the average spacing, so labels under the right margin
+/// read as the near future instead of repeating the last candle.
+fn time_at(candles: &[Candle], x: f64) -> i64 {
+    let last = candles.len() - 1;
+    if x <= last as f64 {
+        return candles[(x.round().max(0.0) as usize).min(last)].ts;
+    }
+    let avg = if last > 0 {
+        (candles[last].ts - candles[0].ts) as f64 / last as f64
+    } else {
+        0.0
+    };
+    candles[last].ts + ((x - last as f64) * avg) as i64
+}
+
+/// Style of the last-price value while its update pulse is active: the tick
+/// direction's color, inverted so it visibly blinks.
+fn flash_style(up: bool, theme: &Theme) -> Style {
+    Style::new()
+        .fg(if up { theme.up } else { theme.down })
+        .add_modifier(Modifier::REVERSED | Modifier::BOLD)
 }
 
 fn dir_color(q: &Quote, theme: &Theme) -> Color {
@@ -133,18 +169,19 @@ fn chart_title(
     show_sma: bool,
     chart: &ChartDefaults,
     theme: &Theme,
+    flash: Option<bool>,
 ) -> Line<'static> {
     let change_str = match (q.change(), q.change_pct()) {
         (Some(c), Some(p)) => format!("{c:+.2} ({p:+.2}%)"),
         _ => "—".into(),
     };
+    // The price pulses in the tick's color right after an update, so a
+    // live market is visible at a glance even in line mode.
+    let price_style = flash.map_or(Style::new(), |up| flash_style(up, theme));
     let mut spans = vec![
         Span::styled(format!(" {symbol} "), Style::new().bold()),
-        Span::raw(format!(
-            "{} {} ",
-            fmt_price(q.price),
-            q.currency.as_deref().unwrap_or("")
-        )),
+        Span::styled(fmt_price(q.price), price_style),
+        Span::raw(format!(" {} ", q.currency.as_deref().unwrap_or(""))),
         Span::styled(format!("{change_str} "), Style::new().fg(dir_color(q, theme))),
     ];
     if show_sma {
@@ -198,14 +235,27 @@ fn render_price_line(
         lo = lo.min(pc);
         hi = hi.max(pc);
     }
+    // And the quote itself: the snapshot can be fresher than the last candle,
+    // and the last-price marker must stay on screen.
+    lo = lo.min(q.price);
+    hi = hi.max(q.price);
     let pad = ((hi - lo) * 0.05).max(hi.abs() * 0.0005).max(1e-9);
     let (y_lo, y_hi) = (lo - pad, hi + pad);
     let x_hi = (points.len() - 1) as f64;
+    let x_max = x_with_margin(x_hi, app.chart.right_margin_pct);
 
     let prev_close_points: Vec<(f64, f64)> = q
         .prev_close
-        .map(|pc| vec![(0.0, pc), (x_hi, pc)])
+        .map(|pc| vec![(0.0, pc), (x_max, pc)])
         .unwrap_or_default();
+    // Last-price marker: a thin line from the newest close into the right
+    // margin, inverted while the update pulse is active.
+    let flash = app.price_flash_dir(symbol);
+    let marker_points: Vec<(f64, f64)> = if x_max > x_hi {
+        vec![(x_hi, q.price), (x_max, q.price)]
+    } else {
+        Vec::new()
+    };
 
     // Indicators run over the full series (warm-up included), then shift to
     // the visible window's x coordinates.
@@ -254,13 +304,25 @@ fn render_price_line(
             .style(Style::new().fg(dir_color(q, &app.theme)))
             .data(&points),
     );
+    if !marker_points.is_empty() {
+        let style = match flash {
+            Some(up) => flash_style(up, &app.theme),
+            None => Style::new().fg(dir_color(q, &app.theme)),
+        };
+        datasets.push(
+            Dataset::default()
+                .marker(symbols::Marker::Braille)
+                .graph_type(GraphType::Line)
+                .style(style)
+                .data(&marker_points),
+        );
+    }
 
-    let fmt = axis_time_fmt(visible[0].ts, visible.last().unwrap().ts);
-    let mid = visible.len() / 2;
+    let fmt = axis_time_fmt(visible[0].ts, time_at(visible, x_max));
     let x_labels = vec![
         time_label(visible[0].ts, fmt),
-        time_label(visible[mid].ts, fmt),
-        time_label(visible.last().unwrap().ts, fmt),
+        time_label(time_at(visible, x_max / 2.0), fmt),
+        time_label(time_at(visible, x_max), fmt),
     ];
     let y_labels = vec![
         fmt_price(y_lo),
@@ -276,10 +338,11 @@ fn render_price_line(
             app.show_sma,
             &app.chart,
             &app.theme,
+            flash,
         )))
         .x_axis(
             Axis::default()
-                .bounds([0.0, x_hi])
+                .bounds([0.0, x_max])
                 .labels(x_labels)
                 .style(Style::new().dim()),
         )
@@ -307,6 +370,7 @@ fn render_price_candles(
 ) {
     let q = &data.quote;
     let visible = &data.candles[cut..];
+    let flash = app.price_flash_dir(symbol);
     let block = Block::bordered().title(chart_title(
         symbol,
         q,
@@ -314,6 +378,7 @@ fn render_price_candles(
         app.show_sma,
         &app.chart,
         &app.theme,
+        flash,
     ));
     let inner = block.inner(area);
     f.render_widget(block, area);
@@ -329,6 +394,10 @@ fn render_price_candles(
         lo = lo.min(pc);
         hi = hi.max(pc);
     }
+    // The quote can be fresher than the last candle; the last-price marker
+    // must stay on screen.
+    lo = lo.min(q.price);
+    hi = hi.max(q.price);
     let pad = ((hi - lo) * 0.05).max(hi.abs() * 0.0005).max(1e-9);
     let (y_lo, y_hi) = (lo - pad, hi + pad);
 
@@ -346,8 +415,11 @@ fn render_price_candles(
 
     // Every candle gets a slot of body + 1 column of gap so neighbours never
     // fuse into a solid mass; history beyond width/2 candles aggregates into
-    // even buckets.
-    let max_cols = plot.width as usize;
+    // even buckets. The right margin stays out of the candle zone entirely:
+    // it hosts the last-price marker.
+    let margin = margin_cols(plot.width, app.chart.right_margin_pct);
+    let usable = plot.width - margin;
+    let max_cols = usable as usize;
     let max_candles = (max_cols / 2).max(1);
     let (display, sample_idx): (Vec<Candle>, Vec<usize>) = if visible.len() > max_candles {
         let ranges = bucket_ranges(visible.len(), max_candles);
@@ -363,7 +435,7 @@ fn render_price_candles(
     let n = display.len();
     let slot = (max_cols / n).clamp(2, 4) as u16;
     let body_w = slot - 1;
-    let slot_x = |i: usize| plot.x + plot.width - (n - i) as u16 * slot;
+    let slot_x = |i: usize| plot.x + usable - (n - i) as u16 * slot;
 
     let buf = f.buffer_mut();
 
@@ -433,6 +505,28 @@ fn render_price_candles(
         overlay.blit(buf, plot);
     }
 
+    // Last-price marker in the right margin: a line at the quote's level
+    // ending in the price tag, inverted in the tick's color while the
+    // update pulse is active. With the margin off the title pulse remains.
+    if margin > 0 {
+        let row = plot.y + (scale(q.price, y_lo, y_hi, plot.height as usize * 2) / 2) as u16;
+        let color = dir_color(q, &app.theme);
+        for x in plot.x + usable..plot.x + plot.width {
+            if let Some(cell) = buf.cell_mut((x, row)) {
+                cell.set_char('─').set_fg(color);
+            }
+        }
+        let tag = fmt_price(q.price);
+        let len = tag.chars().count() as u16;
+        if margin > len {
+            let style = match flash {
+                Some(up) => flash_style(up, &app.theme),
+                None => Style::new().fg(color).add_modifier(Modifier::BOLD),
+            };
+            buf.set_string(plot.x + plot.width - len, row, &tag, style);
+        }
+    }
+
     // Axes: price labels right-aligned in the gutter, three time labels below.
     let dim = Style::new().dim();
     let label_ys = [plot.y, plot.y + plot.height / 2, plot.y + plot.height - 1];
@@ -440,16 +534,24 @@ fn render_price_candles(
         let x = plot.x - 1 - label.chars().count() as u16;
         buf.set_string(x, y, label, dim);
     }
+    // The right edge sits `margin` columns past the newest candle, so its
+    // label extrapolates that far into the future (in display-candle units).
     let axis_y = plot.y + plot.height;
-    let fmt = axis_time_fmt(display[0].ts, display[n - 1].ts);
+    let edge_x = (n - 1) as f64 + margin as f64 / slot as f64;
+    let fmt = axis_time_fmt(display[0].ts, time_at(&display, edge_x));
     let first = time_label(display[0].ts, fmt);
-    let last = time_label(display[n - 1].ts, fmt);
+    let last = time_label(time_at(&display, edge_x), fmt);
     buf.set_string(plot.x, axis_y, &first, dim);
     let last_x = plot.x + plot.width - last.chars().count() as u16;
     buf.set_string(last_x, axis_y, &last, dim);
     if plot.width >= 30 {
+        // Centered under the middle candle, not the middle of the plot: with
+        // a margin the two differ.
         let mid = time_label(display[n / 2].ts, fmt);
-        let mid_x = plot.x + (plot.width - mid.chars().count() as u16) / 2;
+        let len = mid.chars().count() as u16;
+        let mid_x = (slot_x(n / 2) + slot / 2)
+            .saturating_sub(len / 2)
+            .clamp(plot.x, plot.x + plot.width - len);
         buf.set_string(mid_x, axis_y, &mid, dim);
     }
 }
@@ -642,7 +744,15 @@ fn aggregate(chunk: &[Candle]) -> Candle {
 
 // -- RSI panel ----------------------------------------------------------------
 
-fn render_rsi(f: &mut Frame, area: Rect, data: &TickerData, cut: usize, period: usize, theme: &Theme) {
+fn render_rsi(
+    f: &mut Frame,
+    area: Rect,
+    data: &TickerData,
+    cut: usize,
+    chart: &ChartDefaults,
+    theme: &Theme,
+) {
+    let period = chart.rsi_period;
     let closes: Vec<f64> = data.candles.iter().map(|c| c.close).collect();
     let rsi = indicators::rsi(&closes, period);
     let Some(last) = rsi.last().copied().flatten() else {
@@ -654,10 +764,12 @@ fn render_rsi(f: &mut Frame, area: Rect, data: &TickerData, cut: usize, period: 
         return;
     };
 
-    // Same visible-window slicing as the price chart above it.
+    // Same visible-window slicing as the price chart above it, including the
+    // right margin, so the curves stay roughly column-aligned.
     let x_hi = (closes.len() - 1 - cut) as f64;
-    let ref30 = [(0.0, 30.0), (x_hi, 30.0)];
-    let ref70 = [(0.0, 70.0), (x_hi, 70.0)];
+    let x_max = x_with_margin(x_hi, chart.right_margin_pct);
+    let ref30 = [(0.0, 30.0), (x_max, 30.0)];
+    let ref70 = [(0.0, 70.0), (x_max, 70.0)];
     let points: Vec<(f64, f64)> = rsi
         .iter()
         .enumerate()
@@ -699,7 +811,7 @@ fn render_rsi(f: &mut Frame, area: Rect, data: &TickerData, cut: usize, period: 
     ]);
     let chart = Chart::new(datasets)
         .block(Block::bordered().title(title))
-        .x_axis(Axis::default().bounds([0.0, x_hi]))
+        .x_axis(Axis::default().bounds([0.0, x_max]))
         .y_axis(
             Axis::default()
                 .bounds([0.0, 100.0])
@@ -743,6 +855,36 @@ mod tests {
         // window alone would leave a single candle.
         let candles = flat_series(5, 10 * 86_400);
         assert_eq!(visible_from(&candles, Range::D1), 3);
+    }
+
+    #[test]
+    fn margin_cols_scales_and_keeps_a_candle_zone() {
+        assert_eq!(margin_cols(100, 20), 20);
+        assert_eq!(margin_cols(100, 0), 0);
+        assert_eq!(margin_cols(10, 50), 5);
+        // Tiny plots always keep at least 2 drawable columns.
+        assert_eq!(margin_cols(3, 50), 1);
+    }
+
+    #[test]
+    fn x_with_margin_stretches_the_axis() {
+        // 20% margin: the data's 80 units become 80% of a 100-unit axis.
+        assert_eq!(x_with_margin(80.0, 20), 100.0);
+        assert_eq!(x_with_margin(50.0, 50), 100.0);
+        assert_eq!(x_with_margin(50.0, 0), 50.0);
+    }
+
+    #[test]
+    fn time_at_reads_candles_and_extrapolates() {
+        let candles = flat_series(11, 300); // ts 0, 300, …, 3000
+        assert_eq!(time_at(&candles, 0.0), 0);
+        assert_eq!(time_at(&candles, 4.0), 1200);
+        assert_eq!(time_at(&candles, 10.0), 3000);
+        // Past the last candle the average spacing carries on: the margin
+        // labels read as the near future.
+        assert_eq!(time_at(&candles, 12.5), 3750);
+        // A single candle has no spacing to extrapolate with.
+        assert_eq!(time_at(&candles[..1], 5.0), 0);
     }
 
     #[test]

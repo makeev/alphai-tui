@@ -45,7 +45,13 @@ Built in Rust with [ratatui](https://ratatui.rs).
   `i` toggle the indicators, `t` cycles interval presets on the fly.
   The client quietly fetches extra history beyond the visible window, so
   the SMA and RSI lines are fully drawn from the first candle on screen
-  instead of waiting a hundred candles to warm up.
+  instead of waiting a hundred candles to warm up. Like a trading
+  terminal, the chart keeps a margin right of the newest candle (20% of
+  the plot; `[chart] right_margin_pct` resizes it, 0 turns it off) with a
+  last-price marker line and tag in it. Every time a poll changes the
+  price, the marker and the title price pulse in the tick's color for a
+  moment, so a live market is visible at a glance; the poll interval is
+  `--every` / the `Poll every` settings row.
 - **Insider**: SEC Form 4 activity for the selected ticker. A 30-day rollup
   (buys vs sells, dollar volumes, share of pre-arranged 10b5-1 plan trades,
   most active insiders with their transaction counts) above the stream of
@@ -63,10 +69,10 @@ Built in Rust with [ratatui](https://ratatui.rs).
 
   ![alphai-tui insider view: 30-day Form 4 rollup with top insiders above the filing stream, article card open on a 10b5-1 plan sale](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/insider.png)
 
-- In-app settings (`s`): pick the price source, paste API keys once and
-  choose where Enter opens news articles.
-  Everything is saved to a config file, so after the first run a bare
-  `alphai-tui` is enough.
+- In-app settings (`s`): pick the price source, paste API keys once, set
+  the poll interval (applies immediately) and choose where Enter opens
+  news articles. Everything is saved to a config file, so after the first
+  run a bare `alphai-tui` is enough.
 
 Prices work with no key at all (Yahoo). News, sentiment and insider views
 use the [AlphaAI](https://alphai.io?utm_source=alphai-tui&utm_medium=referral) API and need a free key.
@@ -134,7 +140,7 @@ alphai-tui -s finnhub NVDA  # explicit source for one run
 | Flag | Default | Meaning |
 |------|---------|---------|
 | `-s, --source` | `yahoo` | Price source: `yahoo`, `finnhub` or `alpaca` |
-| `-e, --every` | `15` | Poll interval, seconds |
+| `-e, --every` | `15` | Poll interval, seconds (also a settings row, applied live) |
 | `-r, --range` | `1d` | History window: `1d 5d 1mo 3mo 6mo 1y 2y` |
 | `-i, --interval` | `5m` | Candle size: `1m 2m 5m 15m 30m 60m 1d` |
 | `--once` | | Print quotes to stdout and exit |
@@ -309,6 +315,7 @@ rsi = true                # RSI panel visible at start
 sma_fast = 20             # 2 to 250
 sma_slow = 100            # 2 to 250; also sizes the history warm-up
 rsi_period = 14           # 2 to 100
+right_margin_pct = 20     # free space right of the newest candle, 0 to 50
 presets = [               # the combos the t and T keys cycle
   ["1d", "5m"],
   ["5d", "15m"],

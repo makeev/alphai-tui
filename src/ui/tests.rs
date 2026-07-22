@@ -7,9 +7,13 @@ use ratatui::backend::TestBackend;
 use tokio::sync::Notify;
 
 use crate::alphai::{self, Article, FeedPayload, InsiderSummary, SentimentSummary, TRENDING_KEY};
-use crate::app::{App, AppInit, ChartStyle, FeedBundle, NewsLayout, NewsScope};
+use crate::app::{
+    App, AppInit, ChartStyle, FeedBundle, NewsLayout, NewsScope, PRICE_FLASH, SettingsRow,
+    settings_rows,
+};
 use crate::config::{ChartDefaults, Config, UiDefaults};
 use crate::domain::{Candle, Interval, Quote, Range, TickerData};
+use crate::poller::SourceEvent;
 use crate::source::make_source;
 use crate::theme::Theme;
 use crate::ui;
@@ -34,6 +38,7 @@ fn empty_app_with_cmds(
         range: Range::D1,
         interval: Interval::M5,
         params: Arc::new(RwLock::new((Range::D1, Interval::M5))),
+        every: Arc::new(RwLock::new(std::time::Duration::from_secs(15))),
         rx,
         refresh: Arc::new(Notify::new()),
         alphai_tx,
@@ -222,6 +227,114 @@ fn chart_toggles_to_line_mode() {
     );
     press(&mut app, KeyCode::Char('c'));
     assert_eq!(app.chart_style, ChartStyle::Candles);
+}
+
+/// The default 20% right margin keeps candles off the right edge and hosts
+/// the last-price tag; `right_margin_pct = 0` restores the old flush layout.
+#[test]
+fn right_margin_frees_columns_and_hosts_the_price_tag() {
+    let mut app = fake_app();
+    app.view_idx = ui::view_index(ui::ViewId::Chart);
+    app.show_rsi = false;
+    let max_body_x = |screen: &str| {
+        screen
+            .lines()
+            .flat_map(|l| {
+                l.chars()
+                    .enumerate()
+                    .filter(|(_, c)| matches!(c, '█' | '▀' | '▄'))
+                    .map(|(i, _)| i)
+            })
+            .max()
+            .unwrap()
+    };
+
+    let screen = render(&mut app);
+    let with_margin = max_body_x(&screen);
+    // The price appears in the title and again as the tag in the margin.
+    assert!(screen.matches("214.50").count() >= 2, "price tag missing:\n{screen}");
+
+    app.chart.right_margin_pct = 0;
+    let screen = render(&mut app);
+    let flush = max_body_x(&screen);
+    assert_eq!(screen.matches("214.50").count(), 1, "margin off, tag still drawn:\n{screen}");
+    assert!(
+        with_margin + 10 <= flush,
+        "margin freed no columns: {with_margin} vs {flush}\n{screen}"
+    );
+}
+
+/// Line mode renders with the margin (marker line into it) and without.
+#[test]
+fn line_mode_renders_with_and_without_margin() {
+    let mut app = fake_app();
+    app.view_idx = ui::view_index(ui::ViewId::Chart);
+    press(&mut app, KeyCode::Char('c'));
+    let braille = |s: &str| s.chars().any(|c| ('\u{2800}'..='\u{28FF}').contains(&c));
+    assert!(braille(&render(&mut app)), "no line with the margin on");
+    app.chart.right_margin_pct = 0;
+    assert!(braille(&render(&mut app)), "no line with the margin off");
+}
+
+#[test]
+fn price_flash_tracks_update_direction() {
+    let mut app = empty_app(vec!["AAPL".into()]);
+    let data = |price: f64| SourceEvent::Data {
+        symbol: "AAPL".into(),
+        data: TickerData {
+            quote: Quote {
+                symbol: "AAPL".into(),
+                price,
+                prev_close: Some(price),
+                currency: None,
+            },
+            candles: vec![],
+        },
+    };
+    app.apply(data(100.0));
+    assert_eq!(app.price_flash_dir("AAPL"), None, "first data must not flash");
+    app.apply(data(101.0));
+    assert_eq!(app.price_flash_dir("AAPL"), Some(true));
+    app.apply(data(100.5));
+    assert_eq!(app.price_flash_dir("AAPL"), Some(false));
+    app.price_flash.clear();
+    app.apply(data(100.5));
+    assert_eq!(app.price_flash_dir("AAPL"), None, "unchanged price must not flash");
+}
+
+fn reversed_cells(app: &mut App) -> Vec<ratatui::style::Color> {
+    use ratatui::style::Modifier;
+    let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
+    terminal.draw(|f| ui::draw(f, app)).unwrap();
+    let buffer = terminal.backend().buffer().clone();
+    let mut out = Vec::new();
+    for y in 0..30 {
+        for x in 0..100 {
+            let cell = buffer.cell((x, y)).unwrap();
+            if cell.modifier.contains(Modifier::REVERSED) {
+                out.push(cell.fg);
+            }
+        }
+    }
+    out
+}
+
+/// An active pulse inverts the price (title and margin tag) in the tick's
+/// color; an expired one reverts on the next frame. Nothing else in the
+/// Chart view uses REVERSED, so the cell scan is unambiguous.
+#[test]
+fn price_flash_inverts_the_price_on_the_chart() {
+    let mut app = fake_app();
+    app.view_idx = ui::view_index(ui::ViewId::Chart);
+    assert!(reversed_cells(&mut app).is_empty(), "inverted cells without a flash");
+
+    app.price_flash.insert("AAPL".into(), (Instant::now(), true));
+    let cells = reversed_cells(&mut app);
+    assert!(!cells.is_empty(), "flash did not invert the price");
+    assert!(cells.iter().all(|&fg| fg == app.theme.up), "up tick must use the up color");
+
+    app.price_flash.insert("AAPL".into(), (Instant::now() - PRICE_FLASH, true));
+    assert!(reversed_cells(&mut app).is_empty(), "expired flash still inverted");
 }
 
 /// The candle-mode SMA overlay draws connected braille lines, not the old
@@ -1233,6 +1346,7 @@ fn config_defaults_seed_startup_state() {
         range: Range::D1,
         interval: Interval::M5,
         params: Arc::new(RwLock::new((Range::D1, Interval::M5))),
+        every: Arc::new(RwLock::new(std::time::Duration::from_secs(15))),
         rx,
         refresh: Arc::new(Notify::new()),
         alphai_tx,
@@ -1399,6 +1513,7 @@ fn first_run_opens_settings_with_welcome() {
         range: Range::D1,
         interval: Interval::M5,
         params: Arc::new(RwLock::new((Range::D1, Interval::M5))),
+        every: Arc::new(RwLock::new(std::time::Duration::from_secs(15))),
         rx,
         refresh: Arc::new(Notify::new()),
         alphai_tx,
@@ -1415,4 +1530,61 @@ fn first_run_opens_settings_with_welcome() {
     let screen = render(&mut app);
     assert!(screen.contains("Welcome to alphai-tui"), "screen:\n{screen}");
     assert!(screen.contains("https://alphai.io"), "screen:\n{screen}");
+}
+
+/// The Poll every settings row: seeded from the live interval, edited like a
+/// key field, validated and applied on Save. config_path is None here so the
+/// file write fails, but the live interval and in-memory config still apply.
+#[test]
+fn settings_poll_every_saves_and_applies_live() {
+    let mut app = empty_app(vec!["AAPL".into()]);
+    press(&mut app, KeyCode::Char('s'));
+    assert!(app.settings.open);
+    assert_eq!(app.settings.every_input, "15");
+    let screen = render(&mut app);
+    assert!(screen.contains("Poll every"), "screen:\n{screen}");
+    assert!(screen.contains("15s"), "screen:\n{screen}");
+
+    while !matches!(settings_rows()[app.settings.cursor], SettingsRow::PollEvery) {
+        press(&mut app, KeyCode::Down);
+    }
+    press(&mut app, KeyCode::Enter);
+    assert!(app.settings.editing);
+    press(&mut app, KeyCode::Backspace);
+    press(&mut app, KeyCode::Backspace);
+    press(&mut app, KeyCode::Char('5'));
+    press(&mut app, KeyCode::Enter);
+    assert_eq!(app.settings.every_input, "5");
+
+    while !matches!(settings_rows()[app.settings.cursor], SettingsRow::Save) {
+        press(&mut app, KeyCode::Down);
+    }
+    press(&mut app, KeyCode::Enter);
+    assert_eq!(app.config.every, Some(5));
+    // Reopening reseeds from the shared interval the poller reads: the live
+    // value really changed.
+    app.open_settings();
+    assert_eq!(app.settings.every_input, "5");
+}
+
+/// A bad interval blocks Save with a message instead of half-applying.
+#[test]
+fn settings_poll_every_rejects_bad_input() {
+    for bad in ["abc", "1", "0", ""] {
+        let mut app = empty_app(vec!["AAPL".into()]);
+        press(&mut app, KeyCode::Char('s'));
+        app.settings.every_input = bad.to_string();
+        while !matches!(settings_rows()[app.settings.cursor], SettingsRow::Save) {
+            press(&mut app, KeyCode::Down);
+        }
+        press(&mut app, KeyCode::Enter);
+        assert!(app.settings.open, "at {bad:?}: settings closed on bad input");
+        assert!(
+            app.settings.message.as_deref().is_some_and(|m| m.contains("poll interval")),
+            "at {bad:?}: no validation message"
+        );
+        assert_eq!(app.config.every, None, "at {bad:?}: bad value persisted");
+        app.open_settings();
+        assert_eq!(app.settings.every_input, "15", "at {bad:?}: live interval changed");
+    }
 }

@@ -7,6 +7,7 @@
 
 use std::collections::BTreeMap;
 use std::sync::LazyLock;
+use std::time::Duration;
 
 use crossterm::event::{KeyCode, KeyEvent};
 
@@ -29,6 +30,8 @@ pub struct SettingsState {
     pub source_choice: String,
     /// Edit buffers for the `Key` rows, by `KeyField::config_name`.
     pub key_values: BTreeMap<&'static str, String>,
+    /// Edit buffer for the poll interval, in whole seconds.
+    pub every_input: String,
     /// "alphai" (article page on alphai.io) or "original" (source site).
     pub news_open_choice: String,
     pub message: Option<String>,
@@ -41,6 +44,8 @@ pub enum SettingsRow {
     SourceChoice,
     /// An editable, masked credential.
     Key(&'static KeyField),
+    /// The price poll interval in seconds; applies live on Save.
+    PollEvery,
     /// Where Enter opens a news article.
     NewsOpen,
     /// The save button.
@@ -61,6 +66,7 @@ pub fn settings_rows() -> &'static [SettingsRow] {
                 .map(SettingsRow::Key),
         );
         rows.push(SettingsRow::Key(&ALPHAI_KEY_FIELD));
+        rows.push(SettingsRow::PollEvery);
         rows.push(SettingsRow::NewsOpen);
         rows.push(SettingsRow::Save);
         rows
@@ -87,6 +93,7 @@ impl App {
         s.message = None;
         s.source_choice = self.source_name.to_string();
         s.key_values = key_values;
+        s.every_input = self.every.read().unwrap().as_secs().to_string();
         s.news_open_choice = if self.config.news_open_original() {
             "original".to_string()
         } else {
@@ -100,8 +107,13 @@ impl App {
             match key.code {
                 KeyCode::Enter => {
                     let value = s.input.trim().to_string();
-                    if let SettingsRow::Key(field) = settings_rows()[s.cursor] {
-                        s.key_values.insert(field.config_name, value);
+                    match settings_rows()[s.cursor] {
+                        SettingsRow::Key(field) => {
+                            s.key_values.insert(field.config_name, value);
+                        }
+                        // Committed raw; Save validates and complains.
+                        SettingsRow::PollEvery => s.every_input = value,
+                        _ => {}
                     }
                     s.editing = false;
                 }
@@ -141,6 +153,11 @@ impl App {
                     s.input = s.key_values.get(field.config_name).cloned().unwrap_or_default();
                     s.editing = true;
                 }
+                SettingsRow::PollEvery => {
+                    let s = &mut self.settings;
+                    s.input = s.every_input.clone();
+                    s.editing = true;
+                }
                 SettingsRow::Save => self.settings_save(),
             },
             _ => {}
@@ -178,6 +195,9 @@ impl App {
             }
         }
         cfg.news_open = Some(self.settings.news_open_choice.clone());
+        if let Some(secs) = parse_every(&self.settings.every_input) {
+            cfg.every = Some(secs);
+        }
         // Saving persists the watchlist on screen, so a bare `alphai-tui`
         // reopens exactly this setup.
         cfg.watchlist = self.symbols.clone();
@@ -185,6 +205,11 @@ impl App {
     }
 
     fn settings_save(&mut self) {
+        let Some(every_secs) = parse_every(&self.settings.every_input) else {
+            self.settings.message =
+                Some("poll interval: whole seconds, 2 or more".to_string());
+            return;
+        };
         let cfg = self.settings_merged_config();
 
         // A swap to another source, or an edit to the selected source's own
@@ -216,6 +241,15 @@ impl App {
             }
         }
 
+        // The poller re-reads the interval before every sleep; the nudge
+        // makes the new cadence take effect now rather than after the
+        // current (possibly long) sleep runs out.
+        let every = Duration::from_secs(every_secs);
+        if *self.every.read().unwrap() != every {
+            *self.every.write().unwrap() = every;
+            self.refresh.notify_one();
+        }
+
         if cfg.alphai_key() != self.config.alphai_key() {
             let key = cfg.alphai_key();
             self.alphai_enabled = key.is_some();
@@ -239,6 +273,12 @@ impl App {
             }
         }
     }
+}
+
+/// The poll-interval edit buffer as seconds: whole numbers of 2 and up
+/// (the same floor `main` applies to --every), anything else is invalid.
+fn parse_every(input: &str) -> Option<u64> {
+    input.trim().parse::<u64>().ok().filter(|&v| v >= 2)
 }
 
 /// Settings source toggle: cycles the registry in order; unknown names

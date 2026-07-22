@@ -60,6 +60,15 @@ pub fn render(f: &mut Frame, app: &App) {
                 let stored = s.key_values.get(field.config_name).map_or("", String::as_str);
                 (field.label, field_value(s, i, stored), key_hint(field, stored))
             }
+            SettingsRow::PollEvery => (
+                "Poll every",
+                if s.cursor == i && s.editing {
+                    format!("{}▏", s.input)
+                } else {
+                    format!("{}s", s.every_input)
+                },
+                "price refresh interval, seconds (min 2)".to_string(),
+            ),
             SettingsRow::NewsOpen => (
                 "News opens",
                 format!("‹ {} ›", s.news_open_choice),

@@ -45,6 +45,14 @@ pub fn render_table(f: &mut Frame, area: Rect, app: &mut App) {
                 Some(c) if c < 0.0 => Style::new().fg(app.theme.down),
                 _ => Style::new().dim(),
             };
+            // Freshly updated price pulses in the tick's color (see
+            // `App::price_flash_dir`), so the table reads as live too.
+            let price_style = match app.price_flash_dir(symbol) {
+                Some(up) => Style::new()
+                    .fg(if up { app.theme.up } else { app.theme.down })
+                    .add_modifier(Modifier::BOLD),
+                None => Style::new(),
+            };
             let change = q
                 .change()
                 .map(|c| format!("{c:+.2}"))
@@ -68,7 +76,7 @@ pub fn render_table(f: &mut Frame, area: Rect, app: &mut App) {
 
             Row::new(vec![
                 Cell::from(symbol.clone()).bold(),
-                Cell::from(fmt_price(q.price)),
+                Cell::from(fmt_price(q.price)).style(price_style),
                 Cell::from(change).style(dir_style),
                 Cell::from(change_pct).style(dir_style),
                 Cell::from(range).dim(),

@@ -114,6 +114,10 @@ pub struct ChartConfig {
     pub sma_fast: Option<usize>,
     pub sma_slow: Option<usize>,
     pub rsi_period: Option<usize>,
+    /// Percent of the plot width kept free right of the newest candle (the
+    /// last-price marker lives there). Raw i64 so an out-of-range number
+    /// degrades to a warning in `resolve`, not a whole-file parse error.
+    pub right_margin_pct: Option<i64>,
     /// The t/T cycle, as pairs like `["1d", "5m"]`.
     pub presets: Option<Vec<Vec<String>>>,
 }
@@ -139,6 +143,8 @@ pub struct ChartDefaults {
     pub sma_fast: usize,
     pub sma_slow: usize,
     pub rsi_period: usize,
+    /// 0 disables the margin (and the last-price marker drawn in it).
+    pub right_margin_pct: u16,
     pub presets: Vec<(Range, Interval)>,
 }
 
@@ -151,10 +157,20 @@ impl Default for ChartDefaults {
             sma_fast: indicators::SMA_FAST,
             sma_slow: indicators::SMA_SLOW,
             rsi_period: indicators::RSI_PERIOD,
+            right_margin_pct: DEFAULT_RIGHT_MARGIN_PCT,
             presets: RANGE_PRESETS.to_vec(),
         }
     }
 }
+
+/// Startup default of `[chart] right_margin_pct`: a fifth of the plot stays
+/// free right of the newest candle, so it never sits glued to the border and
+/// the last-price marker has room to live.
+pub const DEFAULT_RIGHT_MARGIN_PCT: u16 = 20;
+
+/// Accepted `[chart] right_margin_pct` values; anything past half the plot
+/// would squeeze the candles more than it helps.
+pub const RIGHT_MARGIN_RANGE: RangeInclusive<i64> = 0..=50;
 
 /// Startup default of the news score filter: relevance 7 and up (the API
 /// itself defaults to 4; +/- adjust it live, `[ui] news_min_score` seeds it).
@@ -232,6 +248,18 @@ fn resolve_chart(raw: Option<&ChartConfig>, warnings: &mut Vec<String>) -> Chart
     out.sma_fast = period(raw.sma_fast, out.sma_fast, "sma_fast", 2..=250, warnings);
     out.sma_slow = period(raw.sma_slow, out.sma_slow, "sma_slow", 2..=250, warnings);
     out.rsi_period = period(raw.rsi_period, out.rsi_period, "rsi_period", 2..=100, warnings);
+    if let Some(pct) = raw.right_margin_pct {
+        if RIGHT_MARGIN_RANGE.contains(&pct) {
+            out.right_margin_pct = pct as u16;
+        } else {
+            warnings.push(format!(
+                "[chart] right_margin_pct: {pct} is outside {}..={}, keeping {}",
+                RIGHT_MARGIN_RANGE.start(),
+                RIGHT_MARGIN_RANGE.end(),
+                DEFAULT_RIGHT_MARGIN_PCT
+            ));
+        }
+    }
     if let Some(rows) = &raw.presets {
         let mut presets = Vec::new();
         for row in rows {
@@ -480,6 +508,7 @@ mod tests {
             chart: Some(ChartConfig {
                 style: Some("line".into()),
                 sma_slow: Some(200),
+                right_margin_pct: Some(25),
                 presets: Some(vec![vec!["1d".into(), "5m".into()]]),
                 ..Default::default()
             }),
@@ -648,6 +677,30 @@ mod tests {
         let (resolved, warnings) = resolve(&cfg);
         assert_eq!(resolved.chart.presets, RANGE_PRESETS.to_vec());
         assert_eq!(warnings.len(), 2, "{warnings:?}");
+    }
+
+    #[test]
+    fn right_margin_pct_validates_per_entry() {
+        // The full accepted span, including 0 (margin off).
+        for (raw, want) in [("0", 0u16), ("20", 20), ("50", 50)] {
+            let cfg: Config =
+                toml::from_str(&format!("[chart]\nright_margin_pct = {raw}")).unwrap();
+            let (resolved, warnings) = resolve(&cfg);
+            assert!(warnings.is_empty(), "at {raw}: {warnings:?}");
+            assert_eq!(resolved.chart.right_margin_pct, want, "at {raw}");
+        }
+
+        // Out of range (including negatives, which the raw i64 must survive):
+        // warn and keep the default.
+        for bad in ["-1", "51", "200"] {
+            let cfg: Config =
+                toml::from_str(&format!("[chart]\nright_margin_pct = {bad}")).expect("must parse");
+            let (resolved, warnings) = resolve(&cfg);
+            assert_eq!(resolved.chart.right_margin_pct, DEFAULT_RIGHT_MARGIN_PCT, "at {bad}");
+            assert_eq!(warnings.len(), 1, "at {bad}: {warnings:?}");
+        }
+
+        assert_eq!(ChartDefaults::default().right_margin_pct, DEFAULT_RIGHT_MARGIN_PCT);
     }
 
     #[test]

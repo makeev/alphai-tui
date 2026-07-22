@@ -11,7 +11,7 @@ pub use settings::{SettingsRow, SettingsState, settings_rows};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use chrono::{DateTime, Local};
@@ -25,9 +25,14 @@ use crate::alphai::{self, Article};
 use crate::config::{ChartDefaults, Config, UiDefaults};
 use crate::domain::{Interval, Range, TickerData};
 use crate::keymap::{Action, Keymap};
-use crate::poller::{SharedParams, SharedSource, SourceEvent};
+use crate::poller::{SharedEvery, SharedParams, SharedSource, SourceEvent};
 use crate::theme::Theme;
 use crate::ui;
+
+/// How long the last-price highlight stays lit after a poll changes a
+/// symbol's price. The event loop redraws at least every 100ms, so the
+/// pulse both appears and clears promptly.
+pub const PRICE_FLASH: Duration = Duration::from_millis(1500);
 
 /// How the price chart draws history: candlesticks or the classic close line.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -131,6 +136,7 @@ pub struct AppInit {
     pub range: Range,
     pub interval: Interval,
     pub params: SharedParams,
+    pub every: SharedEvery,
     pub rx: UnboundedReceiver<SourceEvent>,
     pub refresh: Arc<Notify>,
     pub alphai_tx: UnboundedSender<alphai::Cmd>,
@@ -150,6 +156,10 @@ pub struct App {
     pub symbols: Vec<String>,
     pub data: HashMap<String, TickerData>,
     pub errors: HashMap<String, String>,
+    /// When a poll changed a symbol's price: (moment, tick was up). Views
+    /// pulse the price for `PRICE_FLASH` after it via `price_flash_dir`;
+    /// the first data a symbol ever gets sets no flash (nothing changed).
+    pub price_flash: HashMap<String, (Instant, bool)>,
     pub selected: usize,
     pub view_idx: usize,
     pub source_name: &'static str,
@@ -201,6 +211,9 @@ pub struct App {
     pub keymap: Keymap,
     source: SharedSource,
     params: SharedParams,
+    /// The poll interval the poller re-reads before every sleep; the
+    /// settings screen edits it live.
+    every: SharedEvery,
     inflight: HashSet<String>,
     alphai_tx: UnboundedSender<alphai::Cmd>,
     rx: UnboundedReceiver<SourceEvent>,
@@ -213,6 +226,7 @@ impl App {
             symbols: init.symbols,
             data: HashMap::new(),
             errors: HashMap::new(),
+            price_flash: HashMap::new(),
             selected: 0,
             view_idx: init.ui.view_idx,
             source_name: init.source_name,
@@ -245,6 +259,7 @@ impl App {
             keymap: init.keymap,
             source: init.source,
             params: init.params,
+            every: init.every,
             inflight: HashSet::new(),
             alphai_tx: init.alphai_tx,
             rx: init.rx,
@@ -259,6 +274,15 @@ impl App {
 
     pub fn selected_symbol(&self) -> &str {
         &self.symbols[self.selected]
+    }
+
+    /// The still-active price pulse of a symbol: Some(tick was up) for
+    /// `PRICE_FLASH` after a poll changed its price, then None.
+    pub fn price_flash_dir(&self, symbol: &str) -> Option<bool> {
+        self.price_flash
+            .get(symbol)
+            .filter(|(at, _)| at.elapsed() < PRICE_FLASH)
+            .map(|&(_, up)| up)
     }
 
     /// Identity of the visible view (its `view_idx` is the tab position).
@@ -283,10 +307,18 @@ impl App {
         }
     }
 
-    fn apply(&mut self, event: SourceEvent) {
+    pub(crate) fn apply(&mut self, event: SourceEvent) {
         match event {
             SourceEvent::Data { symbol, data } => {
                 self.errors.remove(&symbol);
+                if let Some(old) = self.data.get(&symbol)
+                    && old.quote.price != data.quote.price
+                {
+                    self.price_flash.insert(
+                        symbol.clone(),
+                        (Instant::now(), data.quote.price > old.quote.price),
+                    );
+                }
                 self.data.insert(symbol, data);
                 self.last_update = Some(Local::now());
             }
