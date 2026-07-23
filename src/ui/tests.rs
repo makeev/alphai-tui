@@ -302,6 +302,57 @@ fn price_flash_tracks_update_direction() {
     assert_eq!(app.price_flash_dir("AAPL"), None, "unchanged price must not flash");
 }
 
+/// The live quote is folded into the in-progress last candle on apply, so
+/// the candle redraws with every price tick instead of waiting for the
+/// source's bar series to catch up.
+#[test]
+fn live_quote_updates_the_last_candle() {
+    let mut app = empty_app(vec!["AAPL".into()]);
+    let data = |price: f64| SourceEvent::Data {
+        symbol: "AAPL".into(),
+        data: TickerData {
+            quote: Quote {
+                symbol: "AAPL".into(),
+                price,
+                prev_close: Some(100.0),
+                currency: None,
+            },
+            candles: vec![
+                Candle {
+                    ts: 0,
+                    open: 99.0,
+                    high: 100.0,
+                    low: 98.0,
+                    close: 99.5,
+                    volume: None,
+                },
+                Candle {
+                    ts: 300,
+                    open: 100.0,
+                    high: 101.0,
+                    low: 99.5,
+                    close: 100.5,
+                    volume: None,
+                },
+            ],
+        },
+    };
+    // Price below the stale bar close: close follows, low extends down.
+    app.apply(data(99.0));
+    let last = *app.data["AAPL"].candles.last().unwrap();
+    assert_eq!(last.close, 99.0);
+    assert_eq!(last.low, 99.0);
+    assert_eq!(last.high, 101.0);
+    // Price above the bar high: close follows, high extends up.
+    app.apply(data(101.5));
+    let last = *app.data["AAPL"].candles.last().unwrap();
+    assert_eq!(last.close, 101.5);
+    assert_eq!(last.high, 101.5);
+    assert_eq!(last.low, 99.5);
+    // Earlier bars stay untouched.
+    assert_eq!(app.data["AAPL"].candles[0].close, 99.5);
+}
+
 fn reversed_cells(app: &mut App) -> Vec<ratatui::style::Color> {
     use ratatui::style::Modifier;
     let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();

@@ -50,8 +50,10 @@ Built in Rust with [ratatui](https://ratatui.rs).
   the plot; `[chart] right_margin_pct` resizes it, 0 turns it off) with a
   last-price marker line and tag in it. Every time a poll changes the
   price, the marker and the title price pulse in the tick's color for a
-  moment, so a live market is visible at a glance; the poll interval is
-  `--every` / the `Poll every` settings row.
+  moment, and the newest candle folds the live price into its close, so
+  the candle and the marker never disagree and a live market is visible
+  at a glance; the poll interval is `--every` / the `Poll every`
+  settings row.
 - **Insider**: SEC Form 4 activity for the selected ticker. A 30-day rollup
   (buys vs sells, dollar volumes, share of pre-arranged 10b5-1 plan trades,
   most active insiders with their transaction counts) above the stream of
