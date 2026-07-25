@@ -29,7 +29,7 @@ Built in Rust with [ratatui](https://ratatui.rs).
   On terminals narrower than 90 columns the side layout gives the whole
   width to the list and `v` remains the way to read the card. Pressing
   down on the last row loads the next page of the feed; the page size
-  adapts to your plan automatically (10 per page, 50 on Pro keys). Market
+  adapts to your plan automatically (20 per page, 50 on Pro keys). Market
   and trending scopes collapse syndicated reprints to one row per story
   and show how many outlets carry it (`×7`). Enter opens the article page
   on alphai.io; a settings toggle switches that to the original source
@@ -272,8 +272,9 @@ get a sourced brief without leaving the terminal.
   further pages only when you ask for them, and the article card reuses
   data already fetched with the list. The relevance filter is applied by
   the server, so filtered-out articles never occupy page slots; moving it
-  with `+`/`-` refetches the visible feed, one request per press at most. Feeds page 10 articles at a time (50
-  on Pro keys, detected automatically). Paging back past your plan's
+  with `+`/`-` refetches the visible feed, one request per press at most.
+  Feeds page 20 articles at a time, the most every plan allows (50 on Pro
+  keys, detected automatically). Paging back past your plan's
   archive horizon (30 days on Free, 90 on Basic) shows an upgrade hint
   instead of older articles. Full API reference:
   [alphai.io/developers](https://alphai.io/developers?utm_source=alphai-tui&utm_medium=referral).

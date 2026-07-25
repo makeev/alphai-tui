@@ -27,6 +27,14 @@ pub const SITE_URL: &str = "https://alphai.io";
 /// a floor guarding the request budget (`config::ALPHAI_TTL_RANGE`).
 pub const CACHE_TTL: Duration = Duration::from_secs(300);
 
+/// Rows per feed page. The API defaults to 10 but accepts up to 20 on every
+/// tier (21 and above need Pro, see `fetch_feed_page`), and a wider page is
+/// free: it is the same one request, it delays the next paging request, and
+/// it widens the window in which a late-arriving article can still be seen.
+/// Articles reach the feed well after their publish time, so a narrow page
+/// hides them behind the horizon of what a refetch ever looks at.
+pub const PAGE_SIZE: u8 = 20;
+
 /// Cache key for the market-wide (unfiltered) news feed.
 pub const MARKET_KEY: &str = "*";
 
@@ -107,7 +115,9 @@ impl Client {
 
     /// One page of enriched news; `symbol: None` = market-wide feed, `cursor`
     /// pages back (opaque, from the prior page's `next_cursor`), `page_size`
-    /// only accepts 50 on Pro keys (omit for the default 10), `min_relevance`
+    /// takes 1 to 20 on every tier and up to 50 only on Pro keys (omit for
+    /// the server default of 10; anything over the tier's cap is a 400, never
+    /// a silent clamp), `min_relevance`
     /// filters server-side by score 1..10 (the server defaults to 4 when
     /// omitted) so low-score rows never occupy page slots.
     /// Market-wide requests collapse syndicated reprints to one row per story
@@ -266,10 +276,11 @@ enum Feed<'a> {
 }
 
 /// Fetch one feed page, self-tuning the page size to the key's tier.
+/// `PAGE_SIZE` (20) is what every tier allows and is used everywhere else.
 /// `page50`: None = tier unknown, probe 50 on the first explicit paging
 /// request (one extra request per session for non-Pro keys, and only when
 /// the user asked for more); Some(true) = Pro confirmed, 50 everywhere;
-/// Some(false) = 50 rejected once, stay on the default 10.
+/// Some(false) = 50 rejected once, stay on `PAGE_SIZE`.
 async fn fetch_feed_page(
     client: &Client,
     feed: Feed<'_>,
@@ -297,8 +308,10 @@ async fn fetch_feed_page(
         }
     }
     match &feed {
-        Feed::News(symbol, min) => client.news(*symbol, cursor, None, *min).await,
-        Feed::Insider(symbol, min) => client.insider_news(symbol, cursor, None, *min).await,
+        Feed::News(symbol, min) => client.news(*symbol, cursor, Some(PAGE_SIZE), *min).await,
+        Feed::Insider(symbol, min) => {
+            client.insider_news(symbol, cursor, Some(PAGE_SIZE), *min).await
+        }
     }
 }
 
@@ -1084,8 +1097,16 @@ mod tests {
         let client = Client::new(key).unwrap();
         // min_relevance 4 mirrors the server default, so the filter param is
         // exercised without changing what the feed returns.
-        let news = client.news(Some("NVDA"), None, None, Some(4)).await.unwrap();
+        // PAGE_SIZE is what the app actually sends, and it rides on the API
+        // allowing it without a Pro key: ask for it here so a tightened cap
+        // surfaces as a failing smoke test rather than a 400 for every free
+        // user.
+        let news = client
+            .news(Some("NVDA"), None, Some(PAGE_SIZE), Some(4))
+            .await
+            .unwrap();
         assert!(!news.results.is_empty(), "empty NVDA news feed");
+        assert!(news.results.len() <= PAGE_SIZE as usize, "page over PAGE_SIZE");
         assert!(news.results[0].original.title.len() > 3);
         // The feed is deeper than one page, so the cursor must be present
         // and must fetch an older second page.
@@ -1106,6 +1127,13 @@ mod tests {
         assert!(summary.days > 0);
         let trending = client.trending().await.unwrap();
         assert!(!trending.is_empty(), "empty trending feed");
+    }
+
+    /// 21 and above is a Pro-only page size: raising `PAGE_SIZE` past 20
+    /// would turn every free key's feed into a 400.
+    #[test]
+    fn page_size_is_allowed_on_every_tier() {
+        assert!((1..=20).contains(&PAGE_SIZE));
     }
 
     #[test]
