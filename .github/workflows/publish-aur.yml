@@ -1,0 +1,109 @@
+# Called by the dist-generated Release workflow after every artifact is built
+# and uploaded (see publish-jobs in dist-workspace.toml): bumps packaging/aur to
+# the tagged version and pushes it to the AUR. Needs the AUR_SSH_KEY repo secret
+# (the private half of a key registered on the AUR account that owns the package).
+name: publish-aur
+
+on:
+  workflow_call:
+    inputs:
+      plan:
+        required: true
+        type: string
+
+jobs:
+  aur:
+    runs-on: ubuntu-22.04
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      PLAN: ${{ inputs.plan }}
+      AUR_REPO: alphai-tui-bin
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Read the version out of the plan
+        id: plan
+        run: |
+          echo "version=$(echo "$PLAN" | jq -r '.releases[0].app_version')" >> "$GITHUB_OUTPUT"
+          echo "tag=$(echo "$PLAN" | jq -r '.announcement_tag')" >> "$GITHUB_OUTPUT"
+
+      - name: Bump PKGBUILD to the released version
+        env:
+          VERSION: ${{ steps.plan.outputs.version }}
+          TAG: ${{ steps.plan.outputs.tag }}
+        run: |
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" -p sha256.sum -D "$RUNNER_TEMP"
+
+          sum() { grep -F "alphai-tui-$1-unknown-linux-gnu.tar.xz" "$RUNNER_TEMP/sha256.sum" | cut -d' ' -f1; }
+          x86=$(sum x86_64)
+          arm=$(sum aarch64)
+          if [ -z "$x86" ] || [ -z "$arm" ]; then
+            echo "release $TAG is missing a linux-gnu checksum" >&2
+            exit 1
+          fi
+
+          cd packaging/aur
+          sed -i \
+            -e "s/^pkgver=.*/pkgver=$VERSION/" \
+            -e "s/^pkgrel=.*/pkgrel=1/" \
+            -e "s/^sha256sums_x86_64=.*/sha256sums_x86_64=('$x86')/" \
+            -e "s/^sha256sums_aarch64=.*/sha256sums_aarch64=('$arm')/" \
+            PKGBUILD
+          cat PKGBUILD
+
+      # makepkg refuses to run as root, hence the explicit uid. Redirecting on the
+      # host keeps the container from needing write access to the mount.
+      - name: Regenerate .SRCINFO
+        run: |
+          docker run --rm -u "$(id -u)" -e HOME=/tmp \
+            -v "$PWD/packaging/aur":/pkg -w /pkg archlinux:base-devel \
+            makepkg --printsrcinfo > packaging/aur/.SRCINFO
+          cat packaging/aur/.SRCINFO
+
+      # Downloads the x86_64 tarball and checks it against the sum we just wrote,
+      # which catches a mangled or swapped checksum before it reaches users. The
+      # aarch64 slot cannot be verified this way from an x86_64 runner, so it is
+      # compared against the release manifest directly.
+      - name: Verify the sources
+        env:
+          VERSION: ${{ steps.plan.outputs.version }}
+        run: |
+          docker run --rm -u "$(id -u)" -e HOME=/tmp \
+            -v "$PWD/packaging/aur":/pkg -w /pkg archlinux:base-devel \
+            makepkg --verifysource --noconfirm
+
+          arm_pkgbuild=$(sed -n "s/^sha256sums_aarch64=('\(.*\)')/\1/p" packaging/aur/PKGBUILD)
+          arm_release=$(grep -F "alphai-tui-aarch64-unknown-linux-gnu.tar.xz" "$RUNNER_TEMP/sha256.sum" | cut -d' ' -f1)
+          if [ "$arm_pkgbuild" != "$arm_release" ]; then
+            echo "aarch64 checksum in PKGBUILD does not match the release" >&2
+            exit 1
+          fi
+
+          grep -q "^pkgver=$VERSION$" packaging/aur/PKGBUILD
+
+      - name: Push to the AUR
+        env:
+          AUR_SSH_KEY: ${{ secrets.AUR_SSH_KEY }}
+          VERSION: ${{ steps.plan.outputs.version }}
+        run: |
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$AUR_SSH_KEY" > "$HOME/.ssh/aur"
+          chmod 600 "$HOME/.ssh/aur"
+          cp packaging/aur/known_hosts "$HOME/.ssh/known_hosts_aur"
+          export GIT_SSH_COMMAND="ssh -i $HOME/.ssh/aur -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$HOME/.ssh/known_hosts_aur"
+
+          git clone "ssh://aur@aur.archlinux.org/$AUR_REPO.git" "$RUNNER_TEMP/aur"
+          cp packaging/aur/PKGBUILD packaging/aur/.SRCINFO "$RUNNER_TEMP/aur/"
+
+          cd "$RUNNER_TEMP/aur"
+          git config user.name "Mikhail Makeev"
+          git config user.email "mihail.makeev@gmail.com"
+          git add PKGBUILD .SRCINFO
+          if git diff --cached --quiet; then
+            echo "AUR is already at this version, nothing to push"
+            exit 0
+          fi
+          git commit -m "$AUR_REPO $VERSION"
+          git push

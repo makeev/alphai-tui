@@ -87,6 +87,12 @@ Homebrew (macOS and Linux):
 brew install makeev/tap/alphai-tui
 ```
 
+Arch Linux, from the AUR:
+
+```sh
+paru -S alphai-tui-bin
+```
+
 Prebuilt binaries for macOS, Linux and Windows, no Rust needed:
 
 ```sh
