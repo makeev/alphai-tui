@@ -93,6 +93,21 @@ Arch Linux, from the AUR:
 paru -S alphai-tui-bin
 ```
 
+Debian and Ubuntu, from the apt repository (amd64 and arm64, Ubuntu 22.04 and
+Debian 12 or newer):
+
+```sh
+sudo install -d -m 0755 /etc/apt/keyrings
+sudo curl -fsSL https://makeev.github.io/alphai-tui-apt/alphai-tui.gpg \
+  -o /etc/apt/keyrings/alphai-tui.gpg
+echo "deb [signed-by=/etc/apt/keyrings/alphai-tui.gpg] https://makeev.github.io/alphai-tui-apt stable main" \
+  | sudo tee /etc/apt/sources.list.d/alphai-tui.list
+sudo apt update && sudo apt install alphai-tui
+```
+
+Single `.deb` files, for an install without the repository, are linked from
+[the repository landing page](https://makeev.github.io/alphai-tui-apt/).
+
 Prebuilt binaries for macOS, Linux and Windows, no Rust needed:
 
 ```sh

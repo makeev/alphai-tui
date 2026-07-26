@@ -1,0 +1,68 @@
+# Called by the dist-generated Release workflow after every artifact is built
+# and uploaded (see publish-jobs in dist-workspace.toml): turns the released
+# linux tarballs into .deb packages and force pushes the signed apt repository
+# to makeev/alphai-tui-apt, which GitHub Pages serves.
+#
+# Needs two repo secrets: APT_GPG_PRIVATE_KEY (the key the repository is signed
+# with, public half committed at packaging/deb/alphai-tui.gpg) and APT_SSH_KEY
+# (deploy key with write access to the apt repository). The whole job is a thin
+# wrapper: packaging/deb/publish.sh is the same script used by hand.
+name: publish-deb
+
+on:
+  workflow_call:
+    inputs:
+      plan:
+        required: true
+        type: string
+  # Manual re-run against an existing tag, to repair a botched publish or to
+  # exercise this job without cutting a release.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to publish, for example v0.10.2"
+        required: true
+        type: string
+
+jobs:
+  deb:
+    runs-on: ubuntu-22.04
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      APT_GPG_PRIVATE_KEY: ${{ secrets.APT_GPG_PRIVATE_KEY }}
+      APT_SSH_KEY: ${{ secrets.APT_SSH_KEY }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Work out which release to publish
+        id: target
+        env:
+          PLAN: ${{ inputs.plan }}
+          TAG_INPUT: ${{ inputs.tag }}
+        run: |
+          if [ -n "$PLAN" ]; then
+            version=$(echo "$PLAN" | jq -r '.releases[0].app_version')
+            tag=$(echo "$PLAN" | jq -r '.announcement_tag')
+          else
+            tag=$TAG_INPUT
+            version=${tag#v}
+          fi
+          if [ -z "$version" ] || [ -z "$tag" ]; then
+            echo "could not determine the version to publish" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Install apt-ftparchive
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq apt-utils
+
+      - name: Build and publish the apt repository
+        env:
+          VERSION: ${{ steps.target.outputs.version }}
+          TAG: ${{ steps.target.outputs.tag }}
+        run: bash packaging/deb/publish.sh --version "$VERSION" --tag "$TAG"
