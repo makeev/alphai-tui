@@ -57,7 +57,9 @@ impl View for NewsView {
         let scope = app.news_scope;
         let symbol = app.selected_symbol().to_string();
         let label = scope.label(&symbol).to_string();
-        let mut block = Block::bordered().title(news_title(scope, &label, app.news_min_score));
+        let mut block = app
+            .theme
+            .panel_titled(news_title(scope, &label, app.news_min_score));
 
         if render_gate(f, area, &block, app, &key) {
             return;
@@ -198,7 +200,9 @@ pub fn render_panel(f: &mut Frame, area: Rect, app: &mut App) {
     let key = app.news_cache_key();
     let scope = app.news_scope;
     let label = scope.label(app.selected_symbol()).to_string();
-    let block = Block::bordered().title(news_title(scope, &label, app.news_min_score));
+    let block = app
+        .theme
+        .panel_titled(news_title(scope, &label, app.news_min_score));
 
     if !app.alphai_enabled {
         let line =
@@ -384,8 +388,14 @@ pub fn display_impact<'a>(a: &'a Article, ticker: &str) -> Option<&'a crate::alp
 
 /// Bottom pane with the selected article's full title, meta line and summary.
 /// `ticker` picks which per-ticker AI analysis feeds the meta line.
-pub fn render_detail(f: &mut Frame, area: Rect, article: Option<&Article>, ticker: &str) {
-    let block = Block::bordered();
+pub fn render_detail(
+    f: &mut Frame,
+    area: Rect,
+    article: Option<&Article>,
+    ticker: &str,
+    theme: &Theme,
+) {
+    let block = theme.panel();
     let Some(a) = article else {
         f.render_widget(block, area);
         return;
@@ -398,9 +408,21 @@ pub fn render_detail(f: &mut Frame, area: Rect, article: Option<&Article>, ticke
     f.render_widget(
         Paragraph::new(lines)
             .wrap(Wrap { trim: false })
-            .block(block.title(" article · ⏎ open · v card ")),
+            .block(block.title(hint_title(" article ", "· ⏎ open · v card ", theme))),
         area,
     );
+}
+
+/// A panel title that is a heading plus a dim key hint, e.g.
+/// " article · ⏎ open · v card ".
+pub(crate) fn hint_title(heading: &str, hint: &str, theme: &Theme) -> Line<'static> {
+    Line::from(vec![
+        Span::styled(
+            heading.to_string(),
+            Style::new().fg(theme.accent).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(hint.to_string(), Style::new().dim()),
+    ])
 }
 
 /// Meta tokens for the detail pane and the article card: source, age,

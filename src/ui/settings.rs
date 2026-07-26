@@ -1,7 +1,7 @@
 use ratatui::Frame;
 use ratatui::style::{Modifier, Style, Stylize};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Clear, Paragraph, Wrap};
+use ratatui::widgets::{Clear, Paragraph, Wrap};
 
 use crate::app::{App, SettingsRow, settings_rows};
 use crate::config::{ALPHAI_KEY_FIELD, KeyField};
@@ -107,8 +107,10 @@ pub fn render(f: &mut Frame, app: &App) {
         lines.push(Line::from(format!("  config: {}", tilde(&p.display().to_string()))).dim());
     }
 
-    let block = Block::bordered()
-        .title(" Settings ")
+    let block = app
+        .theme
+        .panel()
+        .title(app.theme.heading(" Settings "))
         .border_style(Style::new().fg(app.theme.accent));
     f.render_widget(
         Paragraph::new(lines).wrap(Wrap { trim: false }).block(block),

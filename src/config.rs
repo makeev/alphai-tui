@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use clap::ValueEnum;
+use ratatui::widgets::BorderType;
 use serde::{Deserialize, Serialize};
 
 use crate::alphai;
@@ -95,6 +96,8 @@ pub struct UiConfig {
     pub default_view: Option<String>,
     pub news_layout: Option<String>,
     pub news_scope: Option<String>,
+    /// Line set of the panel frames: "rounded" (default) or "plain".
+    pub borders: Option<String>,
     /// Raw i64 rather than u8: an out-of-range number must degrade to a
     /// warning in `resolve`, not fail deserializing the whole file.
     pub news_min_score: Option<i64>,
@@ -214,7 +217,11 @@ impl Default for UiDefaults {
 /// warnings (printed to stderr before the TUI starts).
 pub fn resolve(cfg: &Config) -> (Resolved, Vec<String>) {
     let mut warnings = Vec::new();
-    let theme = Theme::from_config(cfg.theme.as_ref(), &mut warnings);
+    let mut theme = Theme::from_config(cfg.theme.as_ref(), &mut warnings);
+    theme.border_type = resolve_borders(
+        cfg.ui.as_ref().and_then(|u| u.borders.as_deref()),
+        &mut warnings,
+    );
     let chart = resolve_chart(cfg.chart.as_ref(), &mut warnings);
     let ui = resolve_ui(cfg.ui.as_ref(), &mut warnings);
     let keymap = Keymap::from_config(
@@ -225,6 +232,22 @@ pub fn resolve(cfg: &Config) -> (Resolved, Vec<String>) {
         &mut warnings,
     );
     (Resolved { theme, chart, ui, keymap }, warnings)
+}
+
+/// `[ui] borders`: the line set panel frames draw with. Lives in `[ui]`
+/// rather than `[theme]` because it is not a color, but it resolves onto
+/// the theme, which every renderer already has at hand.
+fn resolve_borders(raw: Option<&str>, warnings: &mut Vec<String>) -> BorderType {
+    match raw.map(str::to_lowercase).as_deref() {
+        None | Some("rounded") => BorderType::Rounded,
+        Some("plain") => BorderType::Plain,
+        Some(other) => {
+            warnings.push(format!(
+                "[ui] borders: unknown \"{other}\" (rounded or plain), keeping rounded"
+            ));
+            BorderType::Rounded
+        }
+    }
 }
 
 fn resolve_chart(raw: Option<&ChartConfig>, warnings: &mut Vec<String>) -> ChartDefaults {
@@ -501,6 +524,7 @@ mod tests {
                 default_view: Some("news".into()),
                 news_layout: Some("stacked".into()),
                 news_scope: None,
+                borders: Some("plain".into()),
                 news_min_score: Some(6),
                 insider_min_score: Some(5),
                 alphai_ttl_secs: Some(120),
@@ -604,6 +628,24 @@ mod tests {
         for section in ["[theme]", "[ui]", "[chart]", "[keybindings]"] {
             assert!(!bare.contains(section), "{bare}");
         }
+    }
+
+    #[test]
+    fn borders_setting_resolves_onto_the_theme() {
+        let cfg: Config = toml::from_str("[ui]\nborders = \"plain\"").unwrap();
+        let (resolved, warnings) = resolve(&cfg);
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(resolved.theme.border_type, BorderType::Plain);
+
+        // Unknown value warns and keeps the rounded default; so does no
+        // section at all (silently).
+        let cfg: Config = toml::from_str("[ui]\nborders = \"fancy\"").unwrap();
+        let (resolved, warnings) = resolve(&cfg);
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert_eq!(resolved.theme.border_type, BorderType::Rounded);
+        let (resolved, warnings) = resolve(&Config::default());
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(resolved.theme.border_type, BorderType::Rounded);
     }
 
     #[test]

@@ -5,7 +5,9 @@
 use std::collections::BTreeMap;
 use std::str::FromStr;
 
-use ratatui::style::Color;
+use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, BorderType};
 
 /// One slot per meaning, not per widget: the same red means "price down"
 /// everywhere it appears. Deliberately not themeable: the selection
@@ -34,6 +36,13 @@ pub struct Theme {
     pub rsi_line: Color,
     /// Reference lines: previous close, RSI 30/70.
     pub ref_line: Color,
+    /// Panel frames. `Reset` keeps the terminal's own foreground, which is
+    /// what the app looked like before this slot existed; themes dim it.
+    pub border: Color,
+    /// Not a color slot: which line set panel frames draw with, resolved
+    /// from `[ui] borders`. It rides on the theme because every renderer
+    /// already carries one, and `panel()` needs both halves.
+    pub border_type: BorderType,
 }
 
 impl Default for Theme {
@@ -53,6 +62,8 @@ impl Default for Theme {
             sma_slow: Color::Magenta,
             rsi_line: Color::Cyan,
             ref_line: Color::DarkGray,
+            border: Color::Reset,
+            border_type: BorderType::Rounded,
         }
     }
 }
@@ -82,6 +93,7 @@ impl Theme {
                 "sma_slow" => &mut theme.sma_slow,
                 "rsi_line" => &mut theme.rsi_line,
                 "ref_line" => &mut theme.ref_line,
+                "border" => &mut theme.border,
                 _ => {
                     warnings.push(format!(
                         "[theme] unknown slot \"{slot}\" (the README lists the slots)"
@@ -97,6 +109,28 @@ impl Theme {
             }
         }
         theme
+    }
+
+    /// Every framed panel in the app is built here, so the border style has
+    /// one source of truth (`borders_are_themed` in `ui::tests` fails if a
+    /// panel is built any other way).
+    pub fn panel(&self) -> Block<'static> {
+        Block::bordered()
+            .border_type(self.border_type)
+            .border_style(Style::new().fg(self.border))
+    }
+
+    /// A panel whose title reads as a heading, e.g. " Watchlist ".
+    pub fn panel_titled(&self, title: impl Into<String>) -> Block<'static> {
+        self.panel().title(self.heading(title))
+    }
+
+    /// Headings (block titles, group labels) carry the accent.
+    pub fn heading(&self, text: impl Into<String>) -> Line<'static> {
+        Line::from(Span::styled(
+            text.into(),
+            Style::new().fg(self.accent).add_modifier(Modifier::BOLD),
+        ))
     }
 }
 

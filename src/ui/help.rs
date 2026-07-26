@@ -5,7 +5,7 @@
 use ratatui::Frame;
 use ratatui::style::{Style, Stylize};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Clear, Paragraph};
+use ratatui::widgets::{Clear, Paragraph};
 
 use crate::app::App;
 use crate::keymap::{Action, action_name};
@@ -80,9 +80,11 @@ pub fn render(f: &mut Frame, app: &mut App) {
         (lines.len() as u16 + 2).min(f.area().height.saturating_sub(2)),
     );
     f.render_widget(Clear, area);
-    let block = Block::bordered()
-        .title(" Keys ")
-        .title_bottom(" remap: [keybindings] in config.toml · esc close ")
+    let block = app
+        .theme
+        .panel()
+        .title(app.theme.heading(" Keys "))
+        .title_bottom(Line::from(" remap: [keybindings] in config.toml · esc close ").dim())
         .border_style(Style::new().fg(app.theme.accent));
     let max_scroll = (lines.len() as u16).saturating_sub(area.height.saturating_sub(2));
     app.help.scroll = app.help.scroll.min(max_scroll);

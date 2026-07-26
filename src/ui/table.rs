@@ -1,7 +1,7 @@
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Rect};
 use ratatui::style::{Modifier, Style, Stylize};
-use ratatui::widgets::{Block, Cell, Row, Table};
+use ratatui::widgets::{Cell, Row, Table};
 
 use crate::app::App;
 use crate::domain::fmt_price;
@@ -98,7 +98,7 @@ pub fn render_table(f: &mut Frame, area: Rect, app: &mut App) {
             Row::new(["Symbol", "Price", "Δ", "Δ%", "Lo–Hi", "Spark"])
                 .style(Style::new().bold().underlined()),
         )
-        .block(Block::bordered().title(" Watchlist "))
+        .block(app.theme.panel_titled(" Watchlist "))
         .row_highlight_style(Style::new().add_modifier(Modifier::REVERSED))
         .highlight_symbol("▶ ");
 

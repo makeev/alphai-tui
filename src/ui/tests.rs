@@ -1455,6 +1455,64 @@ fn theme_accent_recolors_the_header() {
     assert_eq!(fg_of_brand(&mut app), Color::Magenta);
 }
 
+/// Every framed panel must come from `Theme::panel`, so a theme really
+/// recolors the whole frame. Corners are the tell: nothing but a block
+/// border draws them, and a panel built with a bare `Block::bordered()`
+/// would keep the default color and the square corner set.
+#[test]
+fn borders_are_themed() {
+    use ratatui::style::Color;
+    const ROUNDED: [&str; 4] = ["╭", "╮", "╰", "╯"];
+    const SQUARE: [&str; 4] = ["┌", "┐", "└", "┘"];
+
+    let mut app = fake_app();
+    app.feeds.insert(
+        "AAPL".into(),
+        FeedBundle::new(
+            vec![article("Apple beats expectations", "AAPL", 9, "positive")],
+            None,
+            None,
+        ),
+    );
+    app.feeds.insert(
+        alphai::insider_key("AAPL"),
+        FeedBundle::new(
+            vec![filing("Apple insider sold $12.5M of stock", "direct")],
+            None,
+            None,
+        ),
+    );
+    app.theme.border = Color::Rgb(1, 2, 3);
+
+    for view in ui::VIEWS {
+        app.view_idx = ui::view_index(view.id());
+        let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+        terminal.draw(|f| ui::draw(f, &mut app)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let mut corners = 0;
+        for y in buffer.area.top()..buffer.area.bottom() {
+            for x in buffer.area.left()..buffer.area.right() {
+                let cell = buffer.cell((x, y)).unwrap();
+                assert!(
+                    !SQUARE.contains(&cell.symbol()),
+                    "{:?}: a panel bypassed Theme::panel (square corner at {x},{y})",
+                    view.id()
+                );
+                if ROUNDED.contains(&cell.symbol()) {
+                    corners += 1;
+                    assert_eq!(
+                        cell.fg,
+                        Color::Rgb(1, 2, 3),
+                        "{:?}: unthemed border at {x},{y}",
+                        view.id()
+                    );
+                }
+            }
+        }
+        assert!(corners >= 4, "{:?}: no framed panel rendered", view.id());
+    }
+}
+
 /// Save must start from the loaded config and replace only the settings
 /// screen's own fields, so file-only sections like [theme] survive it.
 #[test]

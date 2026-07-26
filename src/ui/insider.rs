@@ -3,7 +3,7 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style, Stylize};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Cell, Paragraph, Row, Table};
+use ratatui::widgets::{Cell, Paragraph, Row, Table};
 
 use crate::alphai::{Article, InsiderSummary, fmt_usd, insider_key};
 use crate::app::{App, FeedKind};
@@ -52,7 +52,7 @@ impl View for InsiderView {
     fn render(&self, f: &mut Frame, area: Rect, app: &mut App) {
         let symbol = app.selected_symbol().to_string();
         let key = insider_key(&symbol);
-        let mut block = Block::bordered().title(format!(
+        let mut block = app.theme.panel_titled(format!(
             " Insider · {symbol} (SEC Form 4) · score {}+ ",
             app.insider_min_score
         ));
@@ -119,7 +119,13 @@ impl View for InsiderView {
         app.news_table_state.select(Some(app.news_selected));
         f.render_stateful_widget(table, list_area, &mut app.news_table_state);
 
-        render_detail(f, detail, bundle.articles.get(app.news_selected), &symbol);
+        render_detail(
+            f,
+            detail,
+            bundle.articles.get(app.news_selected),
+            &symbol,
+            &theme,
+        );
     }
 }
 

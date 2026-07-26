@@ -4,7 +4,7 @@ use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style, Stylize};
 use ratatui::symbols;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Axis, Block, Chart, Dataset, GraphType, Paragraph};
+use ratatui::widgets::{Axis, Chart, Dataset, GraphType, Paragraph};
 
 use crate::app::{App, ChartStyle};
 use crate::config::ChartDefaults;
@@ -69,7 +69,7 @@ pub fn render_chart(f: &mut Frame, area: Rect, app: &App) {
             None => Line::from(format!("{symbol}: loading…")).dim(),
         };
         f.render_widget(
-            Paragraph::new(msg).block(Block::bordered().title(format!(" {symbol} "))),
+            Paragraph::new(msg).block(app.theme.panel_titled(format!(" {symbol} "))),
             area,
         );
         return;
@@ -77,7 +77,7 @@ pub fn render_chart(f: &mut Frame, area: Rect, app: &App) {
     if data.candles.len() < 2 {
         f.render_widget(
             Paragraph::new(Line::from("not enough history for a chart").dim())
-                .block(Block::bordered().title(format!(" {symbol} "))),
+                .block(app.theme.panel_titled(format!(" {symbol} "))),
             area,
         );
         return;
@@ -179,7 +179,10 @@ fn chart_title(
     // live market is visible at a glance even in line mode.
     let price_style = flash.map_or(Style::new(), |up| flash_style(up, theme));
     let mut spans = vec![
-        Span::styled(format!(" {symbol} "), Style::new().bold()),
+        Span::styled(
+            format!(" {symbol} "),
+            Style::new().fg(theme.accent).add_modifier(Modifier::BOLD),
+        ),
         Span::styled(fmt_price(q.price), price_style),
         Span::raw(format!(" {} ", q.currency.as_deref().unwrap_or(""))),
         Span::styled(format!("{change_str} "), Style::new().fg(dir_color(q, theme))),
@@ -331,7 +334,7 @@ fn render_price_line(
     ];
 
     let chart = Chart::new(datasets)
-        .block(Block::bordered().title(chart_title(
+        .block(app.theme.panel().title(chart_title(
             symbol,
             q,
             data,
@@ -371,7 +374,7 @@ fn render_price_candles(
     let q = &data.quote;
     let visible = &data.candles[cut..];
     let flash = app.price_flash_dir(symbol);
-    let block = Block::bordered().title(chart_title(
+    let block = app.theme.panel().title(chart_title(
         symbol,
         q,
         data,
@@ -758,7 +761,7 @@ fn render_rsi(
     let Some(last) = rsi.last().copied().flatten() else {
         f.render_widget(
             Paragraph::new(Line::from(format!("not enough history for RSI({period})")).dim())
-                .block(Block::bordered().title(format!(" RSI({period}) "))),
+                .block(theme.panel_titled(format!(" RSI({period}) "))),
             area,
         );
         return;
@@ -806,11 +809,14 @@ fn render_rsi(
         theme.flat
     };
     let title = Line::from(vec![
-        Span::styled(format!(" RSI({period}) "), Style::new().bold()),
+        Span::styled(
+            format!(" RSI({period}) "),
+            Style::new().fg(theme.accent).add_modifier(Modifier::BOLD),
+        ),
         Span::styled(format!("{last:.1} "), Style::new().fg(val_color)),
     ]);
     let chart = Chart::new(datasets)
-        .block(Block::bordered().title(title))
+        .block(theme.panel().title(title))
         .x_axis(Axis::default().bounds([0.0, x_max]))
         .y_axis(
             Axis::default()

@@ -31,8 +31,10 @@ pub fn render(f: &mut Frame, app: &mut App) {
         26.min(f.area().height.saturating_sub(4)),
     );
     f.render_widget(Clear, area);
-    let block = Block::bordered()
-        .title(" Article ")
+    let block = app
+        .theme
+        .panel()
+        .title(app.theme.heading(" Article "))
         .border_style(Style::new().fg(app.theme.accent));
     let lines = card_lines(a, app.selected_symbol(), &app.theme);
     let mut scroll = app.article_overlay.scroll;
@@ -50,7 +52,9 @@ pub fn render_pane(
     scroll: &mut u16,
     theme: &Theme,
 ) {
-    let block = Block::bordered().title(" card · pgup/pgdn scroll · v full ");
+    let block = theme
+        .panel()
+        .title(news::hint_title(" card ", "· pgup/pgdn scroll · v full ", theme));
     let Some(a) = article else {
         f.render_widget(block, area);
         return;

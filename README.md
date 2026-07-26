@@ -328,6 +328,7 @@ alpaca_secret = ""
 default_view = "split"    # split | news | table | chart | insider
 news_layout = "side"      # side | stacked
 news_scope = "ticker"     # ticker | market | trending
+borders = "rounded"       # panel frames: rounded | plain
 news_min_score = 7        # minimum relevance score in news feeds, 1 to 10
 insider_min_score = 4     # insider feed filter; the score tracks trade size
 alphai_ttl_secs = 300     # news/sentiment/insider cache lifetime, 30 to 86400
@@ -374,6 +375,7 @@ sma_fast = "yellow"      # SMA 20 overlay
 sma_slow = "magenta"     # SMA 100 overlay
 rsi_line = "cyan"        # RSI line
 ref_line = "darkgray"    # previous close and RSI 30/70 reference lines
+border = "reset"         # panel frames; reset keeps the terminal's foreground
 ```
 
 ### Custom keybindings
