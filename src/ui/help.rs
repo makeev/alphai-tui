@@ -24,6 +24,7 @@ static ROWS: &[Row] = &[
     Row::Act(Action::Help, "this help"),
     Row::Act(Action::Settings, "open settings"),
     Row::Act(Action::Refresh, "refresh prices and the visible feed"),
+    Row::Act(Action::CycleTheme, "next color preset (Save keeps it)"),
     Row::Act(Action::NextView, "next view"),
     Row::Act(Action::PrevView, "previous view"),
     Row::Fixed("1-9", "jump to a view"),

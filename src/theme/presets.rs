@@ -199,15 +199,37 @@ pub static PRESETS: &[(&str, Theme)] = &[
     ("gruvbox-light", theme_from(GRUVBOX_LIGHT)),
 ];
 
+/// The name every preset falls back to; also the first of the cycle.
+pub const DEFAULT_PRESET: &str = PRESETS[0].0;
+
 /// A preset by name, case-insensitively.
 pub fn find(name: &str) -> Option<Theme> {
     entry(name).map(|(_, theme)| *theme)
+}
+
+/// The canonical spelling of a preset name, if it names one.
+pub fn canonical(name: &str) -> Option<&'static str> {
+    entry(name).map(|(n, _)| *n)
 }
 
 fn entry(name: &str) -> Option<&'static (&'static str, Theme)> {
     PRESETS
         .iter()
         .find(|(n, _)| n.eq_ignore_ascii_case(name.trim()))
+}
+
+/// The next preset in cycle order; an unknown name restarts the cycle.
+pub fn next_preset(name: &str) -> &'static str {
+    match PRESETS.iter().position(|(n, _)| n.eq_ignore_ascii_case(name)) {
+        Some(i) => PRESETS[(i + 1) % PRESETS.len()].0,
+        None => DEFAULT_PRESET,
+    }
+}
+
+/// Help for `--theme`, built from the table so the two can not drift.
+pub fn cli_theme_help() -> String {
+    let names: Vec<&str> = PRESETS.iter().map(|(n, _)| *n).collect();
+    format!("Color preset: {} [default: {DEFAULT_PRESET}]", names.join(", "))
 }
 
 #[cfg(test)]
@@ -287,6 +309,28 @@ mod tests {
     #[test]
     fn lookup_is_case_and_space_tolerant() {
         assert_eq!(find(" Catppuccin-Mocha "), find("catppuccin-mocha"));
+        assert_eq!(canonical("NORD"), Some("nord"));
         assert!(find("catppuccino").is_none());
+    }
+
+    /// The cycle key must reach every preset and come back, and the CLI
+    /// help must list all of them (both read the same table).
+    #[test]
+    fn cycle_reaches_every_preset_and_wraps() {
+        let names: Vec<&str> = PRESETS.iter().map(|(n, _)| *n).collect();
+        let mut seen = vec![DEFAULT_PRESET];
+        let mut cur = DEFAULT_PRESET;
+        for _ in 1..PRESETS.len() {
+            cur = next_preset(cur);
+            seen.push(cur);
+        }
+        assert_eq!(seen, names);
+        assert_eq!(next_preset(cur), DEFAULT_PRESET, "the cycle must wrap");
+        assert_eq!(next_preset("nonsense"), DEFAULT_PRESET);
+
+        let help = cli_theme_help();
+        for name in names {
+            assert!(help.contains(name), "--theme help omits {name}: {help}");
+        }
     }
 }

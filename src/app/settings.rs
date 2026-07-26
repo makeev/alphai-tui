@@ -34,6 +34,9 @@ pub struct SettingsState {
     pub every_input: String,
     /// "alphai" (article page on alphai.io) or "original" (source site).
     pub news_open_choice: String,
+    /// Name of the color preset on screen; applies live as it cycles, and
+    /// Save writes it to `[theme] preset`.
+    pub theme_choice: &'static str,
     pub message: Option<String>,
 }
 
@@ -48,6 +51,8 @@ pub enum SettingsRow {
     PollEvery,
     /// Where Enter opens a news article.
     NewsOpen,
+    /// The color preset (cycles the same list as the p key, live).
+    ThemeChoice,
     /// The save button.
     Save,
 }
@@ -68,6 +73,7 @@ pub fn settings_rows() -> &'static [SettingsRow] {
         rows.push(SettingsRow::Key(&ALPHAI_KEY_FIELD));
         rows.push(SettingsRow::PollEvery);
         rows.push(SettingsRow::NewsOpen);
+        rows.push(SettingsRow::ThemeChoice);
         rows.push(SettingsRow::Save);
         rows
     });
@@ -99,6 +105,7 @@ impl App {
         } else {
             "alphai".to_string()
         };
+        s.theme_choice = self.theme_name;
     }
 
     pub(super) fn handle_settings_key(&mut self, key: KeyEvent) -> bool {
@@ -142,12 +149,14 @@ impl App {
                 match settings_rows()[self.settings.cursor] {
                     SettingsRow::SourceChoice => self.toggle_source_choice(),
                     SettingsRow::NewsOpen => self.toggle_news_open_choice(),
+                    SettingsRow::ThemeChoice => self.cycle_theme_choice(),
                     _ => {}
                 }
             }
             KeyCode::Enter => match settings_rows()[self.settings.cursor] {
                 SettingsRow::SourceChoice => self.toggle_source_choice(),
                 SettingsRow::NewsOpen => self.toggle_news_open_choice(),
+                SettingsRow::ThemeChoice => self.cycle_theme_choice(),
                 SettingsRow::Key(field) => {
                     let s = &mut self.settings;
                     s.input = s.key_values.get(field.config_name).cloned().unwrap_or_default();
@@ -168,6 +177,13 @@ impl App {
     fn toggle_source_choice(&mut self) {
         let s = &mut self.settings;
         s.source_choice = next_source(&s.source_choice).to_string();
+    }
+
+    /// The theme row previews as it cycles, exactly like the p key: the
+    /// point of a theme picker is seeing the theme.
+    fn cycle_theme_choice(&mut self) {
+        self.set_theme(crate::theme::next_preset(self.settings.theme_choice));
+        self.settings.theme_choice = self.theme_name;
     }
 
     fn toggle_news_open_choice(&mut self) {
@@ -195,6 +211,16 @@ impl App {
             }
         }
         cfg.news_open = Some(self.settings.news_open_choice.clone());
+        // The default preset is the absence of the key, so picking it
+        // takes the line back out (and the [theme] table with it, when
+        // nothing else lives there) instead of writing a no-op.
+        let mut theme = cfg.theme.take().unwrap_or_default();
+        if self.settings.theme_choice == crate::theme::DEFAULT_PRESET {
+            theme.remove("preset");
+        } else {
+            theme.insert("preset".to_string(), self.settings.theme_choice.to_string());
+        }
+        cfg.theme = (!theme.is_empty()).then_some(theme);
         if let Some(secs) = parse_every(&self.settings.every_input) {
             cfg.every = Some(secs);
         }

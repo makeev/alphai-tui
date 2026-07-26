@@ -74,6 +74,11 @@ pub fn render(f: &mut Frame, app: &App) {
                 format!("‹ {} ›", s.news_open_choice),
                 news_open_hint(s.news_open_choice.as_str()),
             ),
+            SettingsRow::ThemeChoice => (
+                "Theme",
+                format!("‹ {} ›", s.theme_choice),
+                "color preset; p cycles it anywhere".to_string(),
+            ),
             SettingsRow::Save => unreachable!(),
         };
         let editing = selected && s.editing;

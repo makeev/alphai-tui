@@ -144,6 +144,7 @@ pub struct AppInit {
     /// Where Save writes the config back; None disables persisting.
     pub config_path: Option<PathBuf>,
     pub theme: Theme,
+    pub theme_name: &'static str,
     pub chart: ChartDefaults,
     pub ui: UiDefaults,
     /// Resolved from `[keybindings]` (defaults when the section is absent).
@@ -208,6 +209,11 @@ pub struct App {
     pub config: Config,
     pub config_path: Option<PathBuf>,
     pub theme: Theme,
+    /// The preset `theme` was built from. The cycle key and the settings
+    /// row move this name and rebuild the theme from it, so what is on
+    /// screen always matches what the same name would give after a
+    /// restart (explicit `[theme]` slots included).
+    pub theme_name: &'static str,
     pub keymap: Keymap,
     source: SharedSource,
     params: SharedParams,
@@ -256,6 +262,7 @@ impl App {
             config: init.config,
             config_path: init.config_path,
             theme: init.theme,
+            theme_name: init.theme_name,
             keymap: init.keymap,
             source: init.source,
             params: init.params,
@@ -448,6 +455,7 @@ impl App {
             Action::ToggleRsi if chart_view => self.show_rsi = !self.show_rsi,
             Action::NextPreset => self.cycle_range(1),
             Action::PrevPreset => self.cycle_range(-1),
+            Action::CycleTheme => self.set_theme(crate::theme::next_preset(self.theme_name)),
             Action::Up => self.selected = self.selected.saturating_sub(1),
             Action::Down => self.selected = (self.selected + 1).min(self.symbols.len() - 1),
             _ => {}
@@ -521,6 +529,21 @@ impl App {
             a.original.url.clone()
         };
         with_utm(&url)
+    }
+
+    /// Switch to a named preset (the p key, the settings row). Rebuilt
+    /// through the same path the config takes, so the `[theme]` slots the
+    /// user spelled out keep overriding the palette; the frame style comes
+    /// from `[ui] borders` and does not belong to the preset. Session-only
+    /// until Save writes the name into the config.
+    pub(crate) fn set_theme(&mut self, name: &'static str) {
+        let border_type = self.theme.border_type;
+        let mut warnings = Vec::new();
+        let (mut theme, name) =
+            Theme::resolve(self.config.theme.as_ref(), Some(name), &mut warnings);
+        theme.border_type = border_type;
+        self.theme = theme;
+        self.theme_name = name;
     }
 
     fn switch_view(&mut self, idx: usize) {

@@ -48,6 +48,9 @@ struct Args {
     #[arg(short, long, value_enum)]
     interval: Option<Interval>,
 
+    #[arg(long, value_name = "NAME", help = theme::cli_theme_help())]
+    theme: Option<String>,
+
     /// Print quotes once to stdout and exit (no TUI); handy for scripts
     #[arg(long)]
     once: bool,
@@ -62,7 +65,7 @@ fn main() -> Result<()> {
     let (cfg, cfg_existed, config_path) = config::load_at(args.config.as_deref());
     // Validation warnings go to stderr before the TUI takes the terminal,
     // so they stay readable in scrollback after exit.
-    let (resolved, warnings) = config::resolve(&cfg);
+    let (resolved, warnings) = config::resolve(&cfg, args.theme.as_deref());
     for w in &warnings {
         eprintln!("warning: {w}");
     }
@@ -131,6 +134,7 @@ fn main() -> Result<()> {
         config: cfg,
         config_path,
         theme: resolved.theme,
+        theme_name: resolved.theme_name,
         chart: resolved.chart,
         ui: resolved.ui,
         keymap: resolved.keymap,

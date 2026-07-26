@@ -130,6 +130,9 @@ pub struct ChartConfig {
 /// degrades the whole file (in `load_at`).
 pub struct Resolved {
     pub theme: Theme,
+    /// Which preset `theme` was built from, for the settings row and the
+    /// live cycle key.
+    pub theme_name: &'static str,
     pub chart: ChartDefaults,
     pub ui: UiDefaults,
     pub keymap: Keymap,
@@ -215,9 +218,11 @@ impl Default for UiDefaults {
 
 /// Validate the raw config into ready-to-use values plus human-readable
 /// warnings (printed to stderr before the TUI starts).
-pub fn resolve(cfg: &Config) -> (Resolved, Vec<String>) {
+/// `cli_theme` is `--theme`; it wins over `[theme] preset`, like every
+/// other CLI value.
+pub fn resolve(cfg: &Config, cli_theme: Option<&str>) -> (Resolved, Vec<String>) {
     let mut warnings = Vec::new();
-    let mut theme = Theme::from_config(cfg.theme.as_ref(), &mut warnings);
+    let (mut theme, theme_name) = Theme::resolve(cfg.theme.as_ref(), cli_theme, &mut warnings);
     theme.border_type = resolve_borders(
         cfg.ui.as_ref().and_then(|u| u.borders.as_deref()),
         &mut warnings,
@@ -231,7 +236,7 @@ pub fn resolve(cfg: &Config) -> (Resolved, Vec<String>) {
             .map(|(name, spec)| (name.as_str(), spec.as_list())),
         &mut warnings,
     );
-    (Resolved { theme, chart, ui, keymap }, warnings)
+    (Resolved { theme, theme_name, chart, ui, keymap }, warnings)
 }
 
 /// `[ui] borders`: the line set panel frames draw with. Lives in `[ui]`
@@ -615,11 +620,11 @@ mod tests {
     #[test]
     fn theme_section_resolves_and_stays_absent_by_default() {
         let cfg: Config = toml::from_str("[theme]\naccent = \"magenta\"").unwrap();
-        let (resolved, warnings) = resolve(&cfg);
+        let (resolved, warnings) = resolve(&cfg, None);
         assert!(warnings.is_empty(), "{warnings:?}");
         assert_eq!(resolved.theme.accent, ratatui::style::Color::Magenta);
 
-        let (_, warnings) = resolve(&toml::from_str::<Config>("[theme]\nup = \"banana\"").unwrap());
+        let (_, warnings) = resolve(&toml::from_str::<Config>("[theme]\nup = \"banana\"").unwrap(), None);
         assert_eq!(warnings.len(), 1, "{warnings:?}");
 
         // Absent sections must not serialize: Save would spray empty tables
@@ -630,20 +635,39 @@ mod tests {
         }
     }
 
+    /// --theme beats the file, like every other CLI value, and an unknown
+    /// name warns instead of failing.
+    #[test]
+    fn cli_theme_overrides_the_config_preset() {
+        let cfg: Config = toml::from_str("[theme]\npreset = \"nord\"").unwrap();
+        let (resolved, warnings) = resolve(&cfg, None);
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(resolved.theme_name, "nord");
+
+        let (resolved, warnings) = resolve(&cfg, Some("Dracula"));
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(resolved.theme_name, "dracula");
+
+        let (resolved, warnings) = resolve(&cfg, Some("nosuchtheme"));
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].contains("--theme"), "{warnings:?}");
+        assert_eq!(resolved.theme_name, crate::theme::DEFAULT_PRESET);
+    }
+
     #[test]
     fn borders_setting_resolves_onto_the_theme() {
         let cfg: Config = toml::from_str("[ui]\nborders = \"plain\"").unwrap();
-        let (resolved, warnings) = resolve(&cfg);
+        let (resolved, warnings) = resolve(&cfg, None);
         assert!(warnings.is_empty(), "{warnings:?}");
         assert_eq!(resolved.theme.border_type, BorderType::Plain);
 
         // Unknown value warns and keeps the rounded default; so does no
         // section at all (silently).
         let cfg: Config = toml::from_str("[ui]\nborders = \"fancy\"").unwrap();
-        let (resolved, warnings) = resolve(&cfg);
+        let (resolved, warnings) = resolve(&cfg, None);
         assert_eq!(warnings.len(), 1, "{warnings:?}");
         assert_eq!(resolved.theme.border_type, BorderType::Rounded);
-        let (resolved, warnings) = resolve(&Config::default());
+        let (resolved, warnings) = resolve(&Config::default(), None);
         assert!(warnings.is_empty(), "{warnings:?}");
         assert_eq!(resolved.theme.border_type, BorderType::Rounded);
     }
@@ -656,7 +680,7 @@ mod tests {
         // A bare string and a list both parse; the keymap follows.
         let cfg: Config =
             toml::from_str("[keybindings]\nrefresh = \"f5\"\nopen = [\"enter\", \"z\"]").unwrap();
-        let (resolved, warnings) = resolve(&cfg);
+        let (resolved, warnings) = resolve(&cfg, None);
         assert!(warnings.is_empty(), "{warnings:?}");
         assert_eq!(
             resolved.keymap.resolve(&KeyEvent::from(KeyCode::F(5))),
@@ -671,7 +695,7 @@ mod tests {
         // A bad entry warns and keeps the default; the good one still lands.
         let cfg: Config =
             toml::from_str("[keybindings]\nquit = \"supr\"\ncard = \"b\"").unwrap();
-        let (resolved, warnings) = resolve(&cfg);
+        let (resolved, warnings) = resolve(&cfg, None);
         assert_eq!(warnings.len(), 2, "{warnings:?}");
         assert_eq!(
             resolved.keymap.resolve(&KeyEvent::from(KeyCode::Char('q'))),
@@ -683,7 +707,7 @@ mod tests {
         );
 
         // No section at all: the untouched defaults.
-        let (resolved, warnings) = resolve(&Config::default());
+        let (resolved, warnings) = resolve(&Config::default(), None);
         assert!(warnings.is_empty(), "{warnings:?}");
         assert_eq!(
             resolved.keymap.resolve(&KeyEvent::from(KeyCode::Char('q'))),
@@ -704,7 +728,7 @@ mod tests {
             "#,
         )
         .unwrap();
-        let (resolved, warnings) = resolve(&cfg);
+        let (resolved, warnings) = resolve(&cfg, None);
         assert_eq!(resolved.chart.style, ChartStyle::Line);
         assert_eq!(resolved.chart.sma_fast, 50);
         // Out of range: warned, default kept.
@@ -716,7 +740,7 @@ mod tests {
 
         // All presets bad: fall back to the built-in cycle.
         let cfg: Config = toml::from_str("[chart]\npresets = [[\"x\", \"y\"]]").unwrap();
-        let (resolved, warnings) = resolve(&cfg);
+        let (resolved, warnings) = resolve(&cfg, None);
         assert_eq!(resolved.chart.presets, RANGE_PRESETS.to_vec());
         assert_eq!(warnings.len(), 2, "{warnings:?}");
     }
@@ -727,7 +751,7 @@ mod tests {
         for (raw, want) in [("0", 0u16), ("20", 20), ("50", 50)] {
             let cfg: Config =
                 toml::from_str(&format!("[chart]\nright_margin_pct = {raw}")).unwrap();
-            let (resolved, warnings) = resolve(&cfg);
+            let (resolved, warnings) = resolve(&cfg, None);
             assert!(warnings.is_empty(), "at {raw}: {warnings:?}");
             assert_eq!(resolved.chart.right_margin_pct, want, "at {raw}");
         }
@@ -737,7 +761,7 @@ mod tests {
         for bad in ["-1", "51", "200"] {
             let cfg: Config =
                 toml::from_str(&format!("[chart]\nright_margin_pct = {bad}")).expect("must parse");
-            let (resolved, warnings) = resolve(&cfg);
+            let (resolved, warnings) = resolve(&cfg, None);
             assert_eq!(resolved.chart.right_margin_pct, DEFAULT_RIGHT_MARGIN_PCT, "at {bad}");
             assert_eq!(warnings.len(), 1, "at {bad}: {warnings:?}");
         }
@@ -751,14 +775,14 @@ mod tests {
             "[ui]\ndefault_view = \"News\"\nnews_layout = \"stacked\"\nnews_scope = \"market\"",
         )
         .unwrap();
-        let (resolved, warnings) = resolve(&cfg);
+        let (resolved, warnings) = resolve(&cfg, None);
         assert!(warnings.is_empty(), "{warnings:?}");
         assert_eq!(resolved.ui.view_idx, ui::view_index(ui::ViewId::News));
         assert_eq!(resolved.ui.news_layout, NewsLayout::Stacked);
         assert_eq!(resolved.ui.news_scope, NewsScope::Market);
 
         let cfg: Config = toml::from_str("[ui]\ndefault_view = \"nwes\"").unwrap();
-        let (resolved, warnings) = resolve(&cfg);
+        let (resolved, warnings) = resolve(&cfg, None);
         assert_eq!(resolved.ui.view_idx, ui::view_index(ui::ViewId::Split));
         assert_eq!(warnings.len(), 1, "{warnings:?}");
         assert!(warnings[0].contains("nwes"), "{warnings:?}");
@@ -768,7 +792,7 @@ mod tests {
     fn news_min_score_validates_per_entry() {
         let cfg: Config =
             toml::from_str("[ui]\nnews_min_score = 4\ninsider_min_score = 8").unwrap();
-        let (resolved, warnings) = resolve(&cfg);
+        let (resolved, warnings) = resolve(&cfg, None);
         assert!(warnings.is_empty(), "{warnings:?}");
         assert_eq!(resolved.ui.news_min_score, 4);
         assert_eq!(resolved.ui.insider_min_score, 8);
@@ -778,7 +802,7 @@ mod tests {
         for bad in ["0", "11", "300", "-2"] {
             let cfg: Config =
                 toml::from_str(&format!("[ui]\nnews_min_score = {bad}")).expect("must parse");
-            let (resolved, warnings) = resolve(&cfg);
+            let (resolved, warnings) = resolve(&cfg, None);
             assert_eq!(resolved.ui.news_min_score, DEFAULT_NEWS_MIN_SCORE, "at {bad}");
             assert_eq!(warnings.len(), 1, "at {bad}: {warnings:?}");
         }
@@ -791,7 +815,7 @@ mod tests {
     #[test]
     fn alphai_ttl_validates_per_entry() {
         let cfg: Config = toml::from_str("[ui]\nalphai_ttl_secs = 60").unwrap();
-        let (resolved, warnings) = resolve(&cfg);
+        let (resolved, warnings) = resolve(&cfg, None);
         assert!(warnings.is_empty(), "{warnings:?}");
         assert_eq!(resolved.ui.alphai_ttl, Duration::from_secs(60));
 
@@ -800,7 +824,7 @@ mod tests {
         for bad in ["5", "29", "86401", "-300"] {
             let cfg: Config =
                 toml::from_str(&format!("[ui]\nalphai_ttl_secs = {bad}")).expect("must parse");
-            let (resolved, warnings) = resolve(&cfg);
+            let (resolved, warnings) = resolve(&cfg, None);
             assert_eq!(resolved.ui.alphai_ttl, alphai::CACHE_TTL, "at {bad}");
             assert_eq!(warnings.len(), 1, "at {bad}: {warnings:?}");
         }
@@ -826,7 +850,7 @@ mod tests {
                 in_block = false;
                 let cfg: Config = toml::from_str(&block)
                     .unwrap_or_else(|e| panic!("README toml does not parse: {e}\n{block}"));
-                let (_, warnings) = resolve(&cfg);
+                let (_, warnings) = resolve(&cfg, None);
                 assert!(warnings.is_empty(), "README example warns: {warnings:?}\n{block}");
                 checked += 1;
                 continue;

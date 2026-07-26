@@ -5,6 +5,8 @@
 
 mod presets;
 
+pub use presets::{DEFAULT_PRESET, PRESETS, cli_theme_help, next_preset};
+
 use std::collections::BTreeMap;
 use std::str::FromStr;
 
@@ -88,8 +90,47 @@ impl Theme {
     /// Order: the built-in theme, then the preset, then the slots spelled
     /// out in the table. An explicit slot therefore always wins, so
     /// "mocha, but my own green" needs one line rather than fifteen.
-    pub fn from_config(raw: Option<&BTreeMap<String, String>>, warnings: &mut Vec<String>) -> Self {
-        let mut theme = Self::preset_from_config(raw, warnings);
+    ///
+    /// `preset` is the name chosen outside the file (`--theme`, or the
+    /// live cycle key) and beats `[theme] preset`. Rebuilding with a new
+    /// name is how the app switches themes at runtime, which keeps the
+    /// live look identical to what a restart would produce. Returns the
+    /// resolved theme and the canonical name of the preset behind it.
+    pub fn resolve(
+        raw: Option<&BTreeMap<String, String>>,
+        preset: Option<&str>,
+        warnings: &mut Vec<String>,
+    ) -> (Self, &'static str) {
+        let name = match preset {
+            Some(name) => Self::preset_name(name, "--theme", warnings),
+            None => match raw.and_then(|raw| raw.get("preset")) {
+                Some(name) => Self::preset_name(name, "[theme] preset", warnings),
+                None => DEFAULT_PRESET,
+            },
+        };
+        (Self::from_config(raw, name, warnings), name)
+    }
+
+    /// A preset name as the table spells it; unknown names warn and fall
+    /// back to the built-in theme, like any other bad value here.
+    fn preset_name(name: &str, source: &str, warnings: &mut Vec<String>) -> &'static str {
+        presets::canonical(name).unwrap_or_else(|| {
+            let known: Vec<&str> = PRESETS.iter().map(|(n, _)| *n).collect();
+            warnings.push(format!(
+                "{source}: unknown preset \"{name}\", keeping the default (available: {})",
+                known.join(", ")
+            ));
+            DEFAULT_PRESET
+        })
+    }
+
+    /// The named preset with the table's own slots applied over it.
+    fn from_config(
+        raw: Option<&BTreeMap<String, String>>,
+        preset: &str,
+        warnings: &mut Vec<String>,
+    ) -> Self {
+        let mut theme = presets::find(preset).unwrap_or(Self::DEFAULT);
         let Some(raw) = raw else { return theme };
         for (slot, value) in raw {
             let target = match slot.as_str() {
@@ -125,31 +166,6 @@ impl Theme {
             }
         }
         theme
-    }
-
-    /// The palette `[theme] preset` asks for. An unknown name warns and
-    /// falls back to the built-in theme, like any other bad value here.
-    fn preset_from_config(
-        raw: Option<&BTreeMap<String, String>>,
-        warnings: &mut Vec<String>,
-    ) -> Self {
-        let Some(name) = raw.and_then(|raw| raw.get("preset")) else {
-            return Self::DEFAULT;
-        };
-        match presets::find(name) {
-            Some(theme) => theme,
-            None => {
-                warnings.push(format!(
-                    "[theme] preset: unknown \"{name}\", keeping the default (available: {})",
-                    presets::PRESETS
-                        .iter()
-                        .map(|(n, _)| *n)
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ));
-                Self::DEFAULT
-            }
-        }
     }
 
     /// Every framed panel in the app is built here, so the border style has
@@ -189,7 +205,7 @@ mod tests {
     #[test]
     fn default_used_without_a_table() {
         let mut w = Vec::new();
-        assert_eq!(Theme::from_config(None, &mut w), Theme::default());
+        assert_eq!(Theme::resolve(None, None, &mut w).0, Theme::default());
         assert!(w.is_empty());
     }
 
@@ -202,7 +218,7 @@ mod tests {
             ("ref_line", "245"),
             ("neg", "Grey"),
         ]);
-        let t = Theme::from_config(Some(&raw), &mut w);
+        let t = Theme::resolve(Some(&raw), None, &mut w).0;
         assert!(w.is_empty(), "{w:?}");
         assert_eq!(t.accent, Color::LightBlue);
         assert_eq!(t.up, Color::Rgb(0x00, 0xc8, 0x53));
@@ -216,7 +232,7 @@ mod tests {
     fn bad_color_warns_and_keeps_the_default() {
         let mut w = Vec::new();
         let raw = table(&[("up", "banana")]);
-        let t = Theme::from_config(Some(&raw), &mut w);
+        let t = Theme::resolve(Some(&raw), None, &mut w).0;
         assert_eq!(t.up, Theme::default().up);
         assert_eq!(w.len(), 1);
         assert!(w[0].contains("banana"), "{w:?}");
@@ -226,7 +242,7 @@ mod tests {
     fn preset_fills_every_slot_and_explicit_slots_win() {
         let mut w = Vec::new();
         let raw = table(&[("preset", "catppuccin-mocha"), ("up", "#00c853")]);
-        let t = Theme::from_config(Some(&raw), &mut w);
+        let t = Theme::resolve(Some(&raw), None, &mut w).0;
         assert!(w.is_empty(), "{w:?}");
         // The preset lands...
         assert_eq!(t.accent, Color::Rgb(0xcb, 0xa6, 0xf7));
@@ -236,7 +252,7 @@ mod tests {
         assert_eq!(t.up, Color::Rgb(0x00, 0xc8, 0x53));
         // "preset" is a selector, not a slot: it must not warn as unknown.
         let mut w = Vec::new();
-        let t = Theme::from_config(Some(&table(&[("preset", "nord")])), &mut w);
+        let t = Theme::resolve(Some(&table(&[("preset", "nord")])), None, &mut w).0;
         assert!(w.is_empty(), "{w:?}");
         assert_eq!(t.accent, Color::Rgb(0x88, 0xc0, 0xd0));
     }
@@ -245,7 +261,7 @@ mod tests {
     fn unknown_preset_warns_and_keeps_the_default() {
         let mut w = Vec::new();
         let raw = table(&[("preset", "catppuccino"), ("up", "#00c853")]);
-        let t = Theme::from_config(Some(&raw), &mut w);
+        let t = Theme::resolve(Some(&raw), None, &mut w).0;
         assert_eq!(w.len(), 1, "{w:?}");
         assert!(w[0].contains("catppuccino"), "{w:?}");
         // The rest of the table still applies over the built-in theme.
@@ -257,7 +273,7 @@ mod tests {
     fn unknown_slot_warns_and_is_ignored() {
         let mut w = Vec::new();
         let raw = table(&[("acent", "red"), ("down", "blue")]);
-        let t = Theme::from_config(Some(&raw), &mut w);
+        let t = Theme::resolve(Some(&raw), None, &mut w).0;
         assert_eq!(t.down, Color::Blue);
         assert_eq!(w.len(), 1);
         assert!(w[0].contains("acent"), "{w:?}");

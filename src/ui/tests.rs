@@ -45,6 +45,7 @@ fn empty_app_with_cmds(
         config: Config::default(),
         config_path: None,
         theme: Theme::default(),
+        theme_name: crate::theme::DEFAULT_PRESET,
         chart: ChartDefaults::default(),
         ui: UiDefaults::default(),
         keymap: crate::keymap::Keymap::default(),
@@ -1404,6 +1405,7 @@ fn config_defaults_seed_startup_state() {
         config: Config::default(),
         config_path: None,
         theme: Theme::default(),
+        theme_name: crate::theme::DEFAULT_PRESET,
         chart: ChartDefaults {
             style: ChartStyle::Line,
             sma: false,
@@ -1517,6 +1519,69 @@ fn ellipsize_counts_characters_not_bytes() {
     assert_eq!(ui::ellipsize("short", 20), "short");
     // Width 0 means the caller does not know the column: pass it through.
     assert_eq!(ui::ellipsize("short", 0), "short");
+}
+
+/// The cycle key rebuilds the theme the same way a restart would: the
+/// preset lands, the slots written out in `[theme]` still win, and the
+/// frame style from `[ui] borders` survives.
+#[test]
+fn theme_key_cycles_presets_over_explicit_slots() {
+    use ratatui::style::Color;
+    use ratatui::widgets::BorderType;
+
+    let mut app = fake_app();
+    app.config.theme = Some(std::collections::BTreeMap::from([(
+        "up".to_string(),
+        "#00c853".to_string(),
+    )]));
+    app.theme.border_type = BorderType::Plain;
+    app.set_theme("catppuccin-mocha");
+    assert_eq!(app.theme.accent, Color::Rgb(0xcb, 0xa6, 0xf7));
+    assert_eq!(app.theme.up, Color::Rgb(0x00, 0xc8, 0x53), "explicit slot lost");
+    assert_eq!(app.theme.border_type, BorderType::Plain, "[ui] borders lost");
+
+    press(&mut app, KeyCode::Char('p'));
+    assert_eq!(app.theme_name, "catppuccin-macchiato");
+    assert_eq!(app.theme.accent, Color::Rgb(0xc6, 0xa0, 0xf6));
+
+    // Every preset is reachable from the keyboard, and the cycle wraps
+    // back to where it started after a full lap.
+    for _ in 0..crate::theme::PRESETS.len() {
+        press(&mut app, KeyCode::Char('p'));
+    }
+    assert_eq!(app.theme_name, "catppuccin-macchiato");
+    assert_eq!(app.theme.up, Color::Rgb(0x00, 0xc8, 0x53));
+}
+
+/// Save persists the picked preset into `[theme] preset`; picking the
+/// built-in theme takes the line back out rather than writing a no-op.
+#[test]
+fn settings_theme_row_persists_the_preset() {
+    let mut app = empty_app(vec!["AAPL".into()]);
+    press(&mut app, KeyCode::Char('s'));
+    while !matches!(settings_rows()[app.settings.cursor], SettingsRow::ThemeChoice) {
+        press(&mut app, KeyCode::Down);
+    }
+    let screen = render(&mut app);
+    assert!(screen.contains("Theme"), "screen:\n{screen}");
+
+    // Cycling previews live, like the p key does.
+    press(&mut app, KeyCode::Right);
+    assert_eq!(app.settings.theme_choice, "catppuccin-mocha");
+    assert_eq!(app.theme_name, "catppuccin-mocha");
+    let cfg = app.settings_merged_config();
+    assert_eq!(
+        cfg.theme.as_ref().and_then(|t| t.get("preset")).map(String::as_str),
+        Some("catppuccin-mocha")
+    );
+
+    // All the way back around to the built-in theme: no key, and no empty
+    // [theme] table left behind either.
+    for _ in 1..crate::theme::PRESETS.len() {
+        press(&mut app, KeyCode::Right);
+    }
+    assert_eq!(app.settings.theme_choice, crate::theme::DEFAULT_PRESET);
+    assert_eq!(app.settings_merged_config().theme, None);
 }
 
 /// Every framed panel must come from `Theme::panel`, so a theme really
@@ -1693,6 +1758,7 @@ fn first_run_opens_settings_with_welcome() {
         config: Config::default(),
         config_path: None,
         theme: Theme::default(),
+        theme_name: crate::theme::DEFAULT_PRESET,
         chart: ChartDefaults::default(),
         ui: UiDefaults::default(),
         keymap: crate::keymap::Keymap::default(),
