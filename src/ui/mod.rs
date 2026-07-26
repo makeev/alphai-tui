@@ -134,6 +134,19 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     }
 }
 
+/// `text` cut to `width` columns with a trailing ellipsis. Counts
+/// characters rather than display cells (close enough for headlines, and
+/// it never splits a character the way byte truncation would); a width of
+/// 0 means "no limit known", so the text passes through untouched.
+pub(crate) fn ellipsize(text: &str, width: usize) -> String {
+    if width == 0 || text.chars().count() <= width {
+        return text.to_string();
+    }
+    let mut out: String = text.chars().take(width.saturating_sub(1)).collect();
+    out.push('…');
+    out
+}
+
 /// Centered modal rect used by the settings and article overlays.
 pub(crate) fn centered(r: Rect, width: u16, height: u16) -> Rect {
     let w = width.min(r.width.saturating_sub(2));
@@ -201,8 +214,7 @@ fn footer_line(app: &App) -> Paragraph<'static> {
     };
     let mut spans = vec![Span::raw(hints).dim()];
     if let Some((symbol, error)) = app.errors.iter().next() {
-        let mut msg = format!("  {symbol}: {error}");
-        msg.truncate(120);
+        let msg = ellipsize(&format!("  {symbol}: {error}"), 120);
         spans.push(Span::styled(
             msg,
             Style::new().fg(app.theme.error).add_modifier(Modifier::BOLD),

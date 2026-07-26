@@ -1455,6 +1455,70 @@ fn theme_accent_recolors_the_header() {
     assert_eq!(fg_of_brand(&mut app), Color::Magenta);
 }
 
+/// A pane too narrow for every column drops whole columns instead of
+/// letting ratatui squeeze all of them (which turned prices into "206."
+/// and ranges into "319.54–3" in the split view).
+#[test]
+fn narrow_watchlist_drops_columns_instead_of_truncating() {
+    let mut app = fake_app();
+    app.view_idx = ui::view_index(ui::ViewId::Table);
+    let wide = render_sized(&mut app, 100, 12);
+    assert!(wide.contains("Lo–Hi"), "screen:\n{wide}");
+    assert!(wide.contains("214.50"), "screen:\n{wide}");
+
+    // Room for everything but the range column.
+    let mid = render_sized(&mut app, 60, 12);
+    assert!(!mid.contains("Lo–Hi"), "range column should be gone:\n{mid}");
+    assert!(mid.contains("214.50"), "price truncated:\n{mid}");
+    assert!(mid.contains("+7.25%"), "percent truncated:\n{mid}");
+
+    // Narrower still: the absolute change goes too, the price stays whole.
+    let narrow = render_sized(&mut app, 46, 12);
+    assert!(!narrow.contains("+14.50"), "change should be gone:\n{narrow}");
+    assert!(narrow.contains("214.50"), "price truncated:\n{narrow}");
+    assert!(narrow.contains("+7.25%"), "percent truncated:\n{narrow}");
+}
+
+/// Headlines wider than their column end in an ellipsis instead of being
+/// chopped mid-word at the border.
+#[test]
+fn long_headlines_are_ellipsized() {
+    let mut app = fake_app();
+    app.view_idx = ui::view_index(ui::ViewId::News);
+    app.feeds.insert(
+        "AAPL".into(),
+        FeedBundle::new(
+            vec![article(
+                "Apple reports the single longest headline any newsroom has ever \
+                 published about a quarterly earnings call",
+                "AAPL",
+                9,
+                "positive",
+            )],
+            None,
+            None,
+        ),
+    );
+    let screen = render(&mut app);
+    // The list row is cut with an ellipsis (the card pane still has it all).
+    let row = screen
+        .lines()
+        .find(|l| l.contains('▶'))
+        .unwrap_or_else(|| panic!("no selected row:\n{screen}"));
+    assert!(row.contains('…'), "no ellipsis in the row:\n{screen}");
+    assert!(!row.contains("newsroom"), "row not cut:\n{screen}");
+}
+
+#[test]
+fn ellipsize_counts_characters_not_bytes() {
+    assert_eq!(ui::ellipsize("abcdef", 4), "abc…");
+    // Multi-byte input must not split a character (byte truncation panics).
+    assert_eq!(ui::ellipsize("привет", 3), "пр…");
+    assert_eq!(ui::ellipsize("short", 20), "short");
+    // Width 0 means the caller does not know the column: pass it through.
+    assert_eq!(ui::ellipsize("short", 0), "short");
+}
+
 /// Every framed panel must come from `Theme::panel`, so a theme really
 /// recolors the whole frame. Corners are the tell: nothing but a block
 /// border draws them, and a panel built with a bare `Block::bordered()`

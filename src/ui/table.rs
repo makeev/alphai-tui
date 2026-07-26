@@ -1,6 +1,7 @@
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Rect};
 use ratatui::style::{Modifier, Style, Stylize};
+use ratatui::text::Text;
 use ratatui::widgets::{Cell, Row, Table};
 
 use crate::app::App;
@@ -23,9 +24,70 @@ impl View for TableView {
     }
 }
 
+/// Widths of the fixed columns, plus the chrome ratatui adds around them:
+/// one blank column between cells and the selection marker's own column.
+const W_SYMBOL: u16 = 10;
+const W_PRICE: u16 = 12;
+const W_CHANGE: u16 = 10;
+const W_PCT: u16 = 9;
+const W_RANGE: u16 = 19;
+const SPARK_MIN: u16 = 8;
+const SPARK_MAX: u16 = 24;
+const GAP: u16 = 1;
+const MARKER: u16 = 2;
+
+/// Which optional columns are shown. When the fixed widths do not fit,
+/// ratatui squeezes every column at once (prices become "206.", a range
+/// "319.54–3"), which is exactly what the split view used to look like.
+/// So the table drops whole columns instead, least useful first, and the
+/// survivors keep their full width.
+#[derive(Clone, Copy, PartialEq, Debug)]
+struct Columns {
+    change: bool,
+    pct: bool,
+    range: bool,
+    /// 0 hides the sparkline.
+    spark: u16,
+}
+
+/// Width the fixed columns need together, gaps included.
+fn fixed_width(change: bool, pct: bool, range: bool) -> u16 {
+    W_SYMBOL
+        + GAP
+        + W_PRICE
+        + if change { GAP + W_CHANGE } else { 0 }
+        + if pct { GAP + W_PCT } else { 0 }
+        + if range { GAP + W_RANGE } else { 0 }
+}
+
+/// The widest column set that fits `avail` (the inner width minus the
+/// selection marker). Symbol and price always stay.
+fn columns(avail: u16) -> Columns {
+    for (change, pct, range, spark) in [
+        (true, true, true, true),
+        (true, true, false, true),
+        (false, true, false, true),
+        (false, true, false, false),
+        (false, false, false, false),
+    ] {
+        let fixed = fixed_width(change, pct, range);
+        if fixed + if spark { GAP + SPARK_MIN } else { 0 } <= avail {
+            let spark = if spark {
+                (avail - fixed - GAP).min(SPARK_MAX)
+            } else {
+                0
+            };
+            return Columns { change, pct, range, spark };
+        }
+    }
+    // Narrower than symbol plus price: nothing left to drop.
+    Columns { change: false, pct: false, range: false, spark: 0 }
+}
+
 /// Shared by TableView and SplitView.
 pub fn render_table(f: &mut Frame, area: Rect, app: &mut App) {
-    let spark_width = 24usize;
+    let cols = columns(area.width.saturating_sub(2 + MARKER));
+    let spark_width = cols.spark as usize;
     let rows: Vec<Row> = app
         .symbols
         .iter()
@@ -74,36 +136,59 @@ pub fn render_table(f: &mut Frame, area: Rect, app: &mut App) {
                 format!("{}–{}", fmt_price(lo), fmt_price(hi))
             };
 
-            Row::new(vec![
+            // Numbers right-align so the decimal points line up down the
+            // column; the symbol and the sparkline stay left.
+            let mut cells = vec![
                 Cell::from(symbol.clone()).bold(),
-                Cell::from(fmt_price(q.price)).style(price_style),
-                Cell::from(change).style(dir_style),
-                Cell::from(change_pct).style(dir_style),
-                Cell::from(range).dim(),
-                Cell::from(spark_line(&closes, spark_width)).style(dir_style),
-            ])
+                Cell::from(right(fmt_price(q.price))).style(price_style),
+            ];
+            if cols.change {
+                cells.push(Cell::from(right(change)).style(dir_style));
+            }
+            if cols.pct {
+                cells.push(Cell::from(right(change_pct)).style(dir_style));
+            }
+            if cols.range {
+                cells.push(Cell::from(right(range)).dim());
+            }
+            if cols.spark > 0 {
+                cells.push(Cell::from(spark_line(&closes, spark_width)).style(dir_style));
+            }
+            Row::new(cells)
         })
         .collect();
 
-    let widths = [
-        Constraint::Length(10),
-        Constraint::Length(12),
-        Constraint::Length(10),
-        Constraint::Length(9),
-        Constraint::Length(19),
-        Constraint::Min(spark_width as u16),
-    ];
+    let mut widths = vec![Constraint::Length(W_SYMBOL), Constraint::Length(W_PRICE)];
+    let mut header = vec![Cell::from("Symbol"), Cell::from(right("Price"))];
+    if cols.change {
+        widths.push(Constraint::Length(W_CHANGE));
+        header.push(Cell::from(right("Δ")));
+    }
+    if cols.pct {
+        widths.push(Constraint::Length(W_PCT));
+        header.push(Cell::from(right("Δ%")));
+    }
+    if cols.range {
+        widths.push(Constraint::Length(W_RANGE));
+        header.push(Cell::from(right("Lo–Hi")));
+    }
+    if cols.spark > 0 {
+        widths.push(Constraint::Length(cols.spark));
+        header.push(Cell::from("Spark"));
+    }
     let table = Table::new(rows, widths)
-        .header(
-            Row::new(["Symbol", "Price", "Δ", "Δ%", "Lo–Hi", "Spark"])
-                .style(Style::new().bold().underlined()),
-        )
+        .header(Row::new(header).style(Style::new().bold().underlined()))
         .block(app.theme.panel_titled(" Watchlist "))
         .row_highlight_style(Style::new().add_modifier(Modifier::REVERSED))
         .highlight_symbol("▶ ");
 
     app.table_state.select(Some(app.selected));
     f.render_stateful_widget(table, area, &mut app.table_state);
+}
+
+/// Right-aligned cell content (numbers line up under each other).
+fn right(text: impl Into<String>) -> Text<'static> {
+    Text::from(text.into()).right_aligned()
 }
 
 /// Downsample a series into a fixed-width string of block characters.

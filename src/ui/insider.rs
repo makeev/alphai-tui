@@ -12,6 +12,7 @@ use crate::theme::Theme;
 use crate::ui::{Hint, View, ViewId};
 use crate::ui::news::{
     feed_bottom_hint, is_fresh, render_detail, render_gate, score_cell, sentiment_cell, title_cell,
+    title_width,
 };
 
 pub struct InsiderView;
@@ -97,11 +98,6 @@ impl View for InsiderView {
         }
 
         let now = Utc::now();
-        let rows: Vec<Row> = bundle
-            .articles
-            .iter()
-            .map(|a| filing_row(a, &symbol, now, &theme, app.is_unseen(&key, a)))
-            .collect();
         let widths = [
             Constraint::Length(4),
             Constraint::Length(2),
@@ -111,6 +107,12 @@ impl View for InsiderView {
             Constraint::Length(8), // trade value
             Constraint::Min(20),
         ];
+        let title_w = title_width(&widths, list_area.width, true);
+        let rows: Vec<Row> = bundle
+            .articles
+            .iter()
+            .map(|a| filing_row(a, &symbol, now, &theme, app.is_unseen(&key, a), title_w))
+            .collect();
         let table = Table::new(rows, widths)
             .block(block)
             .row_highlight_style(Style::new().add_modifier(Modifier::REVERSED))
@@ -138,6 +140,7 @@ fn filing_row(
     now: chrono::DateTime<Utc>,
     theme: &Theme,
     unseen: bool,
+    title_w: usize,
 ) -> Row<'static> {
     let side = filing_side(a, symbol);
     let title_style = match side.as_deref() {
@@ -168,7 +171,7 @@ fn filing_row(
         ownership_cell(a.original.ownership_form.as_deref()),
         plan,
         value,
-        title_cell(a.original.title.clone(), title_style, unseen, theme),
+        title_cell(a.original.title.clone(), title_style, unseen, theme, title_w),
     ])
 }
 

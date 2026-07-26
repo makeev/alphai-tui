@@ -112,13 +112,22 @@ impl View for NewsView {
         }
 
         let now = Utc::now();
+        let widths = article_widths(scope, full);
+        let ctx = RowCtx {
+            scope,
+            symbol: &symbol,
+            now,
+            full,
+            theme: &theme,
+            title_w: title_width(&widths, list_area.width, true),
+        };
         let rows: Vec<Row> = bundle
             .articles
             .iter()
-            .map(|a| article_row(a, scope, &symbol, now, full, &theme, app.is_unseen(&key, a)))
+            .map(|a| article_row(a, &ctx, app.is_unseen(&key, a)))
             .collect();
 
-        let table = Table::new(rows, article_widths(scope, full))
+        let table = Table::new(rows, widths)
             .block(block)
             .row_highlight_style(Style::new().add_modifier(Modifier::REVERSED))
             .highlight_symbol("▶ ");
@@ -222,31 +231,43 @@ pub fn render_panel(f: &mut Frame, area: Rect, app: &mut App) {
     }
 
     let now = Utc::now();
+    // The strip has no cursor, so no marker column to account for.
+    let widths = article_widths(scope, false);
+    let ctx = RowCtx {
+        scope,
+        symbol: app.selected_symbol(),
+        now,
+        full: false,
+        theme: &app.theme,
+        title_w: title_width(&widths, area.width, false),
+    };
     let rows: Vec<Row> = bundle
         .articles
         .iter()
-        .map(|a| {
-            article_row(a, scope, app.selected_symbol(), now, false, &app.theme, app.is_unseen(&key, a))
-        })
+        .map(|a| article_row(a, &ctx, app.is_unseen(&key, a)))
         .collect();
-    f.render_widget(
-        Table::new(rows, article_widths(scope, false)).block(block),
-        area,
-    );
+    f.render_widget(Table::new(rows, widths).block(block), area);
+}
+
+/// What a feed row needs beyond the article itself: the same for every row
+/// of one render pass.
+#[derive(Clone, Copy)]
+struct RowCtx<'a> {
+    scope: NewsScope,
+    symbol: &'a str,
+    now: DateTime<Utc>,
+    /// The full News view carries the novelty column; the Split strip does not.
+    full: bool,
+    theme: &'a Theme,
+    /// Columns the title gets, for ellipsizing.
+    title_w: usize,
 }
 
 /// One article as a table row: age, score, novelty (full News view only),
 /// sentiment (or tickers plus outlet count outside the ticker scope),
 /// category, title. Shared by the News view (`full`) and the Split strip.
-fn article_row(
-    a: &Article,
-    scope: NewsScope,
-    symbol: &str,
-    now: DateTime<Utc>,
-    full: bool,
-    theme: &Theme,
-    unseen: bool,
-) -> Row<'static> {
+fn article_row(a: &Article, ctx: &RowCtx, unseen: bool) -> Row<'static> {
+    let RowCtx { scope, symbol, now, full, theme, title_w } = *ctx;
     // Breaking rows stand out: a fresh age renders in the accent color.
     let age = if is_fresh(a, now) {
         Cell::from(a.age(now)).style(Style::new().fg(theme.accent))
@@ -265,26 +286,54 @@ fn article_row(
         cells.push(sources_cell(a.sources_badge()));
     }
     cells.push(Cell::from(short_category(a)).dim());
-    cells.push(title_cell(a.original.title.clone(), Style::new(), unseen, theme));
+    cells.push(title_cell(
+        a.original.title.clone(),
+        Style::new(),
+        unseen,
+        theme,
+        title_w,
+    ));
     Row::new(cells)
 }
 
 /// Title cell of a feed row; rows new since the reader last looked carry
-/// the accent unseen marker until the cursor rests on them.
+/// the accent unseen marker until the cursor rests on them. Titles longer
+/// than the column end in an ellipsis instead of being cut mid-word by the
+/// table layout (`width` 0 leaves that to ratatui).
 pub(crate) fn title_cell(
     title: String,
     style: Style,
     unseen: bool,
     theme: &Theme,
+    width: usize,
 ) -> Cell<'static> {
     if unseen {
+        // The marker eats two columns of the same cell.
+        let title = crate::ui::ellipsize(&title, width.saturating_sub(2));
         Cell::from(Line::from(vec![
             Span::styled("● ", Style::new().fg(theme.accent)),
             Span::styled(title, style),
         ]))
     } else {
-        Cell::from(Span::styled(title, style))
+        Cell::from(Span::styled(crate::ui::ellipsize(&title, width), style))
     }
+}
+
+/// Columns the title column ends up with, derived from the same constraint
+/// list the table is built from: everything else is a fixed Length, plus
+/// one blank column between cells, the borders and (in the navigable
+/// views) the selection marker.
+pub(crate) fn title_width(widths: &[Constraint], area_width: u16, marker: bool) -> usize {
+    let fixed: u16 = widths
+        .iter()
+        .filter_map(|c| match c {
+            Constraint::Length(n) => Some(*n),
+            _ => None,
+        })
+        .sum();
+    let gaps = widths.len().saturating_sub(1) as u16;
+    let chrome = 2 + if marker { 2 } else { 0 };
+    area_width.saturating_sub(fixed + gaps + chrome) as usize
 }
 
 fn article_widths(scope: NewsScope, full: bool) -> Vec<Constraint> {
