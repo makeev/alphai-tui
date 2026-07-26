@@ -352,12 +352,29 @@ presets = [               # the combos the t and T keys cycle
 
 ### Colors
 
+`[theme] preset` swaps in a ready-made palette:
+
+```toml
+[theme]
+preset = "catppuccin-mocha"
+```
+
+Available: `default`, `catppuccin-mocha`, `catppuccin-macchiato`,
+`catppuccin-frappe`, `catppuccin-latte`, `dracula`, `gruvbox-dark`,
+`gruvbox-light`, `nord`. Presets are written in hex, so they want a
+terminal with 24-bit color; `default` uses ANSI names and follows whatever
+palette the terminal itself is set to. They only set foreground colors,
+which leaves a transparent or blurred terminal background alone. The two
+light ones (`catppuccin-latte`, `gruvbox-light`) expect a light terminal
+background.
+
 Every color the views draw comes from a named slot, and the optional
-`[theme]` table recolors any of them. Values are ANSI color names
-(case-insensitive, `light-blue`, `grey`), `#RRGGBB` hex, or an ANSI-256
-index written as a string like `"245"`. A bad color or a misspelled slot
-prints a warning on startup and keeps that slot's default; it never breaks
-the config file. The defaults are the values shown:
+`[theme]` table recolors any of them, over the preset when there is one.
+Values are ANSI color names (case-insensitive, `light-blue`, `grey`),
+`#RRGGBB` hex, or an ANSI-256 index written as a string like `"245"`. A
+bad color, a misspelled slot or an unknown preset prints a warning on
+startup and keeps the default; it never breaks the config file. The
+defaults are the values shown:
 
 ```toml
 [theme]

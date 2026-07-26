@@ -1,6 +1,9 @@
 //! Semantic color palette. Every color the views draw comes from here:
-//! `Default` reproduces the look the app had before theming existed, and
-//! the `[theme]` table in config.toml overrides slots by name.
+//! `Default` reproduces the look the app had before theming existed,
+//! `[theme] preset` swaps in a named palette (see `presets`), and the
+//! `[theme]` slots override whatever the preset set.
+
+mod presets;
 
 use std::collections::BTreeMap;
 use std::str::FromStr;
@@ -45,26 +48,33 @@ pub struct Theme {
     pub border_type: BorderType,
 }
 
+impl Theme {
+    /// The look the app had before theming existed, and the `default`
+    /// preset. The only palette written in ANSI names rather than hex, so
+    /// it follows whatever colors the terminal itself is set to.
+    pub const DEFAULT: Self = Self {
+        accent: Color::Cyan,
+        accent_text: Color::Black,
+        up: Color::Green,
+        down: Color::Red,
+        flat: Color::Gray,
+        pos: Color::Green,
+        neg: Color::Red,
+        error: Color::Red,
+        warn: Color::Yellow,
+        score_high: Color::Yellow,
+        sma_fast: Color::Yellow,
+        sma_slow: Color::Magenta,
+        rsi_line: Color::Cyan,
+        ref_line: Color::DarkGray,
+        border: Color::Reset,
+        border_type: BorderType::Rounded,
+    };
+}
+
 impl Default for Theme {
     fn default() -> Self {
-        Self {
-            accent: Color::Cyan,
-            accent_text: Color::Black,
-            up: Color::Green,
-            down: Color::Red,
-            flat: Color::Gray,
-            pos: Color::Green,
-            neg: Color::Red,
-            error: Color::Red,
-            warn: Color::Yellow,
-            score_high: Color::Yellow,
-            sma_fast: Color::Yellow,
-            sma_slow: Color::Magenta,
-            rsi_line: Color::Cyan,
-            ref_line: Color::DarkGray,
-            border: Color::Reset,
-            border_type: BorderType::Rounded,
-        }
+        Self::DEFAULT
     }
 }
 
@@ -74,11 +84,17 @@ impl Theme {
     /// so a typo can not take the whole file (and its API keys) down.
     /// Accepted values: ANSI names (case-insensitive, "light-blue", "Grey"),
     /// "#RRGGBB" hex, or an ANSI-256 index written as a string like "245".
+    ///
+    /// Order: the built-in theme, then the preset, then the slots spelled
+    /// out in the table. An explicit slot therefore always wins, so
+    /// "mocha, but my own green" needs one line rather than fifteen.
     pub fn from_config(raw: Option<&BTreeMap<String, String>>, warnings: &mut Vec<String>) -> Self {
-        let mut theme = Self::default();
+        let mut theme = Self::preset_from_config(raw, warnings);
         let Some(raw) = raw else { return theme };
         for (slot, value) in raw {
             let target = match slot.as_str() {
+                // Not a slot; it selected the palette above.
+                "preset" => continue,
                 "accent" => &mut theme.accent,
                 "accent_text" => &mut theme.accent_text,
                 "up" => &mut theme.up,
@@ -109,6 +125,31 @@ impl Theme {
             }
         }
         theme
+    }
+
+    /// The palette `[theme] preset` asks for. An unknown name warns and
+    /// falls back to the built-in theme, like any other bad value here.
+    fn preset_from_config(
+        raw: Option<&BTreeMap<String, String>>,
+        warnings: &mut Vec<String>,
+    ) -> Self {
+        let Some(name) = raw.and_then(|raw| raw.get("preset")) else {
+            return Self::DEFAULT;
+        };
+        match presets::find(name) {
+            Some(theme) => theme,
+            None => {
+                warnings.push(format!(
+                    "[theme] preset: unknown \"{name}\", keeping the default (available: {})",
+                    presets::PRESETS
+                        .iter()
+                        .map(|(n, _)| *n)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+                Self::DEFAULT
+            }
+        }
     }
 
     /// Every framed panel in the app is built here, so the border style has
@@ -179,6 +220,37 @@ mod tests {
         assert_eq!(t.up, Theme::default().up);
         assert_eq!(w.len(), 1);
         assert!(w[0].contains("banana"), "{w:?}");
+    }
+
+    #[test]
+    fn preset_fills_every_slot_and_explicit_slots_win() {
+        let mut w = Vec::new();
+        let raw = table(&[("preset", "catppuccin-mocha"), ("up", "#00c853")]);
+        let t = Theme::from_config(Some(&raw), &mut w);
+        assert!(w.is_empty(), "{w:?}");
+        // The preset lands...
+        assert_eq!(t.accent, Color::Rgb(0xcb, 0xa6, 0xf7));
+        assert_eq!(t.border, Color::Rgb(0x58, 0x5b, 0x70));
+        assert_eq!(t.down, Color::Rgb(0xf3, 0x8b, 0xa8));
+        // ...and the slot written out by hand overrides it.
+        assert_eq!(t.up, Color::Rgb(0x00, 0xc8, 0x53));
+        // "preset" is a selector, not a slot: it must not warn as unknown.
+        let mut w = Vec::new();
+        let t = Theme::from_config(Some(&table(&[("preset", "nord")])), &mut w);
+        assert!(w.is_empty(), "{w:?}");
+        assert_eq!(t.accent, Color::Rgb(0x88, 0xc0, 0xd0));
+    }
+
+    #[test]
+    fn unknown_preset_warns_and_keeps_the_default() {
+        let mut w = Vec::new();
+        let raw = table(&[("preset", "catppuccino"), ("up", "#00c853")]);
+        let t = Theme::from_config(Some(&raw), &mut w);
+        assert_eq!(w.len(), 1, "{w:?}");
+        assert!(w[0].contains("catppuccino"), "{w:?}");
+        // The rest of the table still applies over the built-in theme.
+        assert_eq!(t.accent, Theme::DEFAULT.accent);
+        assert_eq!(t.up, Color::Rgb(0x00, 0xc8, 0x53));
     }
 
     #[test]
