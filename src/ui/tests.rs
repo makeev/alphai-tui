@@ -1544,6 +1544,11 @@ fn theme_key_cycles_presets_over_explicit_slots() {
     assert_eq!(app.theme_name, "catppuccin-macchiato");
     assert_eq!(app.theme.accent, Color::Rgb(0xc6, 0xa0, 0xf6));
 
+    // P walks back, so overshooting is one keypress to undo.
+    press(&mut app, KeyCode::Char('P'));
+    assert_eq!(app.theme_name, "catppuccin-mocha");
+    press(&mut app, KeyCode::Char('p'));
+
     // Every preset is reachable from the keyboard, and the cycle wraps
     // back to where it started after a full lap.
     for _ in 0..crate::theme::PRESETS.len() {
@@ -1565,7 +1570,16 @@ fn settings_theme_row_persists_the_preset() {
     let screen = render(&mut app);
     assert!(screen.contains("Theme"), "screen:\n{screen}");
 
-    // Cycling previews live, like the p key does.
+    // Cycling previews live, like the p key does, and the arrows really
+    // point somewhere: left walks back through the list, right forward.
+    press(&mut app, KeyCode::Left);
+    assert_eq!(
+        app.settings.theme_choice,
+        crate::theme::PRESETS[crate::theme::PRESETS.len() - 1].0,
+        "left arrow must step back, not forward"
+    );
+    press(&mut app, KeyCode::Right);
+    assert_eq!(app.settings.theme_choice, crate::theme::DEFAULT_PRESET);
     press(&mut app, KeyCode::Right);
     assert_eq!(app.settings.theme_choice, "catppuccin-mocha");
     assert_eq!(app.theme_name, "catppuccin-mocha");

@@ -455,7 +455,8 @@ impl App {
             Action::ToggleRsi if chart_view => self.show_rsi = !self.show_rsi,
             Action::NextPreset => self.cycle_range(1),
             Action::PrevPreset => self.cycle_range(-1),
-            Action::CycleTheme => self.set_theme(crate::theme::next_preset(self.theme_name)),
+            Action::NextTheme => self.cycle_theme(1),
+            Action::PrevTheme => self.cycle_theme(-1),
             Action::Up => self.selected = self.selected.saturating_sub(1),
             Action::Down => self.selected = (self.selected + 1).min(self.symbols.len() - 1),
             _ => {}
@@ -529,6 +530,11 @@ impl App {
             a.original.url.clone()
         };
         with_utm(&url)
+    }
+
+    /// p / P: walk the preset list forward or back.
+    fn cycle_theme(&mut self, dir: isize) {
+        self.set_theme(crate::theme::step_preset(self.theme_name, dir));
     }
 
     /// Switch to a named preset (the p key, the settings row). Rebuilt

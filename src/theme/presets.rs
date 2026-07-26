@@ -218,10 +218,12 @@ fn entry(name: &str) -> Option<&'static (&'static str, Theme)> {
         .find(|(n, _)| n.eq_ignore_ascii_case(name.trim()))
 }
 
-/// The next preset in cycle order; an unknown name restarts the cycle.
-pub fn next_preset(name: &str) -> &'static str {
+/// The neighbouring preset in cycle order: `dir` 1 forward, -1 back, both
+/// wrapping. An unknown name restarts the cycle.
+pub fn step_preset(name: &str, dir: isize) -> &'static str {
+    let count = PRESETS.len() as isize;
     match PRESETS.iter().position(|(n, _)| n.eq_ignore_ascii_case(name)) {
-        Some(i) => PRESETS[(i + 1) % PRESETS.len()].0,
+        Some(i) => PRESETS[((i as isize + dir).rem_euclid(count)) as usize].0,
         None => DEFAULT_PRESET,
     }
 }
@@ -321,12 +323,15 @@ mod tests {
         let mut seen = vec![DEFAULT_PRESET];
         let mut cur = DEFAULT_PRESET;
         for _ in 1..PRESETS.len() {
-            cur = next_preset(cur);
+            cur = step_preset(cur, 1);
             seen.push(cur);
         }
         assert_eq!(seen, names);
-        assert_eq!(next_preset(cur), DEFAULT_PRESET, "the cycle must wrap");
-        assert_eq!(next_preset("nonsense"), DEFAULT_PRESET);
+        assert_eq!(step_preset(cur, 1), DEFAULT_PRESET, "the cycle must wrap");
+        assert_eq!(step_preset("nonsense", 1), DEFAULT_PRESET);
+        // Backwards, too: the picker has a left arrow.
+        assert_eq!(step_preset(DEFAULT_PRESET, -1), names[names.len() - 1]);
+        assert_eq!(step_preset(names[1], -1), DEFAULT_PRESET);
 
         let help = cli_theme_help();
         for name in names {

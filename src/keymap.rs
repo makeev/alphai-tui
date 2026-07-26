@@ -39,12 +39,13 @@ pub enum Action {
     ToggleRsi,
     NextPreset,
     PrevPreset,
-    CycleTheme,
+    NextTheme,
+    PrevTheme,
 }
 
 /// Every action with its snake_case config name, the single source of truth
 /// for `[keybindings]` parsing and for the coverage test.
-pub const ACTIONS: [(Action, &str); 24] = [
+pub const ACTIONS: [(Action, &str); 25] = [
     (Action::Quit, "quit"),
     (Action::NextView, "next_view"),
     (Action::PrevView, "prev_view"),
@@ -68,7 +69,8 @@ pub const ACTIONS: [(Action, &str); 24] = [
     (Action::ToggleRsi, "toggle_rsi"),
     (Action::NextPreset, "next_preset"),
     (Action::PrevPreset, "prev_preset"),
-    (Action::CycleTheme, "cycle_theme"),
+    (Action::NextTheme, "next_theme"),
+    (Action::PrevTheme, "prev_theme"),
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -129,8 +131,9 @@ fn default_keys(action: Action) -> Vec<KeyCombo> {
         Action::ToggleRsi => vec![ch('i')],
         Action::NextPreset => vec![ch('t')],
         Action::PrevPreset => vec![ch('T')],
-        // p for palette; the theme cycle is session-only until Save.
-        Action::CycleTheme => vec![ch('p')],
+        // p for palette, in the t/T shape; session-only until Save.
+        Action::NextTheme => vec![ch('p')],
+        Action::PrevTheme => vec![ch('P')],
     }
 }
 

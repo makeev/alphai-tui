@@ -198,7 +198,7 @@ defaults. API keys can also come from env vars, which win over the config:
 | `i` | chart, split | toggle the RSI(14) panel |
 | `t` / `T` | everywhere | cycle candle interval presets forward / back (each interval with a matching history window; the list is configurable as `[chart] presets`) |
 | `r` | everywhere | refresh prices and the visible news view |
-| `p` | everywhere | next color preset (session-only until Save) |
+| `p` / `P` | everywhere | next / previous color preset (session-only until Save) |
 | `s` | everywhere | settings |
 | `?` | everywhere | help overlay: every action with its current keys |
 | `q` / `Esc` / `Ctrl-C` | everywhere | quit |
@@ -361,9 +361,9 @@ presets = [               # the combos the t and T keys cycle
 preset = "catppuccin-mocha"
 ```
 
-`p` cycles the presets live, `--theme catppuccin-mocha` picks one for a
-single run, and the Theme row in the settings screen (`s`) does both:
-cycling previews it, Save writes it here.
+`p` and `P` walk the presets live, `--theme catppuccin-mocha` picks one
+for a single run, and the Theme row in the settings screen (`s`) does
+both: `←` `→` cycle it with a live preview, Save writes it here.
 
 Available: `default`, `catppuccin-mocha`, `catppuccin-macchiato`,
 `catppuccin-frappe`, `catppuccin-latte`, `dracula`, `gruvbox-dark`,
@@ -426,7 +426,7 @@ The actions: `quit`, `next_view`, `prev_view`, `settings`, `help`,
 `refresh`, `up`, `down`, `left`, `right`, `page_up`, `page_down`, `open`,
 `card`, `cycle_scope`, `cycle_layout`, `score_up`, `score_down`,
 `chart_style`, `toggle_sma`, `toggle_rsi`, `next_preset`, `prev_preset`,
-`cycle_theme`.
+`next_theme`, `prev_theme`.
 The `?` help overlay shows this list with the current keys next to it.
 
 Reserved and never remappable: `ctrl-c` (force quit), `esc`, the digits

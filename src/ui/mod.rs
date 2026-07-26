@@ -192,7 +192,7 @@ mod tests;
 fn footer_line(app: &App) -> Paragraph<'static> {
     let hints = if app.settings.open {
         // The settings form is a text input; its keys are not remappable.
-        " ↑↓ move · enter edit/toggle/save · esc close".to_string()
+        " ↑↓ move · ←→ change · enter edit/save · esc close".to_string()
     } else if app.article_overlay.open {
         " ↑↓/jk scroll · pgup/pgdn page · ⏎ open in browser · esc/v close".to_string()
     } else if app.help.open {

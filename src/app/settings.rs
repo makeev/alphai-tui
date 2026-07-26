@@ -145,18 +145,12 @@ impl App {
             KeyCode::Down | KeyCode::Char('j') | KeyCode::Tab => {
                 self.settings.cursor = (self.settings.cursor + 1).min(settings_rows().len() - 1)
             }
-            KeyCode::Left | KeyCode::Right | KeyCode::Char(' ') => {
-                match settings_rows()[self.settings.cursor] {
-                    SettingsRow::SourceChoice => self.toggle_source_choice(),
-                    SettingsRow::NewsOpen => self.toggle_news_open_choice(),
-                    SettingsRow::ThemeChoice => self.cycle_theme_choice(),
-                    _ => {}
-                }
-            }
+            KeyCode::Left => self.cycle_row(-1),
+            KeyCode::Right | KeyCode::Char(' ') => self.cycle_row(1),
             KeyCode::Enter => match settings_rows()[self.settings.cursor] {
-                SettingsRow::SourceChoice => self.toggle_source_choice(),
-                SettingsRow::NewsOpen => self.toggle_news_open_choice(),
-                SettingsRow::ThemeChoice => self.cycle_theme_choice(),
+                SettingsRow::SourceChoice | SettingsRow::NewsOpen | SettingsRow::ThemeChoice => {
+                    self.cycle_row(1)
+                }
                 SettingsRow::Key(field) => {
                     let s = &mut self.settings;
                     s.input = s.key_values.get(field.config_name).cloned().unwrap_or_default();
@@ -174,15 +168,25 @@ impl App {
         false
     }
 
-    fn toggle_source_choice(&mut self) {
-        let s = &mut self.settings;
-        s.source_choice = next_source(&s.source_choice).to_string();
+    /// Move the row under the cursor through its choices: left walks back,
+    /// right (and space, and enter) walks forward. Direction matters once a
+    /// list is longer than a toggle, which the theme row is.
+    fn cycle_row(&mut self, dir: isize) {
+        match settings_rows()[self.settings.cursor] {
+            SettingsRow::SourceChoice => {
+                let s = &mut self.settings;
+                s.source_choice = step_source(&s.source_choice, dir).to_string();
+            }
+            SettingsRow::NewsOpen => self.toggle_news_open_choice(),
+            SettingsRow::ThemeChoice => self.cycle_theme_choice(dir),
+            _ => {}
+        }
     }
 
     /// The theme row previews as it cycles, exactly like the p key: the
     /// point of a theme picker is seeing the theme.
-    fn cycle_theme_choice(&mut self) {
-        self.set_theme(crate::theme::next_preset(self.settings.theme_choice));
+    fn cycle_theme_choice(&mut self, dir: isize) {
+        self.set_theme(crate::theme::step_preset(self.settings.theme_choice, dir));
         self.settings.theme_choice = self.theme_name;
     }
 
@@ -307,26 +311,27 @@ fn parse_every(input: &str) -> Option<u64> {
     input.trim().parse::<u64>().ok().filter(|&v| v >= 2)
 }
 
-/// Settings source toggle: cycles the registry in order; unknown names
-/// reset to the keyless default.
-fn next_source(cur: &str) -> &'static str {
+/// Settings source picker: walks the registry in order, both ways;
+/// unknown names reset to the keyless default.
+fn step_source(cur: &str, dir: isize) -> &'static str {
+    let n = registry::SOURCES.len() as isize;
     match registry::SOURCES.iter().position(|s| s.id == cur) {
-        Some(i) => registry::SOURCES[(i + 1) % registry::SOURCES.len()].id,
+        Some(i) => registry::SOURCES[((i as isize + dir).rem_euclid(n)) as usize].id,
         None => registry::SOURCES[0].id,
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::next_source;
+    use super::step_source;
 
     #[test]
-    fn source_cycle_covers_all_and_wraps() {
+    fn source_cycle_covers_all_and_wraps_both_ways() {
         use crate::source::registry::SOURCES;
         let mut cur = SOURCES[0].id;
         let mut seen = vec![cur];
         for _ in 1..SOURCES.len() {
-            cur = next_source(cur);
+            cur = step_source(cur, 1);
             seen.push(cur);
         }
         // Every registered source is reachable exactly once, then it wraps.
@@ -334,8 +339,10 @@ mod tests {
         seen.sort_unstable();
         ids.sort_unstable();
         assert_eq!(seen, ids);
-        assert_eq!(next_source(cur), SOURCES[0].id);
+        assert_eq!(step_source(cur, 1), SOURCES[0].id);
+        // The left arrow walks the other way and wraps too.
+        assert_eq!(step_source(SOURCES[0].id, -1), SOURCES[SOURCES.len() - 1].id);
         // Anything unexpected resets to the keyless default.
-        assert_eq!(next_source("weird"), SOURCES[0].id);
+        assert_eq!(step_source("weird", 1), SOURCES[0].id);
     }
 }

@@ -77,7 +77,7 @@ pub fn render(f: &mut Frame, app: &App) {
             SettingsRow::ThemeChoice => (
                 "Theme",
                 format!("‹ {} ›", s.theme_choice),
-                "color preset; p cycles it anywhere".to_string(),
+                "color preset; p / P cycle it anywhere".to_string(),
             ),
             SettingsRow::Save => unreachable!(),
         };
@@ -107,7 +107,9 @@ pub fn render(f: &mut Frame, app: &App) {
     } else {
         lines.push(Line::from(""));
     }
-    lines.push(Line::from("  ↑↓ move · enter edit / toggle / save · esc close").dim());
+    lines.push(
+        Line::from("  ↑↓ move · ←→ change · enter edit / save · esc close").dim(),
+    );
     if let Some(p) = &app.config_path {
         lines.push(Line::from(format!("  config: {}", tilde(&p.display().to_string()))).dim());
     }

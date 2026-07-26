@@ -5,7 +5,7 @@
 
 mod presets;
 
-pub use presets::{DEFAULT_PRESET, PRESETS, cli_theme_help, next_preset};
+pub use presets::{DEFAULT_PRESET, PRESETS, cli_theme_help, step_preset};
 
 use std::collections::BTreeMap;
 use std::str::FromStr;
