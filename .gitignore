@@ -10,3 +10,6 @@ CLAUDE.md
 
 # playwright-mcp browser session artifacts
 .playwright-mcp/
+
+# per-flavor frames behind assets/themes.webp; shoot-themes.sh remakes them
+assets/themes/

@@ -361,6 +361,8 @@ presets = [               # the combos the t and T keys cycle
 preset = "catppuccin-mocha"
 ```
 
+![alphai-tui cycling through its color presets with the p key: catppuccin mocha, macchiato and frappe, dracula, gruvbox and nord](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/themes.gif)
+
 `p` and `P` walk the presets live, `--theme catppuccin-mocha` picks one
 for a single run, and the Theme row in the settings screen (`s`) does
 both: `←` `→` cycle it with a live preview, Save writes it here.
