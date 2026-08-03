@@ -475,6 +475,27 @@ fn rsi_panel_hidden_on_short_terminal() {
     assert!(has_candles(&screen), "screen:\n{screen}");
 }
 
+/// `e` reweights the same two overlays: same periods, same colors, only the
+/// legend and the math change.
+#[test]
+fn ma_type_key_switches_the_overlays_to_ema() {
+    let mut app = fake_app();
+    app.view_idx = ui::view_index(ui::ViewId::Chart);
+    let braille = |s: &str| s.chars().any(|c| ('\u{2800}'..='\u{28FF}').contains(&c));
+    let screen = render(&mut app);
+    assert!(screen.contains("SMA20"), "screen:\n{screen}");
+    press(&mut app, KeyCode::Char('e'));
+    let screen = render(&mut app);
+    assert!(screen.contains("EMA20"), "screen:\n{screen}");
+    assert!(!screen.contains("SMA20"), "screen:\n{screen}");
+    assert!(braille(&screen), "no overlay line left:\n{screen}");
+    // Line mode reads the same switch.
+    press(&mut app, KeyCode::Char('c'));
+    assert!(render(&mut app).contains("EMA20"), "line mode kept SMA");
+    press(&mut app, KeyCode::Char('e'));
+    assert!(render(&mut app).contains("SMA20"), "the toggle does not go back");
+}
+
 /// The volume panel ships on and rides the `b` toggle.
 #[test]
 fn volume_toggle_hides_panel() {
@@ -655,7 +676,7 @@ fn view_ids_are_unique_and_indexable() {
 }
 
 /// The footer renders the keys actually bound in the keymap, in the
-/// traditional shapes ("↑↓ select", "c/m/i/b chart").
+/// traditional shapes ("↑↓ select", "c/m/i/b/e chart").
 #[test]
 fn footer_shows_bound_keys() {
     let mut app = fake_app();
@@ -663,7 +684,7 @@ fn footer_shows_bound_keys() {
     assert!(screen.contains("q quit"), "screen:\n{screen}");
     assert!(screen.contains("tab/1-9 view"), "screen:\n{screen}");
     assert!(screen.contains("↑↓ select"), "screen:\n{screen}");
-    assert!(screen.contains("c/m/i/b chart"), "screen:\n{screen}");
+    assert!(screen.contains("c/m/i/b/e chart"), "screen:\n{screen}");
     app.view_idx = ui::view_index(ui::ViewId::News);
     let screen = render(&mut app);
     assert!(screen.contains("⏎ open"), "screen:\n{screen}");
@@ -1496,7 +1517,9 @@ fn config_defaults_seed_startup_state() {
         chart: ChartDefaults {
             style: ChartStyle::Line,
             sma: false,
+            ma_type: crate::indicators::MaType::Ema,
             rsi: false,
+            volume: false,
             presets: vec![(Range::D5, Interval::M15), (Range::Y1, Interval::D1)],
             ..Default::default()
         },
@@ -1514,7 +1537,8 @@ fn config_defaults_seed_startup_state() {
     });
     assert_eq!(app.view_idx, ui::view_index(ui::ViewId::News));
     assert_eq!(app.chart_style, ChartStyle::Line);
-    assert!(!app.show_sma && !app.show_rsi);
+    assert!(!app.show_sma && !app.show_rsi && !app.show_volume);
+    assert_eq!(app.ma_type, crate::indicators::MaType::Ema);
     assert_eq!(app.news_layout, NewsLayout::Stacked);
     assert_eq!(app.news_scope, NewsScope::Market);
     assert_eq!(app.news_min_score, 6);

@@ -24,6 +24,7 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use crate::alphai::{self, Article};
 use crate::config::{ChartDefaults, Config, UiDefaults};
 use crate::domain::{Interval, Range, TickerData};
+use crate::indicators::MaType;
 use crate::keymap::{Action, Keymap};
 use crate::poller::{SharedEvery, SharedParams, SharedSource, SourceEvent};
 use crate::theme::Theme;
@@ -173,6 +174,7 @@ pub struct App {
     pub show_sma: bool,
     pub show_rsi: bool,
     pub show_volume: bool,
+    pub ma_type: MaType,
     /// Validated [chart] values: indicator periods and the t/T preset cycle.
     pub chart: ChartDefaults,
     // AlphaAI feed state: every fetched feed by cache key (news under the
@@ -245,6 +247,7 @@ impl App {
             show_sma: init.chart.sma,
             show_rsi: init.chart.rsi,
             show_volume: init.chart.volume,
+            ma_type: init.chart.ma_type,
             chart: init.chart,
             feeds: HashMap::new(),
             feed_seen: HashMap::new(),
@@ -456,6 +459,12 @@ impl App {
             Action::ToggleSma if chart_view => self.show_sma = !self.show_sma,
             Action::ToggleRsi if chart_view => self.show_rsi = !self.show_rsi,
             Action::ToggleVolume if chart_view => self.show_volume = !self.show_volume,
+            Action::MaType if chart_view => {
+                self.ma_type = match self.ma_type {
+                    MaType::Sma => MaType::Ema,
+                    MaType::Ema => MaType::Sma,
+                }
+            }
             Action::NextPreset => self.cycle_range(1),
             Action::PrevPreset => self.cycle_range(-1),
             Action::NextTheme => self.cycle_theme(1),

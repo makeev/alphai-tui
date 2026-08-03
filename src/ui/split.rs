@@ -33,6 +33,7 @@ impl View for SplitView {
                     Action::ToggleSma,
                     Action::ToggleRsi,
                     Action::ToggleVolume,
+                    Action::MaType,
                 ],
                 "chart",
             ),

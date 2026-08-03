@@ -38,6 +38,7 @@ pub enum Action {
     ToggleSma,
     ToggleRsi,
     ToggleVolume,
+    MaType,
     NextPreset,
     PrevPreset,
     NextTheme,
@@ -46,7 +47,7 @@ pub enum Action {
 
 /// Every action with its snake_case config name, the single source of truth
 /// for `[keybindings]` parsing and for the coverage test.
-pub const ACTIONS: [(Action, &str); 26] = [
+pub const ACTIONS: [(Action, &str); 27] = [
     (Action::Quit, "quit"),
     (Action::NextView, "next_view"),
     (Action::PrevView, "prev_view"),
@@ -69,6 +70,7 @@ pub const ACTIONS: [(Action, &str); 26] = [
     (Action::ToggleSma, "toggle_sma"),
     (Action::ToggleRsi, "toggle_rsi"),
     (Action::ToggleVolume, "toggle_volume"),
+    (Action::MaType, "ma_type"),
     (Action::NextPreset, "next_preset"),
     (Action::PrevPreset, "prev_preset"),
     (Action::NextTheme, "next_theme"),
@@ -133,6 +135,8 @@ fn default_keys(action: Action) -> Vec<KeyCombo> {
         Action::ToggleRsi => vec![ch('i')],
         // b for bars: 'v' already opens the article card.
         Action::ToggleVolume => vec![ch('b')],
+        // e for exponential: the key it switches the averages to.
+        Action::MaType => vec![ch('e')],
         Action::NextPreset => vec![ch('t')],
         Action::PrevPreset => vec![ch('T')],
         // p for palette, in the t/T shape; session-only until Save.

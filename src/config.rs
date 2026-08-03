@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use crate::alphai;
 use crate::app::{ChartStyle, NewsLayout, NewsScope, RANGE_PRESETS};
 use crate::domain::{Interval, Range};
-use crate::indicators;
+use crate::indicators::{self, MaType};
 use crate::keymap::Keymap;
 use crate::theme::Theme;
 use crate::ui;
@@ -113,6 +113,7 @@ pub struct UiConfig {
 pub struct ChartConfig {
     pub style: Option<String>,
     pub sma: Option<bool>,
+    pub ma_type: Option<String>,
     pub rsi: Option<bool>,
     pub volume: Option<bool>,
     pub sma_fast: Option<usize>,
@@ -146,6 +147,8 @@ pub struct Resolved {
 pub struct ChartDefaults {
     pub style: ChartStyle,
     pub sma: bool,
+    /// Simple or exponential; the periods below serve whichever is picked.
+    pub ma_type: MaType,
     pub rsi: bool,
     pub volume: bool,
     pub sma_fast: usize,
@@ -161,6 +164,7 @@ impl Default for ChartDefaults {
         Self {
             style: ChartStyle::Candles,
             sma: true,
+            ma_type: MaType::Sma,
             rsi: true,
             volume: true,
             sma_fast: indicators::SMA_FAST,
@@ -272,6 +276,15 @@ fn resolve_chart(raw: Option<&ChartConfig>, warnings: &mut Vec<String>) -> Chart
     }
     if let Some(v) = raw.sma {
         out.sma = v;
+    }
+    if let Some(kind) = &raw.ma_type {
+        match kind.to_lowercase().as_str() {
+            "sma" => out.ma_type = MaType::Sma,
+            "ema" => out.ma_type = MaType::Ema,
+            other => warnings.push(format!(
+                "[chart] ma_type: unknown \"{other}\" (sma or ema), keeping sma"
+            )),
+        }
     }
     if let Some(v) = raw.rsi {
         out.rsi = v;
@@ -749,6 +762,28 @@ mod tests {
         let (resolved, warnings) = resolve(&cfg, None);
         assert_eq!(resolved.chart.presets, RANGE_PRESETS.to_vec());
         assert_eq!(warnings.len(), 2, "{warnings:?}");
+    }
+
+    /// The two panel switches and the average kind: a bad value warns and
+    /// keeps the default, exactly like `style`.
+    #[test]
+    fn chart_panel_and_ma_type_validate_per_entry() {
+        let cfg: Config =
+            toml::from_str("[chart]\nvolume = false\nma_type = \"EMA\"").unwrap();
+        let (resolved, warnings) = resolve(&cfg, None);
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert!(!resolved.chart.volume);
+        assert_eq!(resolved.chart.ma_type, MaType::Ema);
+
+        let cfg: Config = toml::from_str("[chart]\nma_type = \"wilder\"").unwrap();
+        let (resolved, warnings) = resolve(&cfg, None);
+        assert_eq!(resolved.chart.ma_type, MaType::Sma);
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+
+        // Absent section: panels on, averages simple.
+        let (resolved, _) = resolve(&Config::default(), None);
+        assert!(resolved.chart.volume);
+        assert_eq!(resolved.chart.ma_type, MaType::Sma);
     }
 
     #[test]

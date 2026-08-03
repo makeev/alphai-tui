@@ -39,16 +39,17 @@ Built in Rust with [ratatui](https://ratatui.rs).
 
 - **Table**: watchlist with price, change, day range and unicode sparklines.
 - **Chart**: candlestick chart of the selected ticker at half-block
-  resolution, with a previous-close reference line, SMA 20/100 overlays, a
-  volume panel and an RSI(14) panel. The SMA overlays thread through the
-  candles as thin braille lines; the volume bars sit in their candles' own
-  columns and take their color, so a move and the volume behind it read
-  together. `c` switches to the classic Braille line chart, `m`, `i` and
-  `b` toggle the indicators and panels, `t` cycles interval presets on the
-  fly. A short terminal drops the panels rather than squeezing the price
-  chart, and sources without volume (finnhub) simply have no volume panel.
+  resolution, with a previous-close reference line, 20/100 moving average
+  overlays, a volume panel and an RSI(14) panel. The overlays thread through
+  the candles as thin braille lines and average simple or exponential (`e`,
+  or `[chart] ma_type`); the volume bars sit in their candles' own columns
+  and take their color, so a move and the volume behind it read together.
+  `c` switches to the classic Braille line chart, `m`, `i` and `b` toggle
+  the indicators and panels, `t` cycles interval presets on the fly. A
+  short terminal drops the panels rather than squeezing the price chart,
+  and sources without volume (finnhub) simply have no volume panel.
   The client quietly fetches extra history beyond the visible window, so
-  the SMA and RSI lines are fully drawn from the first candle on screen
+  the average and RSI lines are fully drawn from the first candle on screen
   instead of waiting a hundred candles to warm up. Like a trading
   terminal, the chart keeps a margin right of the newest candle (20% of
   the plot; `[chart] right_margin_pct` resizes it, 0 turns it off) with a
@@ -198,7 +199,8 @@ defaults. API keys can also come from env vars, which win over the config:
 | `f` | news, split | cycle news scope: selected ticker, whole market, trending |
 | `+` / `-` | news, insider, split | raise / lower the visible feed's score filter (news: relevance, starts at 7; insider: trade size, starts at 4) |
 | `c` | chart, split | toggle candlestick / line chart |
-| `m` | chart, split | toggle SMA 20 and SMA 100 overlays |
+| `m` | chart, split | toggle the two moving average overlays |
+| `e` | chart, split | average them simple (SMA) or exponential (EMA) |
 | `i` | chart, split | toggle the RSI(14) panel |
 | `b` | chart, split | toggle the volume panel |
 | `t` / `T` | everywhere | cycle candle interval presets forward / back (each interval with a matching history window; the list is configurable as `[chart] presets`) |
@@ -314,7 +316,7 @@ persists the watchlist on screen. Every key is optional. A misspelled value
 in the `[ui]`, `[chart]`, `[theme]` or `[keybindings]` sections prints a
 warning on startup and keeps that entry's default; only a TOML syntax error
 makes the whole file fall back to defaults. The `[ui]` and `[chart]` sections set startup
-defaults; the session keys (`x`, `f`, `+`, `-`, `c`, `m`, `i`, `b`, `t`) still
+defaults; the session keys (`x`, `f`, `+`, `-`, `c`, `m`, `i`, `b`, `e`, `t`) still
 change everything live without persisting it:
 
 ```toml
@@ -342,7 +344,8 @@ alphai_ttl_secs = 300     # news/sentiment/insider cache lifetime, 30 to 86400
 
 [chart]
 style = "candles"         # candles | line
-sma = true                # SMA overlays visible at start
+sma = true                # moving average overlays visible at start
+ma_type = "sma"           # sma | ema, both using the periods below
 rsi = true                # RSI panel visible at start
 volume = true             # volume panel visible at start
 sma_fast = 20             # 2 to 250
@@ -402,8 +405,8 @@ neg = "red"              # bearish sentiment, insider sells
 error = "red"            # error messages
 warn = "yellow"          # notices and the editing highlight
 score_high = "yellow"    # relevance score 8 to 10
-sma_fast = "yellow"      # SMA 20 overlay
-sma_slow = "magenta"     # SMA 100 overlay
+sma_fast = "yellow"      # fast moving average overlay
+sma_slow = "magenta"     # slow moving average overlay
 rsi_line = "cyan"        # RSI line
 ref_line = "darkgray"    # previous close and RSI 30/70 reference lines
 border = "reset"         # panel frames; reset keeps the terminal's foreground
@@ -433,8 +436,8 @@ means the uppercase letter (`shift-t` equals `T`), and `shift-tab` equals
 The actions: `quit`, `next_view`, `prev_view`, `settings`, `help`,
 `refresh`, `up`, `down`, `left`, `right`, `page_up`, `page_down`, `open`,
 `card`, `cycle_scope`, `cycle_layout`, `score_up`, `score_down`,
-`chart_style`, `toggle_sma`, `toggle_rsi`, `toggle_volume`, `next_preset`,
-`prev_preset`, `next_theme`, `prev_theme`.
+`chart_style`, `toggle_sma`, `toggle_rsi`, `toggle_volume`, `ma_type`,
+`next_preset`, `prev_preset`, `next_theme`, `prev_theme`.
 The `?` help overlay shows this list with the current keys next to it.
 
 Reserved and never remappable: `ctrl-c` (force quit), `esc`, the digits
@@ -467,7 +470,7 @@ src/
   alphai.rs      AlphaAI API client + demand-driven fetch task (TTL cache)
   keymap.rs      semantic actions + the key table (footer hints derive from it)
   theme.rs       semantic color palette ([theme] overrides)
-  indicators.rs  SMA and RSI (Wilder smoothing)
+  indicators.rs  SMA, EMA and RSI (Wilder smoothing)
   poller.rs      fetches all symbols concurrently on a timer -> mpsc channel
   app.rs         App state, event loop, key handling
     app/feeds.rs     feed cache and every AlphaAI request-budget guard

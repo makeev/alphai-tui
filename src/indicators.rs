@@ -10,6 +10,35 @@ pub const SMA_FAST: usize = 20;
 pub const SMA_SLOW: usize = 100;
 pub const RSI_PERIOD: usize = 14;
 
+/// How the two moving-average overlays are averaged. The periods, the
+/// colors and the history warm-up are shared, so this only changes the
+/// weighting: `[chart] ma_type` picks the startup value, the `e` key
+/// switches it live.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum MaType {
+    #[default]
+    Sma,
+    Ema,
+}
+
+impl MaType {
+    /// Legend prefix, as in "EMA20".
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Sma => "SMA",
+            Self::Ema => "EMA",
+        }
+    }
+}
+
+/// The chosen average over `values`; both kinds share the `sma` contract.
+pub fn ma(kind: MaType, values: &[f64], period: usize) -> Vec<Option<f64>> {
+    match kind {
+        MaType::Sma => sma(values, period),
+        MaType::Ema => ema(values, period),
+    }
+}
+
 /// Simple moving average. `None` until a full `period` window is available.
 pub fn sma(values: &[f64], period: usize) -> Vec<Option<f64>> {
     let mut out = vec![None; values.len()];
@@ -21,6 +50,24 @@ pub fn sma(values: &[f64], period: usize) -> Vec<Option<f64>> {
     for i in period..values.len() {
         sum += values[i] - values[i - period];
         out[i] = Some(sum / period as f64);
+    }
+    out
+}
+
+/// Exponential moving average, seeded with the simple average of the first
+/// `period` values so it starts on the same candle (and at the same point)
+/// as the SMA of that period. `None` until the seed window is full.
+pub fn ema(values: &[f64], period: usize) -> Vec<Option<f64>> {
+    let mut out = vec![None; values.len()];
+    if period == 0 || period > values.len() {
+        return out;
+    }
+    let mut prev: f64 = values[..period].iter().sum::<f64>() / period as f64;
+    out[period - 1] = Some(prev);
+    let k = 2.0 / (period as f64 + 1.0);
+    for i in period..values.len() {
+        prev += k * (values[i] - prev);
+        out[i] = Some(prev);
     }
     out
 }
@@ -75,6 +122,42 @@ mod tests {
         assert_eq!(sma(&[1.0, 2.0], 0), vec![None, None]);
         assert_eq!(sma(&[1.0, 2.0], 3), vec![None, None]);
         assert_eq!(sma(&[], 3), vec![]);
+    }
+
+    /// Same warm-up as the SMA of that period, and the same first value:
+    /// the two overlays start on the very same candle whichever is picked.
+    #[test]
+    fn ema_seeds_on_the_sma() {
+        let closes = [1.0, 2.0, 3.0, 10.0];
+        let out = ema(&closes, 2);
+        assert_eq!(out[0], None);
+        assert_eq!(out[1], sma(&closes, 2)[1]);
+    }
+
+    /// Hand-computed: seed 1.5, k = 2/3, then 2.5 and 7.5. The SMA of the
+    /// same window ends at 6.5, so this also pins the faster reaction.
+    #[test]
+    fn ema_weights_recent_values_more() {
+        let closes = [1.0, 2.0, 3.0, 10.0];
+        let out = ema(&closes, 2);
+        for (i, want) in [(1, 1.5), (2, 2.5), (3, 7.5)] {
+            let got = out[i].unwrap();
+            assert!((got - want).abs() < 1e-9, "out[{i}] = {got}, want {want}");
+        }
+        assert!(out[3].unwrap() > sma(&closes, 2)[3].unwrap());
+    }
+
+    #[test]
+    fn ema_flat_series_is_the_constant() {
+        let out = ema(&[42.0; 8], 3);
+        assert!(out[2..].iter().all(|v| v.unwrap() == 42.0), "{out:?}");
+    }
+
+    #[test]
+    fn ema_degenerate() {
+        assert_eq!(ema(&[1.0, 2.0], 0), vec![None, None]);
+        assert_eq!(ema(&[1.0, 2.0], 3), vec![None, None]);
+        assert_eq!(ema(&[], 3), vec![]);
     }
 
     #[test]

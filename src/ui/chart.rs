@@ -38,6 +38,7 @@ impl View for ChartView {
                     Action::ToggleSma,
                     Action::ToggleRsi,
                     Action::ToggleVolume,
+                    Action::MaType,
                 ],
                 "chart",
             ),
@@ -84,8 +85,9 @@ fn panel_split(height: u16, volume: bool, rsi: bool) -> (u16, u16) {
 }
 
 /// Price chart of the selected symbol: candlesticks by default, the classic
-/// close line via the `c` toggle, optional SMA 20/100 overlays (`m`) and an
-/// RSI(14) panel (`i`). Shared by ChartView and SplitView.
+/// close line via the `c` toggle, optional 20/100 moving average overlays
+/// (`m`, simple or exponential by `e`), a volume panel (`b`) and an RSI(14)
+/// panel (`i`). Shared by ChartView and SplitView.
 pub fn render_chart(f: &mut Frame, area: Rect, app: &App) {
     let symbol = app.selected_symbol().to_string();
 
@@ -202,18 +204,16 @@ fn dir_color(q: &Quote, theme: &Theme) -> Color {
     }
 }
 
-/// Legend labels appear only for SMA lines that actually have points on
-/// screen: an SMA needs `period` candles of history, which short series
+/// Legend labels appear only for average lines that actually have points on
+/// screen: an average needs `period` candles of history, which short series
 /// (finnhub's growing synthetic one, thin symbols) may not have yet.
 fn chart_title(
     symbol: &str,
-    q: &Quote,
     data: &TickerData,
-    show_sma: bool,
-    chart: &ChartDefaults,
-    theme: &Theme,
+    app: &App,
     flash: Option<bool>,
 ) -> Line<'static> {
+    let (q, theme) = (&data.quote, &app.theme);
     let change_str = match (q.change(), q.change_pct()) {
         (Some(c), Some(p)) => format!("{c:+.2} ({p:+.2}%)"),
         _ => "—".into(),
@@ -230,11 +230,16 @@ fn chart_title(
         Span::raw(format!(" {} ", q.currency.as_deref().unwrap_or(""))),
         Span::styled(format!("{change_str} "), Style::new().fg(dir_color(q, theme))),
     ];
-    if show_sma {
-        for (period, color) in [(chart.sma_fast, theme.sma_fast), (chart.sma_slow, theme.sma_slow)]
-        {
+    if app.show_sma {
+        for (period, color) in [
+            (app.chart.sma_fast, theme.sma_fast),
+            (app.chart.sma_slow, theme.sma_slow),
+        ] {
             if data.candles.len() >= period {
-                spans.push(Span::styled(format!("SMA{period} "), Style::new().fg(color)));
+                spans.push(Span::styled(
+                    format!("{}{period} ", app.ma_type.label()),
+                    Style::new().fg(color),
+                ));
             }
         }
     }
@@ -307,7 +312,7 @@ fn render_price_line(
     // the visible window's x coordinates.
     let closes: Vec<f64> = data.candles.iter().map(|c| c.close).collect();
     let sma_points = |period: usize| -> Vec<(f64, f64)> {
-        indicators::sma(&closes, period)
+        indicators::ma(app.ma_type, &closes, period)
             .into_iter()
             .enumerate()
             .skip(cut)
@@ -377,15 +382,11 @@ fn render_price_line(
     ];
 
     let chart = Chart::new(datasets)
-        .block(app.theme.panel().title(chart_title(
-            symbol,
-            q,
-            data,
-            app.show_sma,
-            &app.chart,
-            &app.theme,
-            flash,
-        )))
+        .block(
+            app.theme
+                .panel()
+                .title(chart_title(symbol, data, app, flash)),
+        )
         .x_axis(
             Axis::default()
                 .bounds([0.0, x_max])
@@ -441,15 +442,10 @@ fn render_price_candles(
     let q = &data.quote;
     let visible = &data.candles[cut..];
     let flash = app.price_flash_dir(symbol);
-    let block = app.theme.panel().title(chart_title(
-        symbol,
-        q,
-        data,
-        app.show_sma,
-        &app.chart,
-        &app.theme,
-        flash,
-    ));
+    let block = app
+        .theme
+        .panel()
+        .title(chart_title(symbol, data, app, flash));
     let inner = block.inner(area);
     f.render_widget(block, area);
 
@@ -551,7 +547,7 @@ fn render_price_candles(
             (app.chart.sma_slow, app.theme.sma_slow),
             (app.chart.sma_fast, app.theme.sma_fast),
         ] {
-            let line = indicators::sma(&closes, period);
+            let line = indicators::ma(app.ma_type, &closes, period);
             let mut prev: Option<(i32, i32)> = None;
             for (i, &raw) in sample_idx.iter().enumerate() {
                 let x = slot_x(i) + (slot - body_w) + body_w / 2;
