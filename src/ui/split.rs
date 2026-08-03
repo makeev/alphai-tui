@@ -27,7 +27,15 @@ impl View for SplitView {
             Hint::fixed("tab/1-9", "view"),
             Hint::act(&[Action::Up, Action::Down], "select"),
             Hint::act(&[Action::CycleScope], "scope"),
-            Hint::act(&[Action::ChartStyle, Action::ToggleSma, Action::ToggleRsi], "chart"),
+            Hint::act(
+                &[
+                    Action::ChartStyle,
+                    Action::ToggleSma,
+                    Action::ToggleRsi,
+                    Action::ToggleVolume,
+                ],
+                "chart",
+            ),
             Hint::act(&[Action::NextPreset], "interval"),
             Hint::act(&[Action::Refresh], "refresh"),
             Hint::act(&[Action::Settings], "settings"),

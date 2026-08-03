@@ -39,10 +39,14 @@ Built in Rust with [ratatui](https://ratatui.rs).
 
 - **Table**: watchlist with price, change, day range and unicode sparklines.
 - **Chart**: candlestick chart of the selected ticker at half-block
-  resolution, with a previous-close reference line, SMA 20/100 overlays and
-  an RSI(14) panel. The SMA overlays thread through the candles as thin
-  braille lines. `c` switches to the classic Braille line chart, `m` and
-  `i` toggle the indicators, `t` cycles interval presets on the fly.
+  resolution, with a previous-close reference line, SMA 20/100 overlays, a
+  volume panel and an RSI(14) panel. The SMA overlays thread through the
+  candles as thin braille lines; the volume bars sit in their candles' own
+  columns and take their color, so a move and the volume behind it read
+  together. `c` switches to the classic Braille line chart, `m`, `i` and
+  `b` toggle the indicators and panels, `t` cycles interval presets on the
+  fly. A short terminal drops the panels rather than squeezing the price
+  chart, and sources without volume (finnhub) simply have no volume panel.
   The client quietly fetches extra history beyond the visible window, so
   the SMA and RSI lines are fully drawn from the first candle on screen
   instead of waiting a hundred candles to warm up. Like a trading
@@ -196,6 +200,7 @@ defaults. API keys can also come from env vars, which win over the config:
 | `c` | chart, split | toggle candlestick / line chart |
 | `m` | chart, split | toggle SMA 20 and SMA 100 overlays |
 | `i` | chart, split | toggle the RSI(14) panel |
+| `b` | chart, split | toggle the volume panel |
 | `t` / `T` | everywhere | cycle candle interval presets forward / back (each interval with a matching history window; the list is configurable as `[chart] presets`) |
 | `r` | everywhere | refresh prices and the visible news view |
 | `p` / `P` | everywhere | next / previous color preset (session-only until Save) |
@@ -309,7 +314,7 @@ persists the watchlist on screen. Every key is optional. A misspelled value
 in the `[ui]`, `[chart]`, `[theme]` or `[keybindings]` sections prints a
 warning on startup and keeps that entry's default; only a TOML syntax error
 makes the whole file fall back to defaults. The `[ui]` and `[chart]` sections set startup
-defaults; the session keys (`x`, `f`, `+`, `-`, `c`, `m`, `i`, `t`) still
+defaults; the session keys (`x`, `f`, `+`, `-`, `c`, `m`, `i`, `b`, `t`) still
 change everything live without persisting it:
 
 ```toml
@@ -339,6 +344,7 @@ alphai_ttl_secs = 300     # news/sentiment/insider cache lifetime, 30 to 86400
 style = "candles"         # candles | line
 sma = true                # SMA overlays visible at start
 rsi = true                # RSI panel visible at start
+volume = true             # volume panel visible at start
 sma_fast = 20             # 2 to 250
 sma_slow = 100            # 2 to 250; also sizes the history warm-up
 rsi_period = 14           # 2 to 100
@@ -427,8 +433,8 @@ means the uppercase letter (`shift-t` equals `T`), and `shift-tab` equals
 The actions: `quit`, `next_view`, `prev_view`, `settings`, `help`,
 `refresh`, `up`, `down`, `left`, `right`, `page_up`, `page_down`, `open`,
 `card`, `cycle_scope`, `cycle_layout`, `score_up`, `score_down`,
-`chart_style`, `toggle_sma`, `toggle_rsi`, `next_preset`, `prev_preset`,
-`next_theme`, `prev_theme`.
+`chart_style`, `toggle_sma`, `toggle_rsi`, `toggle_volume`, `next_preset`,
+`prev_preset`, `next_theme`, `prev_theme`.
 The `?` help overlay shows this list with the current keys next to it.
 
 Reserved and never remappable: `ctrl-c` (force quit), `esc`, the digits
@@ -468,7 +474,7 @@ src/
     app/settings.rs  settings overlay state, rows derived from the registry
   ui/            View trait + implementations
     table.rs     watchlist table
-    chart.rs     candlestick + line chart, SMA overlays, RSI panel
+    chart.rs     candlestick + line chart, SMA overlays, volume and RSI panels
     split.rs     table + chart
     news.rs      article list + sentiment rollup + detail pane
     insider.rs   Form 4 rollup + filing list

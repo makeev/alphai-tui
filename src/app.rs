@@ -172,6 +172,7 @@ pub struct App {
     pub chart_style: ChartStyle,
     pub show_sma: bool,
     pub show_rsi: bool,
+    pub show_volume: bool,
     /// Validated [chart] values: indicator periods and the t/T preset cycle.
     pub chart: ChartDefaults,
     // AlphaAI feed state: every fetched feed by cache key (news under the
@@ -243,6 +244,7 @@ impl App {
             chart_style: init.chart.style,
             show_sma: init.chart.sma,
             show_rsi: init.chart.rsi,
+            show_volume: init.chart.volume,
             chart: init.chart,
             feeds: HashMap::new(),
             feed_seen: HashMap::new(),
@@ -453,6 +455,7 @@ impl App {
             }
             Action::ToggleSma if chart_view => self.show_sma = !self.show_sma,
             Action::ToggleRsi if chart_view => self.show_rsi = !self.show_rsi,
+            Action::ToggleVolume if chart_view => self.show_volume = !self.show_volume,
             Action::NextPreset => self.cycle_range(1),
             Action::PrevPreset => self.cycle_range(-1),
             Action::NextTheme => self.cycle_theme(1),

@@ -114,6 +114,7 @@ pub struct ChartConfig {
     pub style: Option<String>,
     pub sma: Option<bool>,
     pub rsi: Option<bool>,
+    pub volume: Option<bool>,
     pub sma_fast: Option<usize>,
     pub sma_slow: Option<usize>,
     pub rsi_period: Option<usize>,
@@ -146,6 +147,7 @@ pub struct ChartDefaults {
     pub style: ChartStyle,
     pub sma: bool,
     pub rsi: bool,
+    pub volume: bool,
     pub sma_fast: usize,
     pub sma_slow: usize,
     pub rsi_period: usize,
@@ -160,6 +162,7 @@ impl Default for ChartDefaults {
             style: ChartStyle::Candles,
             sma: true,
             rsi: true,
+            volume: true,
             sma_fast: indicators::SMA_FAST,
             sma_slow: indicators::SMA_SLOW,
             rsi_period: indicators::RSI_PERIOD,
@@ -272,6 +275,9 @@ fn resolve_chart(raw: Option<&ChartConfig>, warnings: &mut Vec<String>) -> Chart
     }
     if let Some(v) = raw.rsi {
         out.rsi = v;
+    }
+    if let Some(v) = raw.volume {
+        out.volume = v;
     }
     out.sma_fast = period(raw.sma_fast, out.sma_fast, "sma_fast", 2..=250, warnings);
     out.sma_slow = period(raw.sma_slow, out.sma_slow, "sma_slow", 2..=250, warnings);
@@ -694,7 +700,7 @@ mod tests {
 
         // A bad entry warns and keeps the default; the good one still lands.
         let cfg: Config =
-            toml::from_str("[keybindings]\nquit = \"supr\"\ncard = \"b\"").unwrap();
+            toml::from_str("[keybindings]\nquit = \"supr\"\ncard = \"n\"").unwrap();
         let (resolved, warnings) = resolve(&cfg, None);
         assert_eq!(warnings.len(), 2, "{warnings:?}");
         assert_eq!(
@@ -702,7 +708,7 @@ mod tests {
             Some(Action::Quit)
         );
         assert_eq!(
-            resolved.keymap.resolve(&KeyEvent::from(KeyCode::Char('b'))),
+            resolved.keymap.resolve(&KeyEvent::from(KeyCode::Char('n'))),
             Some(Action::Card)
         );
 

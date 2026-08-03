@@ -77,7 +77,9 @@ fn fake_app() -> App {
                     high: close + 0.3,
                     low: close - 0.4,
                     close,
-                    volume: Some(1000.0),
+                    // Uneven on purpose: equal volumes render as one solid
+                    // block and would hide bar-height bugs.
+                    volume: Some(1000.0 + (i % 5) as f64 * 400.0),
                 }
             })
             .collect();
@@ -237,6 +239,8 @@ fn right_margin_frees_columns_and_hosts_the_price_tag() {
     let mut app = fake_app();
     app.view_idx = ui::view_index(ui::ViewId::Chart);
     app.show_rsi = false;
+    // Volume bars share the candles' glyphs; this is about the price plot.
+    app.show_volume = false;
     let max_body_x = |screen: &str| {
         screen
             .lines()
@@ -471,6 +475,89 @@ fn rsi_panel_hidden_on_short_terminal() {
     assert!(has_candles(&screen), "screen:\n{screen}");
 }
 
+/// The volume panel ships on and rides the `b` toggle.
+#[test]
+fn volume_toggle_hides_panel() {
+    let mut app = fake_app();
+    app.view_idx = ui::view_index(ui::ViewId::Chart);
+    let screen = render(&mut app);
+    assert!(screen.contains("Vol"), "screen:\n{screen}");
+    press(&mut app, KeyCode::Char('b'));
+    let screen = render(&mut app);
+    assert!(!screen.contains("Vol"), "screen:\n{screen}");
+}
+
+/// Space goes to the price chart first: RSI keeps the height at which it has
+/// always appeared, and volume waits for a taller terminal.
+#[test]
+fn volume_panel_yields_to_the_price_chart() {
+    let mut app = fake_app();
+    app.view_idx = ui::view_index(ui::ViewId::Chart);
+    let screen = render_sized(&mut app, 100, 24);
+    assert!(screen.contains("RSI(14)"), "screen:\n{screen}");
+    assert!(!screen.contains("Vol"), "screen:\n{screen}");
+    assert!(has_candles(&screen), "screen:\n{screen}");
+    // With RSI out of the way the same terminal has room for volume.
+    press(&mut app, KeyCode::Char('i'));
+    let screen = render_sized(&mut app, 100, 24);
+    assert!(screen.contains("Vol"), "screen:\n{screen}");
+}
+
+/// Finnhub synthesizes candles from ticks and carries no volume; an empty
+/// panel would cost the price chart rows for nothing.
+#[test]
+fn volume_panel_absent_without_data() {
+    let mut app = fake_app();
+    app.view_idx = ui::view_index(ui::ViewId::Chart);
+    for data in app.data.values_mut() {
+        for candle in &mut data.candles {
+            candle.volume = None;
+        }
+    }
+    let screen = render(&mut app);
+    assert!(!screen.contains("Vol"), "screen:\n{screen}");
+    assert!(has_candles(&screen), "screen:\n{screen}");
+}
+
+/// Every bar sits under its candle: both panels end in the same column, and
+/// the right margin stays clear in both.
+#[test]
+fn volume_bars_share_the_candle_columns() {
+    let mut app = fake_app();
+    app.view_idx = ui::view_index(ui::ViewId::Chart);
+    let screen = render_sized(&mut app, 100, 40);
+    let lines: Vec<&str> = screen.lines().collect();
+    let vol_top = lines.iter().position(|l| l.contains("Vol")).expect("volume panel");
+    let rsi_top = lines.iter().position(|l| l.contains("RSI(")).expect("rsi panel");
+    let max_body_x = |rows: &[&str]| {
+        rows.iter()
+            .flat_map(|l| {
+                l.chars()
+                    .enumerate()
+                    .filter(|(_, c)| matches!(c, '█' | '▀' | '▄'))
+                    .map(|(i, _)| i)
+            })
+            .max()
+    };
+    let candles = max_body_x(&lines[..vol_top]).expect("candles");
+    let bars = max_body_x(&lines[vol_top + 1..rsi_top]).expect("bars");
+    assert_eq!(candles, bars, "bars and candles end in different columns:\n{screen}");
+    // Both stop well short of the right border: that is the price margin.
+    assert!(bars < 90, "the margin is not clear: {bars}\n{screen}");
+}
+
+/// Every view's footer must fit the 110-column terminal the README promises.
+/// The chart hints were at 107 of them before the volume key arrived.
+#[test]
+fn footer_hints_fit_110_columns() {
+    let mut app = fake_app();
+    for (i, view) in ui::VIEWS.iter().enumerate() {
+        app.view_idx = i;
+        let width = crate::ui::hints_text(&app).chars().count();
+        assert!(width <= 110, "{:?}: footer is {width} columns wide", view.id());
+    }
+}
+
 #[test]
 fn range_keys_cycle_presets_and_update_header() {
     let mut app = fake_app();
@@ -568,7 +655,7 @@ fn view_ids_are_unique_and_indexable() {
 }
 
 /// The footer renders the keys actually bound in the keymap, in the
-/// traditional shapes ("↑↓ select", "c/m/i chart").
+/// traditional shapes ("↑↓ select", "c/m/i/b chart").
 #[test]
 fn footer_shows_bound_keys() {
     let mut app = fake_app();
@@ -576,7 +663,7 @@ fn footer_shows_bound_keys() {
     assert!(screen.contains("q quit"), "screen:\n{screen}");
     assert!(screen.contains("tab/1-9 view"), "screen:\n{screen}");
     assert!(screen.contains("↑↓ select"), "screen:\n{screen}");
-    assert!(screen.contains("c/m/i chart"), "screen:\n{screen}");
+    assert!(screen.contains("c/m/i/b chart"), "screen:\n{screen}");
     app.view_idx = ui::view_index(ui::ViewId::News);
     let screen = render(&mut app);
     assert!(screen.contains("⏎ open"), "screen:\n{screen}");
@@ -590,7 +677,7 @@ fn footer_and_dispatch_follow_a_remap() {
     let mut app = fake_app();
     let mut warnings = Vec::new();
     app.keymap = crate::keymap::Keymap::from_config(
-        [("open", vec!["z"]), ("card", vec!["b"])],
+        [("open", vec!["z"]), ("card", vec!["n"])],
         &mut warnings,
     );
     assert!(warnings.is_empty(), "{warnings:?}");
@@ -609,7 +696,7 @@ fn footer_and_dispatch_follow_a_remap() {
     // The new key drives the action, the old one is gone.
     press(&mut app, KeyCode::Char('v'));
     assert!(!app.article_overlay.open, "the replaced default still fired");
-    press(&mut app, KeyCode::Char('b'));
+    press(&mut app, KeyCode::Char('n'));
     assert!(app.article_overlay.open, "the remapped key did not fire");
 }
 

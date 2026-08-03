@@ -37,6 +37,7 @@ pub enum Action {
     ChartStyle,
     ToggleSma,
     ToggleRsi,
+    ToggleVolume,
     NextPreset,
     PrevPreset,
     NextTheme,
@@ -45,7 +46,7 @@ pub enum Action {
 
 /// Every action with its snake_case config name, the single source of truth
 /// for `[keybindings]` parsing and for the coverage test.
-pub const ACTIONS: [(Action, &str); 25] = [
+pub const ACTIONS: [(Action, &str); 26] = [
     (Action::Quit, "quit"),
     (Action::NextView, "next_view"),
     (Action::PrevView, "prev_view"),
@@ -67,6 +68,7 @@ pub const ACTIONS: [(Action, &str); 25] = [
     (Action::ChartStyle, "chart_style"),
     (Action::ToggleSma, "toggle_sma"),
     (Action::ToggleRsi, "toggle_rsi"),
+    (Action::ToggleVolume, "toggle_volume"),
     (Action::NextPreset, "next_preset"),
     (Action::PrevPreset, "prev_preset"),
     (Action::NextTheme, "next_theme"),
@@ -129,6 +131,8 @@ fn default_keys(action: Action) -> Vec<KeyCombo> {
         Action::ChartStyle => vec![ch('c')],
         Action::ToggleSma => vec![ch('m')],
         Action::ToggleRsi => vec![ch('i')],
+        // b for bars: 'v' already opens the article card.
+        Action::ToggleVolume => vec![ch('b')],
         Action::NextPreset => vec![ch('t')],
         Action::PrevPreset => vec![ch('T')],
         // p for palette, in the t/T shape; session-only until Save.

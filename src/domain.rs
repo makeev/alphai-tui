@@ -173,10 +173,39 @@ pub fn fmt_price(p: f64) -> String {
     }
 }
 
+/// Share counts get long fast, and the volume panel has a price gutter's
+/// worth of room: 12.4M, 1.24B, 934K.
+pub fn fmt_volume(v: f64) -> String {
+    for (unit, scale) in [("B", 1e9), ("M", 1e6), ("K", 1e3)] {
+        if v.abs() >= scale {
+            let scaled = v / scale;
+            return if scaled.abs() >= 100.0 {
+                format!("{scaled:.0}{unit}")
+            } else {
+                format!("{scaled:.1}{unit}")
+            };
+        }
+    }
+    format!("{v:.0}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::indicators::SMA_SLOW;
+
+    /// Short enough for the price gutter at every magnitude a share count
+    /// reaches, and never wider than a price label.
+    #[test]
+    fn fmt_volume_scales_by_magnitude() {
+        assert_eq!(fmt_volume(0.0), "0");
+        assert_eq!(fmt_volume(934.0), "934");
+        assert_eq!(fmt_volume(12_400.0), "12.4K");
+        assert_eq!(fmt_volume(934_000.0), "934K");
+        assert_eq!(fmt_volume(12_400_000.0), "12.4M");
+        assert_eq!(fmt_volume(1_240_000_000.0), "1.2B");
+        assert!(fmt_volume(999_999_999_999.0).chars().count() <= 5);
+    }
 
     /// Every `t`-cycle preset must fetch enough history for a full SMA100
     /// warm-up behind its visible window.

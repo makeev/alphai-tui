@@ -189,6 +189,25 @@ fn header_line(app: &App) -> Paragraph<'static> {
 #[cfg(test)]
 mod tests;
 
+/// The current view's hints with their live keys. Split out of
+/// `footer_line` so a test can measure it: the whole line has to fit the
+/// 110-column terminal the README promises.
+fn hints_text(app: &App) -> String {
+    let parts: Vec<String> = VIEWS[app.view_idx]
+        .hints()
+        .iter()
+        .map(|h| {
+            let keys = if h.actions.is_empty() {
+                h.fixed.to_string()
+            } else {
+                app.keymap.labels(h.actions)
+            };
+            format!("{keys} {}", h.label)
+        })
+        .collect();
+    format!(" {}", parts.join(" · "))
+}
+
 fn footer_line(app: &App) -> Paragraph<'static> {
     let hints = if app.settings.open {
         // The settings form is a text input; its keys are not remappable.
@@ -198,19 +217,7 @@ fn footer_line(app: &App) -> Paragraph<'static> {
     } else if app.help.open {
         " ↑↓/jk scroll · pgup/pgdn page · esc/? close".to_string()
     } else {
-        let parts: Vec<String> = VIEWS[app.view_idx]
-            .hints()
-            .iter()
-            .map(|h| {
-                let keys = if h.actions.is_empty() {
-                    h.fixed.to_string()
-                } else {
-                    app.keymap.labels(h.actions)
-                };
-                format!("{keys} {}", h.label)
-            })
-            .collect();
-        format!(" {}", parts.join(" · "))
+        hints_text(app)
     };
     let mut spans = vec![Span::raw(hints).dim()];
     if let Some((symbol, error)) = app.errors.iter().next() {

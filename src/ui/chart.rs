@@ -8,7 +8,7 @@ use ratatui::widgets::{Axis, Chart, Dataset, GraphType, Paragraph};
 
 use crate::app::{App, ChartStyle};
 use crate::config::ChartDefaults;
-use crate::domain::{Candle, Quote, Range, TickerData, fmt_price};
+use crate::domain::{Candle, Quote, Range, TickerData, fmt_price, fmt_volume};
 use crate::indicators;
 use crate::keymap::Action;
 use crate::theme::Theme;
@@ -30,9 +30,17 @@ impl View for ChartView {
             Hint::act(&[Action::Quit], "quit"),
             Hint::fixed("tab/1-9", "view"),
             Hint::act(&[Action::Up, Action::Down], "select"),
-            Hint::act(&[Action::ChartStyle], "style"),
-            Hint::act(&[Action::ToggleSma], "sma"),
-            Hint::act(&[Action::ToggleRsi], "rsi"),
+            // One grouped hint, like the split view: five separate ones no
+            // longer fit 110 columns, and the help overlay spells them out.
+            Hint::act(
+                &[
+                    Action::ChartStyle,
+                    Action::ToggleSma,
+                    Action::ToggleRsi,
+                    Action::ToggleVolume,
+                ],
+                "chart",
+            ),
             Hint::act(&[Action::NextPreset], "interval"),
             Hint::act(&[Action::Refresh], "refresh"),
             Hint::act(&[Action::Settings], "settings"),
@@ -51,9 +59,29 @@ impl View for ChartView {
 }
 
 const RSI_PANEL_HEIGHT: u16 = 8;
-/// Below this total height the RSI panel is dropped so the price chart keeps
-/// usable space (same graceful degradation as the split view's news half).
-const RSI_MIN_CHART_HEIGHT: u16 = 20;
+const VOLUME_PANEL_HEIGHT: u16 = 6;
+/// The price chart never shrinks below this: the panels under it drop out
+/// one by one until it fits (same graceful degradation as the split view's
+/// news half).
+const PRICE_MIN_HEIGHT: u16 = 12;
+
+/// Heights of the panels under the price chart, top to bottom: (volume,
+/// rsi), 0 meaning not shown. RSI reserves its space first so the height at
+/// which it appears stays exactly where it has always been.
+fn panel_split(height: u16, volume: bool, rsi: bool) -> (u16, u16) {
+    let mut rest = height;
+    let mut take = |want: u16, wanted: bool| {
+        if wanted && rest >= want + PRICE_MIN_HEIGHT {
+            rest -= want;
+            want
+        } else {
+            0
+        }
+    };
+    let rsi_h = take(RSI_PANEL_HEIGHT, rsi);
+    let volume_h = take(VOLUME_PANEL_HEIGHT, volume);
+    (volume_h, rsi_h)
+}
 
 /// Price chart of the selected symbol: candlesticks by default, the classic
 /// close line via the `c` toggle, optional SMA 20/100 overlays (`m`) and an
@@ -83,22 +111,37 @@ pub fn render_chart(f: &mut Frame, area: Rect, app: &App) {
         return;
     }
 
-    let (price_area, rsi_area) = if app.show_rsi && area.height >= RSI_MIN_CHART_HEIGHT {
-        let [p, r] =
-            Layout::vertical([Constraint::Min(0), Constraint::Length(RSI_PANEL_HEIGHT)])
-                .areas(area);
-        (p, Some(r))
-    } else {
-        (area, None)
-    };
-
     let cut = visible_from(&data.candles, app.range);
+    // An empty volume panel would only steal rows from the price chart:
+    // finnhub synthesizes candles from ticks and carries no volume at all.
+    let has_volume =
+        app.show_volume && data.candles[cut..].iter().any(|c| c.volume.is_some());
+    let (volume_h, rsi_h) = panel_split(area.height, has_volume, app.show_rsi);
+    let [price_area, volume_area, rsi_area] = Layout::vertical([
+        Constraint::Min(0),
+        Constraint::Length(volume_h),
+        Constraint::Length(rsi_h),
+    ])
+    .areas(area);
+
     match app.chart_style {
-        ChartStyle::Line => render_price_line(f, price_area, app, &symbol, data, cut),
-        ChartStyle::Candles => render_price_candles(f, price_area, app, &symbol, data, cut),
+        ChartStyle::Line => {
+            render_price_line(f, price_area, app, &symbol, data, cut);
+            if volume_h > 0 {
+                render_volume_line(f, volume_area, data, cut, &app.chart, &app.theme);
+            }
+        }
+        ChartStyle::Candles => {
+            let geom = render_price_candles(f, price_area, app, &symbol, data, cut);
+            // No geometry means the price chart bailed on a too-small area;
+            // bars with a guessed layout would not line up with anything.
+            if let (true, Some(geom)) = (volume_h > 0, geom) {
+                render_volume_candles(f, volume_area, &geom, &app.theme);
+            }
+        }
     }
-    if let Some(r) = rsi_area {
-        render_rsi(f, r, data, cut, &app.chart, &app.theme);
+    if rsi_h > 0 {
+        render_rsi(f, rsi_area, data, cut, &app.chart, &app.theme);
     }
 }
 
@@ -360,9 +403,33 @@ fn render_price_line(
 
 // -- candle mode --------------------------------------------------------------
 
+/// Column layout of the candle plot, handed to the volume panel below it so
+/// every bar sits under the candle it belongs to.
+struct CandleGeom {
+    /// Width of the price-label gutter left of the plot.
+    gutter: u16,
+    plot_x: u16,
+    /// Columns from `plot_x` that hold candles; the right margin follows.
+    usable: u16,
+    slot: u16,
+    body_w: u16,
+    /// The candles actually drawn, downsampled to the plot width.
+    display: Vec<Candle>,
+}
+
+impl CandleGeom {
+    /// Left column of candle `i`'s body.
+    fn body_x(&self, i: usize) -> u16 {
+        let slot_x = self.plot_x + self.usable - (self.display.len() - i) as u16 * self.slot;
+        slot_x + (self.slot - self.body_w)
+    }
+}
+
 /// Hand-rolled candlestick renderer writing straight into the buffer at
 /// half-block resolution: two subrows per terminal row, body `█ ▀ ▄`, wick
-/// `│ ╵ ╷`. ratatui's Chart widget has no candle graph type.
+/// `│ ╵ ╷`. ratatui's Chart widget has no candle graph type. Returns the
+/// column layout for the volume panel, or None when the area was too small
+/// to plot anything.
 fn render_price_candles(
     f: &mut Frame,
     area: Rect,
@@ -370,7 +437,7 @@ fn render_price_candles(
     symbol: &str,
     data: &TickerData,
     cut: usize,
-) {
+) -> Option<CandleGeom> {
     let q = &data.quote;
     let visible = &data.candles[cut..];
     let flash = app.price_flash_dir(symbol);
@@ -407,7 +474,7 @@ fn render_price_candles(
     let y_labels = [fmt_price(y_hi), fmt_price((y_lo + y_hi) / 2.0), fmt_price(y_lo)];
     let gutter = y_labels.iter().map(|s| s.chars().count()).max().unwrap() as u16 + 1;
     if inner.width <= gutter + 2 || inner.height <= 2 {
-        return; // too small: leave the bare block
+        return None; // too small: leave the bare block
     }
     let plot = Rect {
         x: inner.x + gutter,
@@ -557,6 +624,8 @@ fn render_price_candles(
             .clamp(plot.x, plot.x + plot.width - len);
         buf.set_string(mid_x, axis_y, &mid, dim);
     }
+
+    Some(CandleGeom { gutter, plot_x: plot.x, usable, slot, body_w, display })
 }
 
 /// Price -> subrow index in `[0, sub_rows)`, 0 = top.
@@ -745,6 +814,129 @@ fn aggregate(chunk: &[Candle]) -> Candle {
     }
 }
 
+// -- volume panel -------------------------------------------------------------
+
+fn volume_title(last: Option<f64>, theme: &Theme) -> Line<'static> {
+    let mut spans = vec![Span::styled(
+        " Vol ",
+        Style::new().fg(theme.accent).add_modifier(Modifier::BOLD),
+    )];
+    if let Some(v) = last {
+        spans.push(Span::styled(
+            format!("{} ", fmt_volume(v)),
+            Style::new().fg(theme.flat),
+        ));
+    }
+    Line::from(spans)
+}
+
+/// Volume bars sharing the candles' columns exactly: same gutter, same
+/// slots, and the right margin left empty (the last-price marker lives
+/// there, a bar under it would read as one more candle). Each bar takes its
+/// candle's color, so the panel shows which side the volume was on.
+fn render_volume_candles(f: &mut Frame, area: Rect, geom: &CandleGeom, theme: &Theme) {
+    let vmax = geom.display.iter().filter_map(|c| c.volume).fold(0.0, f64::max);
+    let last = geom.display.last().and_then(|c| c.volume);
+    let block = theme.panel().title(volume_title(last, theme));
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+    if vmax <= 0.0 || inner.height == 0 || inner.width <= geom.gutter {
+        return;
+    }
+
+    let buf = f.buffer_mut();
+    let sub_rows = inner.height as usize * 2;
+    for (i, c) in geom.display.iter().enumerate() {
+        let Some(v) = c.volume else { continue };
+        // Subrows filled from the bottom up. A traded candle keeps at least a
+        // stub so a quiet session still reads as data, not as a gap.
+        let filled = (((v / vmax) * sub_rows as f64).round() as usize).clamp(1, sub_rows);
+        let color = candle_color(c, (i > 0).then(|| geom.display[i - 1].close), theme);
+        let body_x = geom.body_x(i);
+        for row in 0..inner.height {
+            let lower = (inner.height - 1 - row) as usize * 2;
+            let ch = match filled.saturating_sub(lower) {
+                0 => continue,
+                1 => '▄',
+                _ => '█',
+            };
+            for x in body_x..body_x + geom.body_w {
+                if let Some(cell) = buf.cell_mut((x, inner.y + row)) {
+                    cell.set_char(ch).set_fg(color);
+                }
+            }
+        }
+    }
+
+    // Peak right-aligned in the price chart's gutter, like its own labels.
+    let label = fmt_volume(vmax);
+    let len = label.chars().count() as u16;
+    if len < geom.gutter {
+        buf.set_string(geom.plot_x - 1 - len, inner.y, &label, Style::new().dim());
+    }
+}
+
+/// Line mode has no hand-rolled columns to borrow, so the bars follow the
+/// RSI panel instead: same x bounds including the right margin, which keeps
+/// them roughly column-aligned with the price above.
+fn render_volume_line(
+    f: &mut Frame,
+    area: Rect,
+    data: &TickerData,
+    cut: usize,
+    chart: &ChartDefaults,
+    theme: &Theme,
+) {
+    let visible = &data.candles[cut..];
+    let (mut up, mut down, mut flat) = (Vec::new(), Vec::new(), Vec::new());
+    let mut vmax = 0.0_f64;
+    for (i, c) in visible.iter().enumerate() {
+        let Some(v) = c.volume else { continue };
+        vmax = vmax.max(v);
+        let color = candle_color(c, (i > 0).then(|| visible[i - 1].close), theme);
+        let bucket = if color == theme.up {
+            &mut up
+        } else if color == theme.down {
+            &mut down
+        } else {
+            &mut flat
+        };
+        bucket.push((i as f64, v));
+    }
+    let block = theme
+        .panel()
+        .title(volume_title(visible.last().and_then(|c| c.volume), theme));
+    if vmax <= 0.0 {
+        f.render_widget(block, area);
+        return;
+    }
+
+    let x_hi = (visible.len() - 1) as f64;
+    let x_max = x_with_margin(x_hi, chart.right_margin_pct);
+    let datasets: Vec<Dataset> = [(&up, theme.up), (&down, theme.down), (&flat, theme.flat)]
+        .into_iter()
+        .filter(|(pts, _)| !pts.is_empty())
+        .map(|(pts, color)| {
+            Dataset::default()
+                .marker(symbols::Marker::HalfBlock)
+                .graph_type(GraphType::Bar)
+                .style(Style::new().fg(color))
+                .data(pts)
+        })
+        .collect();
+
+    let chart = Chart::new(datasets)
+        .block(block)
+        .x_axis(Axis::default().bounds([0.0, x_max]))
+        .y_axis(
+            Axis::default()
+                .bounds([0.0, vmax])
+                .labels(["0".to_string(), fmt_volume(vmax)])
+                .style(Style::new().dim()),
+        );
+    f.render_widget(chart, area);
+}
+
 // -- RSI panel ----------------------------------------------------------------
 
 fn render_rsi(
@@ -833,6 +1025,21 @@ mod tests {
 
     fn candle(open: f64, high: f64, low: f64, close: f64) -> Candle {
         Candle { ts: 0, open, high, low, close, volume: None }
+    }
+
+    /// RSI reserves first, so its threshold is exactly where it always was
+    /// (height 20), and volume only takes rows the price chart can spare.
+    #[test]
+    fn panel_split_feeds_the_price_chart_first() {
+        assert_eq!(panel_split(40, true, true), (VOLUME_PANEL_HEIGHT, RSI_PANEL_HEIGHT));
+        assert_eq!(panel_split(20, true, true), (0, RSI_PANEL_HEIGHT));
+        // One row short of RSI, but the cheaper volume panel still fits.
+        assert_eq!(panel_split(19, true, true), (VOLUME_PANEL_HEIGHT, 0));
+        assert_eq!(panel_split(17, true, true), (0, 0));
+        assert_eq!(panel_split(20, true, false), (VOLUME_PANEL_HEIGHT, 0));
+        // Toggled off panels never reserve anything.
+        assert_eq!(panel_split(40, false, false), (0, 0));
+        assert_eq!(panel_split(40, false, true), (0, RSI_PANEL_HEIGHT));
     }
 
     fn flat_series(n: usize, step_secs: i64) -> Vec<Candle> {

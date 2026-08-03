@@ -50,6 +50,7 @@ static ROWS: &[Row] = &[
     Row::Act(Action::ChartStyle, "candles or line chart"),
     Row::Act(Action::ToggleSma, "toggle the SMA overlays"),
     Row::Act(Action::ToggleRsi, "toggle the RSI panel"),
+    Row::Act(Action::ToggleVolume, "toggle the volume panel"),
     Row::Act(Action::NextPreset, "next range and interval preset"),
     Row::Act(Action::PrevPreset, "previous range and interval preset"),
 ];
