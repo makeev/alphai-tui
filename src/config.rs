@@ -9,7 +9,7 @@ use ratatui::widgets::BorderType;
 use serde::{Deserialize, Serialize};
 
 use crate::alphai;
-use crate::app::{ChartStyle, NewsLayout, NewsScope, RANGE_PRESETS};
+use crate::app::{ChartStyle, InsiderChartWindow, NewsLayout, NewsScope, RANGE_PRESETS};
 use crate::domain::{Interval, Range};
 use crate::indicators::{self, MaType};
 use crate::keymap::Keymap;
@@ -102,6 +102,9 @@ pub struct UiConfig {
     /// warning in `resolve`, not fail deserializing the whole file.
     pub news_min_score: Option<i64>,
     pub insider_min_score: Option<i64>,
+    /// Startup window of the Insider view's chart panel: "3m" (default),
+    /// "12m" or "off"; the g key cycles it live.
+    pub insider_chart: Option<String>,
     /// How long fetched AlphaAI data (news, sentiment, insider) stays fresh
     /// before the visible view re-fetches it. Seconds; raw i64 for the same
     /// warning-not-error reason as the scores.
@@ -207,6 +210,7 @@ pub struct UiDefaults {
     pub news_scope: NewsScope,
     pub news_min_score: u8,
     pub insider_min_score: u8,
+    pub insider_chart: InsiderChartWindow,
     pub alphai_ttl: Duration,
 }
 
@@ -218,6 +222,7 @@ impl Default for UiDefaults {
             news_scope: NewsScope::default(),
             news_min_score: DEFAULT_NEWS_MIN_SCORE,
             insider_min_score: DEFAULT_INSIDER_MIN_SCORE,
+            insider_chart: InsiderChartWindow::default(),
             alphai_ttl: alphai::CACHE_TTL,
         }
     }
@@ -391,6 +396,16 @@ fn resolve_ui(raw: Option<&UiConfig>, warnings: &mut Vec<String>) -> UiDefaults 
             )),
         }
     }
+    if let Some(window) = &raw.insider_chart {
+        match window.to_lowercase().as_str() {
+            "off" => out.insider_chart = InsiderChartWindow::Off,
+            "3m" => out.insider_chart = InsiderChartWindow::M3,
+            "12m" => out.insider_chart = InsiderChartWindow::M12,
+            other => warnings.push(format!(
+                "[ui] insider_chart: unknown \"{other}\" (3m, 12m or off), keeping 3m"
+            )),
+        }
+    }
     out.news_min_score = min_score(raw.news_min_score, out.news_min_score, "news_min_score", warnings);
     out.insider_min_score = min_score(
         raw.insider_min_score,
@@ -551,6 +566,7 @@ mod tests {
                 borders: Some("plain".into()),
                 news_min_score: Some(6),
                 insider_min_score: Some(5),
+                insider_chart: Some("12m".into()),
                 alphai_ttl_secs: Some(120),
             }),
             chart: Some(ChartConfig {
@@ -827,6 +843,27 @@ mod tests {
         assert_eq!(resolved.ui.view_idx, ui::view_index(ui::ViewId::Split));
         assert_eq!(warnings.len(), 1, "{warnings:?}");
         assert!(warnings[0].contains("nwes"), "{warnings:?}");
+    }
+
+    #[test]
+    fn ui_insider_chart_window_parses_and_warns() {
+        for (raw, want) in [
+            ("off", InsiderChartWindow::Off),
+            ("3m", InsiderChartWindow::M3),
+            ("12M", InsiderChartWindow::M12),
+        ] {
+            let cfg: Config =
+                toml::from_str(&format!("[ui]\ninsider_chart = \"{raw}\"")).unwrap();
+            let (resolved, warnings) = resolve(&cfg, None);
+            assert!(warnings.is_empty(), "{warnings:?}");
+            assert_eq!(resolved.ui.insider_chart, want);
+        }
+        // Junk warns and keeps the default window.
+        let cfg: Config = toml::from_str("[ui]\ninsider_chart = \"6m\"").unwrap();
+        let (resolved, warnings) = resolve(&cfg, None);
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].contains("insider_chart"), "{warnings:?}");
+        assert_eq!(resolved.ui.insider_chart, InsiderChartWindow::M3);
     }
 
     #[test]

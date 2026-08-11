@@ -10,7 +10,7 @@
 use std::collections::HashSet;
 use std::time::Instant;
 
-use crate::alphai::{self, Article, FeedPayload, InsiderSummary, SentimentSummary};
+use crate::alphai::{self, Article, FeedPayload, InsiderTrades, SentimentSummary};
 use crate::ui;
 
 use super::{App, NewsScope};
@@ -69,9 +69,9 @@ impl FeedBundle {
         }
     }
 
-    pub fn insider_summary(&self) -> Option<&InsiderSummary> {
+    pub fn insider_trades(&self) -> Option<&InsiderTrades> {
         match &self.side {
-            Some(FeedPayload::Insider(s)) => Some(s),
+            Some(FeedPayload::Insider(t)) => Some(t.as_ref()),
             _ => None,
         }
     }

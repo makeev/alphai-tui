@@ -188,10 +188,16 @@ impl Client {
             .await
     }
 
-    /// 30-day Form 4 rollup: buy/sell counts, dollar volumes, top insiders.
-    pub async fn insider_summary(&self, ticker: &str) -> Result<InsiderSummary> {
-        self.get_json(&format!("/api/symbols/{ticker}/insider-summary/"), &[])
-            .await
+    /// Form 4 chart bundle: 3m/12m/all-time rollups with top insiders,
+    /// Monday-keyed weekly dollar buckets and every chart event of the
+    /// trailing 365 days, in one request. `page_size=1` keeps the paginated
+    /// events table (the TUI's list is the news feed) out of the payload.
+    pub async fn insider_trades(&self, ticker: &str) -> Result<InsiderTrades> {
+        self.get_json(
+            &format!("/api/symbols/{ticker}/insider-trades/"),
+            &[("page_size", "1")],
+        )
+        .await
     }
 }
 
@@ -213,9 +219,9 @@ pub enum Cmd {
     },
     /// Fetch the 48h trending top 10 (cached under `TRENDING_KEY`).
     FetchTrending,
-    /// Fetch the insider feed + 30d summary for one symbol; a cursor pages.
-    /// `min_relevance` works as in `FetchNews` (insider scores track the
-    /// trade size, so this is effectively a size filter).
+    /// Fetch the insider feed + the Form 4 chart bundle for one symbol; a
+    /// cursor pages. `min_relevance` works as in `FetchNews` (insider
+    /// scores track the trade size, so this is effectively a size filter).
     FetchInsider {
         symbol: String,
         cursor: Option<String>,
@@ -253,10 +259,12 @@ pub enum Event {
     Error { key: String, error: String },
 }
 
-/// Rollup fetched alongside a feed's head page.
+/// Rollup fetched alongside a feed's head page. The trades bundle is boxed:
+/// it dwarfs the sentiment rollup, and the payload travels inside every
+/// `Event::Feed`.
 pub enum FeedPayload {
     Sentiment(SentimentSummary),
-    Insider(InsiderSummary),
+    Insider(Box<InsiderTrades>),
 }
 
 /// Cache key for a symbol-scoped or market-wide news fetch.
@@ -419,18 +427,18 @@ pub async fn run(
                     continue;
                 };
                 let append = cursor.is_some();
-                let (page, summary) = match append {
+                let (page, trades) = match append {
                     false => {
-                        let (p, s) = tokio::join!(
+                        let (p, t) = tokio::join!(
                             fetch_feed_page(
                                 client,
                                 Feed::Insider(&symbol, min_relevance),
                                 None,
                                 &mut page50,
                             ),
-                            client.insider_summary(&symbol)
+                            client.insider_trades(&symbol)
                         );
-                        (p, s.ok())
+                        (p, t.ok())
                     }
                     true => (
                         fetch_feed_page(
@@ -447,7 +455,7 @@ pub async fn run(
                     Ok(p) => Event::Feed {
                         key,
                         articles: p.results,
-                        side: summary.map(FeedPayload::Insider),
+                        side: trades.map(|t| FeedPayload::Insider(Box::new(t))),
                         next_cursor: p.next_cursor,
                         append,
                         min_relevance,
@@ -777,12 +785,44 @@ pub struct SentimentSummary {
     pub bearish: i64,
 }
 
-#[derive(Clone, Debug, Deserialize)]
-pub struct InsiderSummary {
+/// Form 4 chart bundle from `/api/symbols/{t}/insider-trades/`. One filing's
+/// tranche group is one event throughout; money is decimal strings like the
+/// feed. Everything is optional-tolerant: the view renders whatever arrived
+/// and skips the rest.
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct InsiderTrades {
+    /// Earliest recorded fill ("YYYY-MM-DD"); the chart window never claims
+    /// history from before it.
     #[serde(default)]
-    pub days: i64,
+    pub coverage_start: Option<String>,
     #[serde(default)]
-    pub total_transactions: i64,
+    pub summary: Option<TradesSummary>,
+    /// Monday-keyed weekly buy/sell dollar buckets, zero-filled up to the
+    /// current week, capped to the trailing 12 months.
+    #[serde(default)]
+    pub series_weekly: Vec<WeekBucket>,
+    /// Every event of the trailing 365 days, both sides, unfiltered by the
+    /// feed's relevance score: the chart is always the full picture.
+    #[serde(default)]
+    pub chart_events: Vec<TradeEvent>,
+}
+
+/// The subset of the endpoint's summary the TUI shows (the head line and
+/// the top reporters); the 3m and all-time windows ride along in the JSON
+/// and are simply not parsed.
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct TradesSummary {
+    #[serde(default)]
+    pub last_12m: Option<TradesWindow>,
+    /// Most active reporters of the last 12 months, at most five.
+    #[serde(default)]
+    pub top_insiders: Vec<TradeTopInsider>,
+}
+
+/// One trailing-window rollup. Counts are grouped events (not tranches);
+/// a value is None when the window has no priced events on that side.
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct TradesWindow {
     #[serde(default)]
     pub buy_count: i64,
     #[serde(default)]
@@ -792,21 +832,68 @@ pub struct InsiderSummary {
     #[serde(default)]
     pub sell_value_usd: Option<String>,
     #[serde(default)]
-    pub pct_10b5_1: i64,
+    pub unique_insiders: i64,
     #[serde(default)]
-    pub top_insiders: Vec<TopInsider>,
+    pub pct_10b5_1: i64,
 }
 
-#[derive(Clone, Debug, Deserialize)]
-pub struct TopInsider {
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct TradeTopInsider {
     #[serde(default)]
     pub name: String,
     #[serde(default)]
     pub title: String,
     #[serde(default)]
-    pub transaction_count: i64,
+    pub event_count: i64,
     #[serde(default)]
-    pub net_value: Option<String>,
+    pub net_value_usd: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct WeekBucket {
+    /// Monday of the bucket, "YYYY-MM-DD".
+    #[serde(default)]
+    pub week_start: String,
+    #[serde(default)]
+    pub buy_count: i64,
+    #[serde(default)]
+    pub sell_count: i64,
+    #[serde(default)]
+    pub buy_value_usd: Option<String>,
+    #[serde(default)]
+    pub sell_value_usd: Option<String>,
+}
+
+/// One chart event, trimmed to what the panel plots (who and how much per
+/// share stay on the feed row's structured block). Unlike the feed's
+/// `insider.side` (where code D maps to "other"), this surface counts D — a
+/// sale back to the issuer — as "sell"; `transaction_code` tells the two
+/// apart (P buy / S sale / D to issuer).
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct TradeEvent {
+    #[serde(default)]
+    pub side: Option<String>,
+    #[serde(default)]
+    pub transaction_code: Option<String>,
+    #[serde(default)]
+    pub total_value_usd: Option<String>,
+    /// Fills folded into this event (a 10b5-1 ladder files many).
+    #[serde(default)]
+    pub tranche_count: Option<i64>,
+    /// Percent of the pre-event stake this event moved; sells negative.
+    #[serde(default)]
+    pub stake_change_pct: Option<String>,
+    #[serde(default)]
+    pub is_10b5_1: bool,
+    #[serde(default)]
+    pub late_filing: bool,
+    /// Last fill of the group, "YYYY-MM-DD".
+    #[serde(default)]
+    pub transaction_date: Option<String>,
+    /// Uid of the feed article behind this event; joins the chart to the
+    /// list (selection highlight, stake/tranches in the detail pane).
+    #[serde(default)]
+    pub news_uid: Option<String>,
 }
 
 /// "25000.0000" (API decimal string) -> "25,000"; fractional shares round.
@@ -1063,21 +1150,77 @@ mod tests {
     }
 
     #[test]
-    fn parses_insider_summary() {
+    fn parses_insider_trades() {
+        // Mirrors the live /api/symbols/{t}/insider-trades/ shape: summary
+        // windows, Monday-keyed weekly buckets, per-event chart rows with
+        // stake/tranche extras, decimals as strings.
         let raw = r#"{
-          "ticker": "NVDA", "days": 30, "total_transactions": 14,
-          "buy_count": 2, "sell_count": 12,
-          "buy_value_usd": "1240000.00", "sell_value_usd": "224580213.05",
-          "pct_10b5_1": 85,
-          "top_insiders": [
-            {"name": "STEVENS MARK A", "title": "", "transaction_count": 3, "net_value": "-221102600.00"}
-          ]
+          "ticker": "CRWV",
+          "coverage_start": "2025-08-14",
+          "summary": {
+            "last_3m": { "buy_count": 0, "sell_count": 58, "buy_value_usd": null,
+                         "sell_value_usd": "1900000000", "unique_insiders": 5, "pct_10b5_1": 64 },
+            "last_12m": { "buy_count": 0, "sell_count": 487, "buy_value_usd": null,
+                          "sell_value_usd": "6420000000", "unique_insiders": 11, "pct_10b5_1": 70 },
+            "all_time": { "buy_count": 0, "sell_count": 487, "buy_value_usd": null,
+                          "sell_value_usd": "6420000000", "unique_insiders": 11, "pct_10b5_1": 70 },
+            "top_insiders": [
+              { "name": "Intrator Michael N", "title": "CEO and President",
+                "event_count": 134, "net_value_usd": "-505000000" }
+            ]
+          },
+          "series_weekly": [
+            { "week_start": "2026-07-27", "buy_count": 0, "sell_count": 9,
+              "buy_value_usd": "0", "sell_value_usd": "48200000" },
+            { "week_start": "2026-08-03", "buy_count": 0, "sell_count": 3,
+              "buy_value_usd": "0", "sell_value_usd": "30600000" }
+          ],
+          "chart_events": [
+            { "side": "sell", "transaction_code": "S", "ownership_form": "I",
+              "security_title": "Common Stock", "shares": "107692",
+              "avg_price_usd": "91.8", "total_value_usd": "9886021.65",
+              "tranche_count": 8, "stake_change_pct": "-100.0",
+              "is_10b5_1": true, "late_filing": false,
+              "insider_name": "Intrator Michael N", "insider_title": "CEO and President",
+              "is_officer": true, "is_director": true, "is_ten_percent_owner": true,
+              "transaction_date": "2026-08-04", "filed_at": "2026-08-07T00:36:56+00:00",
+              "news_uid": "788e477c66f3849b", "news_title": "…", "has_article": true },
+            { "side": "sell", "transaction_code": "D", "shares": "1000",
+              "avg_price_usd": null, "total_value_usd": null,
+              "is_10b5_1": false, "insider_name": "X", "insider_title": "",
+              "transaction_date": "2026-07-20", "news_uid": null }
+          ],
+          "events": [],
+          "next_cursor": "cD0yMDI2"
         }"#;
-        let s: InsiderSummary = serde_json::from_str(raw).unwrap();
-        assert_eq!(s.total_transactions, 14);
-        assert_eq!(fmt_usd(s.sell_value_usd.as_deref().unwrap()), "$224.6M");
-        assert_eq!(fmt_usd(s.top_insiders[0].net_value.as_deref().unwrap()), "-$221.1M");
-        assert_eq!(s.top_insiders[0].transaction_count, 3);
+        let t: InsiderTrades = serde_json::from_str(raw).unwrap();
+        assert_eq!(t.coverage_start.as_deref(), Some("2025-08-14"));
+        let s = t.summary.as_ref().unwrap();
+        let m12 = s.last_12m.as_ref().unwrap();
+        assert_eq!((m12.buy_count, m12.sell_count), (0, 487));
+        assert_eq!(m12.buy_value_usd, None);
+        assert_eq!(fmt_usd(m12.sell_value_usd.as_deref().unwrap()), "$6.4B");
+        assert_eq!(m12.unique_insiders, 11);
+        assert_eq!(s.top_insiders[0].event_count, 134);
+        assert_eq!(fmt_usd(s.top_insiders[0].net_value_usd.as_deref().unwrap()), "-$505.0M");
+        assert_eq!(t.series_weekly.len(), 2);
+        assert_eq!(t.series_weekly[0].week_start, "2026-07-27");
+        assert_eq!(t.series_weekly[0].sell_count, 9);
+        let e = &t.chart_events[0];
+        assert_eq!(e.side.as_deref(), Some("sell"));
+        assert_eq!(e.tranche_count, Some(8));
+        assert_eq!(e.stake_change_pct.as_deref(), Some("-100.0"));
+        assert_eq!(e.news_uid.as_deref(), Some("788e477c66f3849b"));
+        // The unpriced code-D event still parses; sale-to-issuer stays
+        // distinguishable via the code even though side says "sell" here.
+        let d = &t.chart_events[1];
+        assert_eq!(d.transaction_code.as_deref(), Some("D"));
+        assert_eq!(d.total_value_usd, None);
+
+        // A ticker with no coverage serves nulls and empty arrays.
+        let bare: InsiderTrades = serde_json::from_str(r#"{"ticker": "X"}"#).unwrap();
+        assert!(bare.summary.is_none());
+        assert!(bare.chart_events.is_empty());
     }
 
     #[test]
@@ -1123,8 +1266,11 @@ mod tests {
             filings.results.iter().any(|a| a.insider.is_some()),
             "no structured insider block on the live feed"
         );
-        let summary = client.insider_summary("NVDA").await.unwrap();
-        assert!(summary.days > 0);
+        let trades = client.insider_trades("NVDA").await.unwrap();
+        let windows = trades.summary.expect("no summary block on insider-trades");
+        assert!(windows.last_12m.is_some(), "no last_12m window");
+        assert!(!trades.chart_events.is_empty(), "empty chart_events for NVDA");
+        assert!(!trades.series_weekly.is_empty(), "empty series_weekly for NVDA");
         let trending = client.trending().await.unwrap();
         assert!(!trending.is_empty(), "empty trending feed");
     }

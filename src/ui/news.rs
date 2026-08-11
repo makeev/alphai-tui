@@ -442,6 +442,7 @@ pub fn render_detail(
     area: Rect,
     article: Option<&Article>,
     ticker: &str,
+    extra: Option<String>,
     theme: &Theme,
 ) {
     let block = theme.panel();
@@ -449,9 +450,11 @@ pub fn render_detail(
         f.render_widget(block, area);
         return;
     };
+    let mut meta = meta_line(a, ticker);
+    meta.extend(extra);
     let lines = vec![
         Line::from(a.original.title.clone()).bold(),
-        Line::from(meta_line(a, ticker).join(" · ")).dim(),
+        Line::from(meta.join(" · ")).dim(),
         Line::from(a.original.summary.clone()),
     ];
     f.render_widget(

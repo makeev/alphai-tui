@@ -6,7 +6,7 @@ use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use tokio::sync::Notify;
 
-use crate::alphai::{self, Article, FeedPayload, InsiderSummary, SentimentSummary, TRENDING_KEY};
+use crate::alphai::{self, Article, FeedPayload, InsiderTrades, SentimentSummary, TRENDING_KEY};
 use crate::app::{
     App, AppInit, ChartStyle, FeedBundle, NewsLayout, NewsScope, PRICE_FLASH, SettingsRow,
     settings_rows,
@@ -841,13 +841,15 @@ fn news_view_shows_error_state() {
 fn insider_view_shows_summary_and_filings() {
     let mut app = fake_app();
     app.view_idx = ui::view_index(ui::ViewId::Insider);
-    let summary: InsiderSummary = serde_json::from_str(
+    let trades: InsiderTrades = serde_json::from_str(
         r#"{
-          "ticker": "AAPL", "days": 30, "total_transactions": 14,
-          "buy_count": 2, "sell_count": 12,
-          "buy_value_usd": "1240000.00", "sell_value_usd": "224580213.05",
-          "pct_10b5_1": 85,
-          "top_insiders": [{"name": "COOK TIMOTHY", "title": "CEO", "transaction_count": 3, "net_value": "-50300000.00"}]
+          "ticker": "AAPL",
+          "summary": {
+            "last_12m": { "buy_count": 2, "sell_count": 12,
+                          "buy_value_usd": "1240000.00", "sell_value_usd": "224580213.05",
+                          "unique_insiders": 6, "pct_10b5_1": 85 },
+            "top_insiders": [{"name": "COOK TIMOTHY", "title": "CEO", "event_count": 3, "net_value_usd": "-50300000.00"}]
+          }
         }"#,
     )
     .unwrap();
@@ -855,17 +857,18 @@ fn insider_view_shows_summary_and_filings() {
         alphai::insider_key("AAPL"),
         FeedBundle::new(
             vec![filing("Apple insider sold $12.5M of stock", "direct")],
-            Some(FeedPayload::Insider(summary)),
+            Some(FeedPayload::Insider(Box::new(trades))),
             None,
         ),
     );
     let screen = render(&mut app);
     assert!(screen.contains("Insider · AAPL"), "screen:\n{screen}");
-    assert!(screen.contains("14 filings"), "screen:\n{screen}");
+    assert!(screen.contains("14 events"), "screen:\n{screen}");
     assert!(screen.contains("$224.6M"), "screen:\n{screen}");
     assert!(screen.contains("85% under 10b5-1"), "screen:\n{screen}");
+    assert!(screen.contains("6 insiders"), "screen:\n{screen}");
     assert!(screen.contains("COOK TIMOTHY"), "screen:\n{screen}");
-    assert!(screen.contains("×3"), "transaction count missing:\n{screen}");
+    assert!(screen.contains("×3"), "event count missing:\n{screen}");
     // No AI enrichment and no structured block on this legacy filing: the
     // sell glyph comes from the title fallback, the ownership marker follows,
     // and the plan/value columns stay blank.
@@ -926,6 +929,105 @@ fn insider_structured_block_drives_row_and_card() {
     assert!(card.contains("SELL 25,000 sh @ $187.32 = $4.7M (code S)"), "card:\n{card}");
     assert!(card.contains("STEVENS MARK A (Director)"), "card:\n{card}");
     assert!(card.contains("2026-07-09"), "card:\n{card}");
+}
+
+/// An Insider bundle with the trades chart payload, its events placed
+/// relative to today so the trailing windows always cover them.
+fn insider_app_with_chart() -> App {
+    use chrono::{Datelike, Days, Utc};
+
+    let mut app = fake_app();
+    app.view_idx = ui::view_index(ui::ViewId::Insider);
+    let today = Utc::now().date_naive();
+    let day = |ago: u64| (today - Days::new(ago)).format("%Y-%m-%d").to_string();
+    let monday = |ago: u64| {
+        let d = today - Days::new(ago);
+        (d - Days::new(u64::from(d.weekday().num_days_from_monday())))
+            .format("%Y-%m-%d")
+            .to_string()
+    };
+    let trades: InsiderTrades = serde_json::from_str(&format!(
+        r#"{{
+          "summary": {{ "last_12m": {{ "buy_count": 1, "sell_count": 2,
+                        "buy_value_usd": "500000", "sell_value_usd": "10886021",
+                        "unique_insiders": 2, "pct_10b5_1": 33 }} }},
+          "series_weekly": [
+            {{ "week_start": "{w1}", "buy_count": 0, "sell_count": 1,
+               "buy_value_usd": "0", "sell_value_usd": "9886021" }},
+            {{ "week_start": "{w2}", "buy_count": 1, "sell_count": 1,
+               "buy_value_usd": "500000", "sell_value_usd": "1000000" }}
+          ],
+          "chart_events": [
+            {{ "side": "sell", "transaction_code": "S", "total_value_usd": "9886021.65",
+               "tranche_count": 8, "stake_change_pct": "-100.0", "is_10b5_1": true,
+               "insider_name": "A", "transaction_date": "{e1}", "news_uid": "uid-1" }},
+            {{ "side": "sell", "transaction_code": "D", "total_value_usd": "1000000",
+               "insider_name": "B", "transaction_date": "{e2}" }},
+            {{ "side": "buy", "transaction_code": "P", "total_value_usd": "500000",
+               "insider_name": "C", "transaction_date": "{e2}" }}
+          ]
+        }}"#,
+        w1 = monday(5),
+        w2 = monday(12),
+        e1 = day(5),
+        e2 = day(12),
+    ))
+    .unwrap();
+    let mut sold = filing("Apple insider sold $9.9M of stock", "direct");
+    sold.original.uid = "uid-1".into();
+    app.feeds.insert(
+        alphai::insider_key("AAPL"),
+        FeedBundle::new(vec![sold], Some(FeedPayload::Insider(Box::new(trades))), None),
+    );
+    app
+}
+
+/// The chart panel: log scatter of the window's events over the weekly
+/// bars, joined to the list by uid, cycled off and back by g.
+#[test]
+fn insider_chart_panel_draws_and_cycles() {
+    let mut app = insider_app_with_chart();
+    let screen = render(&mut app);
+    assert!(screen.contains("Form 4 · 3m"), "panel title missing:\n{screen}");
+    // Window totals in the title: both sides priced.
+    assert!(screen.contains("▼ $10.9M"), "sell total missing:\n{screen}");
+    assert!(screen.contains("▲ $500.0K"), "buy total missing:\n{screen}");
+    assert!(screen.contains("3 events"), "event count missing:\n{screen}");
+    // The three mark shapes: filled sell, hollow sale-to-issuer, filled buy.
+    assert!(screen.contains("▽"), "sale-to-issuer mark missing:\n{screen}");
+    // Log decade labels from $100K up to $10M.
+    assert!(screen.contains("$10M"), "decade label missing:\n{screen}");
+    assert!(screen.contains("$100K"), "decade label missing:\n{screen}");
+    assert!(screen.contains("▲ buy · ▼ sell · ▽ to issuer"), "legend missing:\n{screen}");
+    // Weekly bars: two-sided window renders block glyphs under the scatter.
+    assert!(has_candles(&screen), "weekly bars missing:\n{screen}");
+    // The selected filing's extras join the detail pane by uid.
+    assert!(screen.contains("stake -100.0%"), "stake extra missing:\n{screen}");
+    assert!(screen.contains("8 tranches"), "tranche extra missing:\n{screen}");
+
+    // g cycles 3m -> 12m -> off -> 3m; the panel yields its rows when off.
+    press(&mut app, KeyCode::Char('g'));
+    assert!(render(&mut app).contains("Form 4 · 12m"));
+    press(&mut app, KeyCode::Char('g'));
+    let screen = render(&mut app);
+    assert!(!screen.contains("Form 4 ·"), "panel must hide when off:\n{screen}");
+    press(&mut app, KeyCode::Char('g'));
+    assert!(render(&mut app).contains("Form 4 · 3m"));
+}
+
+/// Rows are scarce before they are gone: the weekly bars drop first, the
+/// whole panel only when the list would starve.
+#[test]
+fn insider_chart_degrades_bars_then_panel() {
+    let mut app = insider_app_with_chart();
+    // 24-row terminal: the panel fits only without its bars.
+    let screen = render_sized(&mut app, 100, 24);
+    assert!(screen.contains("Form 4 · 3m"), "short panel missing:\n{screen}");
+    assert!(!has_candles(&screen), "bars must drop on short terminals:\n{screen}");
+    // 20 rows: the panel is gone, the list and detail stay.
+    let screen = render_sized(&mut app, 100, 20);
+    assert!(!screen.contains("Form 4 ·"), "panel must yield:\n{screen}");
+    assert!(screen.contains("Apple insider sold"), "list lost:\n{screen}");
 }
 
 /// +/- on the Insider view adjust the insider filter only, and the refetch

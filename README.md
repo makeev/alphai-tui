@@ -59,16 +59,30 @@ Built in Rust with [ratatui](https://ratatui.rs).
   the candle and the marker never disagree and a live market is visible
   at a glance; the poll interval is `--every` / the `Poll every`
   settings row.
-- **Insider**: SEC Form 4 activity for the selected ticker. A 30-day rollup
-  (buys vs sells, dollar volumes, share of pre-arranged 10b5-1 plan trades,
-  most active insiders with their transaction counts) above the stream of
-  filing events. Each filing row shows the trade side straight from the
+- **Insider**: SEC Form 4 activity for the selected ticker. A 12-month
+  rollup (buys vs sells, dollar volumes, share of pre-arranged 10b5-1 plan
+  trades, most active insiders with their event counts) sits above a trades
+  chart and the stream of filing events. The chart mirrors the insider
+  trades page on alphai.io: every event in the window is a triangle placed
+  by date on a log dollar scale (`▲` buy, `▼` sale, a hollow `▽` for shares
+  sold back to the issuer, dimmed when the trade ran under a 10b5-1 plan),
+  with weekly buy/sell dollar bars underneath and month marks along the
+  axis. The mark of the filing selected in the list renders inverted, so
+  the list and the chart always point at each other. `g` cycles the chart
+  window: 3 months, 12 months, off (`[ui] insider_chart` sets the startup
+  value); on low terminals the bars drop first and the whole panel yields
+  before the list would starve. The chart plots every event the API knows
+  in the window, unaffected by the score filter below. Each filing row
+  shows the trade side straight from the
   filing (a buy/sell glyph; a sale back to the issuer stays neutral instead
   of reading as a market sale), a `D`/`I` marker for direct or indirect
   ownership, a `p` flag on pre-arranged 10b5-1 plan trades and the total
   trade value. The article card breaks the event down further: shares, the
   value-weighted average price, the SEC transaction code, who traded and
-  their role, and the transaction date. Insider rows are scored from the
+  their role, and the transaction date; the detail pane below the list adds
+  what the chart data knows about the selected filing: the share of the
+  insider's stake the event moved, how many tranches the filing folded
+  into it, and a late-filing flag. Insider rows are scored from the
   trade size, so `+` and `-` filter the stream by dollar value
   (`[ui] insider_min_score` sets the startup default; 7 keeps roughly the
   $10M+ trades). The stream pages like the news feed: down on the last row
@@ -198,6 +212,7 @@ defaults. API keys can also come from env vars, which win over the config:
 | `↓` / `j` on the last row | news, insider | load the next page of the feed |
 | `f` | news, split | cycle news scope: selected ticker, whole market, trending |
 | `+` / `-` | news, insider, split | raise / lower the visible feed's score filter (news: relevance, starts at 7; insider: trade size, starts at 4) |
+| `g` | insider | cycle the trades chart window: 3 months, 12 months, off |
 | `c` | chart, split | toggle candlestick / line chart |
 | `m` | chart, split | toggle the two moving average overlays |
 | `e` | chart, split | average them simple (SMA) or exponential (EMA) |
@@ -297,6 +312,9 @@ get a sourced brief without leaving the terminal.
   data already fetched with the list. The relevance filter is applied by
   the server, so filtered-out articles never occupy page slots; moving it
   with `+`/`-` refetches the visible feed, one request per press at most.
+  The Insider view's rollup and trades chart arrive as one bundle
+  alongside the feed's first page and live in the same cache, so the
+  chart costs no extra requests and the `g` window switch is free.
   Feeds page 20 articles at a time, the most every plan allows (50 on Pro
   keys, detected automatically). Paging back past your plan's
   archive horizon (30 days on Free, 90 on Basic) shows an upgrade hint
@@ -316,7 +334,7 @@ persists the watchlist on screen. Every key is optional. A misspelled value
 in the `[ui]`, `[chart]`, `[theme]` or `[keybindings]` sections prints a
 warning on startup and keeps that entry's default; only a TOML syntax error
 makes the whole file fall back to defaults. The `[ui]` and `[chart]` sections set startup
-defaults; the session keys (`x`, `f`, `+`, `-`, `c`, `m`, `i`, `b`, `e`, `t`) still
+defaults; the session keys (`x`, `f`, `g`, `+`, `-`, `c`, `m`, `i`, `b`, `e`, `t`) still
 change everything live without persisting it:
 
 ```toml
@@ -340,6 +358,7 @@ news_scope = "ticker"     # ticker | market | trending
 borders = "rounded"       # panel frames: rounded | plain
 news_min_score = 7        # minimum relevance score in news feeds, 1 to 10
 insider_min_score = 4     # insider feed filter; the score tracks trade size
+insider_chart = "3m"      # insider trades chart window at start: 3m | 12m | off
 alphai_ttl_secs = 300     # news/sentiment/insider cache lifetime, 30 to 86400
 
 [chart]
@@ -436,8 +455,9 @@ means the uppercase letter (`shift-t` equals `T`), and `shift-tab` equals
 The actions: `quit`, `next_view`, `prev_view`, `settings`, `help`,
 `refresh`, `up`, `down`, `left`, `right`, `page_up`, `page_down`, `open`,
 `card`, `cycle_scope`, `cycle_layout`, `score_up`, `score_down`,
-`chart_style`, `toggle_sma`, `toggle_rsi`, `toggle_volume`, `ma_type`,
-`next_preset`, `prev_preset`, `next_theme`, `prev_theme`.
+`insider_chart`, `chart_style`, `toggle_sma`, `toggle_rsi`,
+`toggle_volume`, `ma_type`, `next_preset`, `prev_preset`, `next_theme`,
+`prev_theme`.
 The `?` help overlay shows this list with the current keys next to it.
 
 Reserved and never remappable: `ctrl-c` (force quit), `esc`, the digits
@@ -481,6 +501,7 @@ src/
     split.rs     table + chart
     news.rs      article list + sentiment rollup + detail pane
     insider.rs   Form 4 rollup + filing list
+    insider_chart.rs  log-scale trades scatter + weekly dollar bars
     article.rs   modal full-article card (AI analysis, context)
     settings.rs  modal settings overlay
 ```

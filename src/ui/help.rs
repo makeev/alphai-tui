@@ -46,6 +46,7 @@ static ROWS: &[Row] = &[
     Row::Act(Action::CycleLayout, "news layout: side or stacked"),
     Row::Act(Action::ScoreUp, "raise the feed score filter"),
     Row::Act(Action::ScoreDown, "lower the feed score filter"),
+    Row::Act(Action::InsiderChart, "insider trades chart: 3m, 12m, off"),
     Row::Group("Chart"),
     Row::Act(Action::ChartStyle, "candles or line chart"),
     Row::Act(Action::ToggleSma, "toggle the moving average overlays"),

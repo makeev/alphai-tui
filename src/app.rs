@@ -106,6 +106,46 @@ impl NewsLayout {
     }
 }
 
+/// Window of the Insider view's Form 4 chart panel, cycled by the g key:
+/// hidden, trailing 3 months, trailing 12 months. Seeded from
+/// `[ui] insider_chart`, then session-only, like the chart options.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum InsiderChartWindow {
+    Off,
+    #[default]
+    M3,
+    M12,
+}
+
+impl InsiderChartWindow {
+    pub fn next(self) -> Self {
+        match self {
+            Self::Off => Self::M3,
+            Self::M3 => Self::M12,
+            Self::M12 => Self::Off,
+        }
+    }
+
+    /// Calendar days the window covers; whole weeks, so the weekly bars
+    /// stay uniform. None = the panel is hidden.
+    pub fn days(self) -> Option<u32> {
+        match self {
+            Self::Off => None,
+            Self::M3 => Some(91),
+            Self::M12 => Some(364),
+        }
+    }
+
+    /// Label for the panel title and the config value.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::M3 => "3m",
+            Self::M12 => "12m",
+        }
+    }
+}
+
 /// The default combos the t and T keys cycle through (`[chart] presets`
 /// overrides them); wraps at the ends. A startup combo not in the table
 /// (e.g. -r 3mo) jumps to the first preset on t and to the last on T.
@@ -200,6 +240,8 @@ pub struct App {
     /// this filters by dollar value. Seeded from `[ui] insider_min_score`;
     /// +/- adjust whichever feed the visible view shows.
     pub insider_min_score: u8,
+    /// Window of the Insider view's chart panel (g cycles off/3m/12m).
+    pub insider_chart: InsiderChartWindow,
     /// How long a fetched AlphaAI bundle stays fresh. Seeded from
     /// `[ui] alphai_ttl_secs` (default `alphai::CACHE_TTL`), file-only.
     pub alphai_ttl: Duration,
@@ -258,6 +300,7 @@ impl App {
             news_layout: init.ui.news_layout,
             news_min_score: init.ui.news_min_score,
             insider_min_score: init.ui.insider_min_score,
+            insider_chart: init.ui.insider_chart,
             alphai_ttl: init.ui.alphai_ttl,
             card_scroll: 0,
             news_table_state: TableState::default(),
@@ -447,6 +490,9 @@ impl App {
                 self.news_scope = self.news_scope.next();
                 self.news_selected = 0;
                 self.card_scroll = 0;
+            }
+            Action::InsiderChart if self.view_id() == ui::ViewId::Insider => {
+                self.insider_chart = self.insider_chart.next();
             }
             Action::ScoreUp if any_feed => self.adjust_min_score(1),
             Action::ScoreDown if any_feed => self.adjust_min_score(-1),

@@ -34,6 +34,7 @@ pub enum Action {
     CycleLayout,
     ScoreUp,
     ScoreDown,
+    InsiderChart,
     ChartStyle,
     ToggleSma,
     ToggleRsi,
@@ -47,7 +48,7 @@ pub enum Action {
 
 /// Every action with its snake_case config name, the single source of truth
 /// for `[keybindings]` parsing and for the coverage test.
-pub const ACTIONS: [(Action, &str); 27] = [
+pub const ACTIONS: [(Action, &str); 28] = [
     (Action::Quit, "quit"),
     (Action::NextView, "next_view"),
     (Action::PrevView, "prev_view"),
@@ -66,6 +67,7 @@ pub const ACTIONS: [(Action, &str); 27] = [
     (Action::CycleLayout, "cycle_layout"),
     (Action::ScoreUp, "score_up"),
     (Action::ScoreDown, "score_down"),
+    (Action::InsiderChart, "insider_chart"),
     (Action::ChartStyle, "chart_style"),
     (Action::ToggleSma, "toggle_sma"),
     (Action::ToggleRsi, "toggle_rsi"),
@@ -130,6 +132,8 @@ fn default_keys(action: Action) -> Vec<KeyCombo> {
         // '=' is unshifted '+' on most layouts; both raise the filter.
         Action::ScoreUp => vec![ch('+'), ch('=')],
         Action::ScoreDown => vec![ch('-')],
+        // g for graph: the Form 4 chart panel of the Insider view.
+        Action::InsiderChart => vec![ch('g')],
         Action::ChartStyle => vec![ch('c')],
         Action::ToggleSma => vec![ch('m')],
         Action::ToggleRsi => vec![ch('i')],

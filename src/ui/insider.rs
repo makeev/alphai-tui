@@ -5,11 +5,12 @@ use ratatui::style::{Modifier, Style, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Cell, Paragraph, Row, Table};
 
-use crate::alphai::{Article, InsiderSummary, fmt_usd, insider_key};
+use crate::alphai::{Article, InsiderTrades, fmt_usd, insider_key};
 use crate::app::{App, FeedKind};
 use crate::keymap::Action;
 use crate::theme::Theme;
 use crate::ui::{Hint, View, ViewId};
+use crate::ui::insider_chart;
 use crate::ui::news::{
     feed_bottom_hint, is_fresh, render_detail, render_gate, score_cell, sentiment_cell, title_cell,
     title_width,
@@ -35,8 +36,8 @@ impl View for InsiderView {
             Hint::act(&[Action::Open], "open"),
             Hint::act(&[Action::Card], "card"),
             Hint::act(&[Action::ScoreUp, Action::ScoreDown], "size"),
+            Hint::act(&[Action::InsiderChart], "chart"),
             Hint::act(&[Action::Refresh], "refresh"),
-            Hint::act(&[Action::Settings], "settings"),
             Hint::act(&[Action::Help], "help"),
         ];
         HINTS
@@ -75,14 +76,44 @@ impl View for InsiderView {
             block = block.title_bottom(hint);
         }
 
-        let [head, list_area, detail] = Layout::vertical([
+        // The chart panel takes rows only while the g window is on and the
+        // bundle actually has events; the list keeps a usable minimum and
+        // the weekly bars drop before the panel does (like panel_split).
+        let trades = bundle.insider_trades();
+        let chart_h = match (app.insider_chart.days(), trades) {
+            (Some(_), Some(t)) if !t.chart_events.is_empty() => {
+                insider_chart::panel_height(area.height.saturating_sub(2 + 6 + 5))
+            }
+            _ => 0,
+        };
+        let [head, chart_area, list_area, detail] = Layout::vertical([
             Constraint::Length(2),
+            Constraint::Length(chart_h),
             Constraint::Min(3),
             Constraint::Length(6),
         ])
         .areas(area);
 
-        f.render_widget(summary_lines(bundle.insider_summary(), &theme), head);
+        f.render_widget(summary_lines(trades, &theme), head);
+        if let (true, Some(t)) = (chart_h > 0, trades) {
+            // The chart ignores the score filter (it plots the full bundle),
+            // but the selected filing's mark renders inverted: the list and
+            // the chart stay joined by the article uid.
+            let selected_uid = bundle
+                .articles
+                .get(app.news_selected)
+                .map(|a| a.original.uid.as_str())
+                .filter(|u| !u.is_empty());
+            insider_chart::render(
+                f,
+                chart_area,
+                t,
+                app.insider_chart,
+                selected_uid,
+                Utc::now().date_naive(),
+                &theme,
+            );
+        }
 
         if bundle.articles.is_empty() {
             let msg = if app.insider_min_score > 1 {
@@ -121,14 +152,44 @@ impl View for InsiderView {
         app.news_table_state.select(Some(app.news_selected));
         f.render_stateful_widget(table, list_area, &mut app.news_table_state);
 
+        // The chart bundle knows more about the selected filing than the
+        // feed row does (stake moved, tranches, late flag): join by uid and
+        // hand it to the detail pane's meta line.
+        let extra = bundle
+            .articles
+            .get(app.news_selected)
+            .filter(|a| !a.original.uid.is_empty())
+            .and_then(|a| event_extra(trades, &a.original.uid));
         render_detail(
             f,
             detail,
             bundle.articles.get(app.news_selected),
             &symbol,
+            extra,
             &theme,
         );
     }
+}
+
+/// Detail-pane extras for one filing, joined from the chart bundle by the
+/// article uid: the stake share it moved, the tranche count of the folded
+/// group, and the late-filing flag. None when nothing extra is known.
+fn event_extra(trades: Option<&InsiderTrades>, uid: &str) -> Option<String> {
+    let e = trades?
+        .chart_events
+        .iter()
+        .find(|e| e.news_uid.as_deref() == Some(uid))?;
+    let mut parts = Vec::new();
+    if let Some(pct) = e.stake_change_pct.as_deref().and_then(|p| p.parse::<f64>().ok()) {
+        parts.push(format!("stake {pct:+.1}%"));
+    }
+    if let Some(n) = e.tranche_count.filter(|&n| n > 1) {
+        parts.push(format!("{n} tranches"));
+    }
+    if e.late_filing {
+        parts.push("late filing".to_string());
+    }
+    (!parts.is_empty()).then(|| parts.join(" · "))
 }
 
 /// One Form 4 filing as a row: age, score, buy/sell glyph, direct/indirect
@@ -216,36 +277,45 @@ fn ownership_cell(form: Option<&str>) -> Cell<'static> {
     }
 }
 
-fn summary_lines(summary: Option<&InsiderSummary>, theme: &Theme) -> Paragraph<'static> {
-    let Some(s) = summary else {
-        return Paragraph::new(Line::from(" 30d summary unavailable").dim());
+fn summary_lines(trades: Option<&InsiderTrades>, theme: &Theme) -> Paragraph<'static> {
+    let Some(w) = trades
+        .and_then(|t| t.summary.as_ref())
+        .and_then(|s| s.last_12m.as_ref())
+    else {
+        return Paragraph::new(Line::from(" Form 4 rollup unavailable").dim());
     };
-    let buys = s
+    let buys = w
         .buy_value_usd
         .as_deref()
         .map(|v| format!(" {}", fmt_usd(v)))
         .unwrap_or_default();
-    let sells = s
+    let sells = w
         .sell_value_usd
         .as_deref()
         .map(|v| format!(" {}", fmt_usd(v)))
         .unwrap_or_default();
     let stats = Line::from(vec![
-        Span::raw(format!(" {}d  ", s.days)).dim(),
-        Span::raw(format!("{} filings · ", s.total_transactions)),
+        Span::raw(" 12m  ").dim(),
+        Span::raw(format!("{} events · ", w.buy_count + w.sell_count)),
         Span::styled(
-            format!("▲ {} buys{buys}", s.buy_count),
+            format!("▲ {} buys{buys}", w.buy_count),
             Style::new().fg(theme.pos),
         ),
         Span::raw(" · ").dim(),
         Span::styled(
-            format!("▼ {} sells{sells}", s.sell_count),
+            format!("▼ {} sells{sells}", w.sell_count),
             Style::new().fg(theme.neg),
         ),
-        Span::raw(format!(" · {}% under 10b5-1 plans", s.pct_10b5_1)).dim(),
+        Span::raw(format!(
+            " · {}% under 10b5-1 plans · {} insiders",
+            w.pct_10b5_1, w.unique_insiders
+        ))
+        .dim(),
     ]);
-    let top: Vec<String> = s
-        .top_insiders
+    let top: Vec<String> = trades
+        .and_then(|t| t.summary.as_ref())
+        .map(|s| s.top_insiders.as_slice())
+        .unwrap_or_default()
         .iter()
         .take(3)
         .map(|t| {
@@ -255,12 +325,12 @@ fn summary_lines(summary: Option<&InsiderSummary>, theme: &Theme) -> Paragraph<'
                 format!(" ({})", t.title)
             };
             let net = t
-                .net_value
+                .net_value_usd
                 .as_deref()
                 .map(|v| format!(" {}", fmt_usd(v)))
                 .unwrap_or_default();
-            let count = if t.transaction_count > 0 {
-                format!(" ×{}", t.transaction_count)
+            let count = if t.event_count > 0 {
+                format!(" ×{}", t.event_count)
             } else {
                 String::new()
             };

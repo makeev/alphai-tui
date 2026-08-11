@@ -2,6 +2,7 @@ pub mod article;
 pub mod chart;
 pub mod help;
 pub mod insider;
+pub mod insider_chart;
 pub mod news;
 pub mod settings;
 pub mod split;
