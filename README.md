@@ -88,7 +88,7 @@ Built in Rust with [ratatui](https://ratatui.rs).
   $10M+ trades). The stream pages like the news feed: down on the last row
   loads more.
 
-  ![alphai-tui insider view: 30-day Form 4 rollup with top insiders above the filing stream, article card open on a 10b5-1 plan sale](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/insider.png)
+  ![alphai-tui insider view: the Form 4 trades chart, a log-scale scatter of sales over weekly dollar bars, above the filing stream with the 12-month rollup on top](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/insider.png)
 
 - In-app settings (`s`): pick the price source, paste API keys once, set
   the poll interval (applies immediately) and choose where Enter opens
