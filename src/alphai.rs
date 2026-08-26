@@ -6,6 +6,11 @@
 //! cached: the app only asks for the symbol on screen and re-asks after
 //! `CACHE_TTL`. Keep it that way — a per-poll fetch would burn the free
 //! daily budget in minutes.
+//!
+//! Re-asking is a delta poll (`Sort::Ingested`) rather than a refetch of the
+//! newest page: an article reaches the feed later than it was published, so
+//! the published head page is exactly where an arrival is NOT. Same cadence,
+//! same one request, rows that would otherwise never be shown.
 
 use std::time::Duration;
 
@@ -124,12 +129,16 @@ impl Client {
     /// (`sources_count` reports the outlet count). The symbol-scoped feed is
     /// left uncollapsed: the collapse filter matches the story root, which may
     /// not mention the symbol, and would silently drop relevant coverage.
+    /// `sort` picks the ordering: `Published` is the reverse-chronological
+    /// feed this pages through, `Ingested` is delta mode (see `Sort`), where
+    /// the same `cursor` slot carries a position in the arrival stream.
     pub async fn news(
         &self,
         symbol: Option<&str>,
         cursor: Option<&str>,
         page_size: Option<u8>,
         min_relevance: Option<u8>,
+        sort: Sort,
     ) -> Result<NewsPage> {
         let mut query: Vec<(&str, &str)> = Vec::new();
         match symbol {
@@ -147,6 +156,9 @@ impl Client {
         if let Some(min) = &min {
             query.push(("min_relevance", min));
         }
+        if let Some(order) = sort.param() {
+            query.push(("sort", order));
+        }
         self.get_json("/api/news/", &query).await
     }
 
@@ -160,12 +172,16 @@ impl Client {
     /// `page_size` and `min_relevance` behave as in `news`. Insider rows are
     /// scored from the event's total dollar value, so the relevance filter
     /// doubles as a trade-size filter (7 keeps roughly the $10M+ trades).
+    /// `sort` works as in `news`, and delta mode matters most here: a Form 4
+    /// is filed days after the trade it reports, so a new filing routinely
+    /// enters the feed below the head of the publish-ordered page.
     pub async fn insider_news(
         &self,
         symbol: &str,
         cursor: Option<&str>,
         page_size: Option<u8>,
         min_relevance: Option<u8>,
+        sort: Sort,
     ) -> Result<NewsPage> {
         let mut query: Vec<(&str, &str)> = vec![("symbol", symbol)];
         if let Some(c) = cursor {
@@ -178,6 +194,9 @@ impl Client {
         let min = min_relevance.map(|n| n.to_string());
         if let Some(min) = &min {
             query.push(("min_relevance", min));
+        }
+        if let Some(order) = sort.param() {
+            query.push(("sort", order));
         }
         self.get_json("/api/news/insider/", &query).await
     }
@@ -205,33 +224,94 @@ impl Client {
 // Background task: the UI sends commands, results come back as SourceEvents
 // on the same channel the price poller uses.
 
+/// Ordering a feed fetch asks for.
+///
+/// `Published` is the reverse-chronological feed: no cursor means the newest
+/// page, and `next_cursor` walks back into history.
+///
+/// `Ingested` is delta polling, "what appeared in the feed since my last
+/// poll": rows in the order they became available, ascending. An article
+/// reaches the feed later than it was published (a median of roughly half an
+/// hour for general news, days for a Form 4, which is filed after the trade),
+/// so most arrivals land below the head of the published page and a refetch
+/// of that page can never see them. Without a cursor the server answers with
+/// the newest page and parks the position at the feed head; with one it
+/// answers with what arrived since, and an empty page means caught up, so its
+/// `next_cursor` is always set. The two modes mint separate cursor families
+/// and a cursor replayed into the other mode is a 400, which is why the app
+/// keeps the paging cursor and the poll cursor in separate fields.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Sort {
+    #[default]
+    Published,
+    Ingested,
+}
+
+impl Sort {
+    /// Wire value, or None when the request carries no `sort` at all:
+    /// published is the server's default, so every published request stays
+    /// byte for byte what it was before delta mode existed.
+    fn param(self) -> Option<&'static str> {
+        match self {
+            Self::Published => None,
+            Self::Ingested => Some("ingested"),
+        }
+    }
+}
+
+/// What a fetch's result does to the bundle it lands on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FeedMode {
+    /// Head page: replace the bundle, side payload included.
+    Replace,
+    /// Cursor page of the published feed: extend it with older rows.
+    Append,
+    /// Delta page: merge arrivals into the top, keeping the loaded pages,
+    /// the side payload and the row under the reader's cursor.
+    Merge,
+}
+
+/// The mode a fetch's result lands in, from what the fetch asked for.
+fn feed_mode(sort: Sort, cursor: Option<&str>) -> FeedMode {
+    match (sort, cursor) {
+        (Sort::Ingested, _) => FeedMode::Merge,
+        (Sort::Published, Some(_)) => FeedMode::Append,
+        (Sort::Published, None) => FeedMode::Replace,
+    }
+}
+
 pub enum Cmd {
     /// Swap the API key at runtime (settings screen). None disables fetching.
     SetKey(Option<String>),
     /// Fetch news (+ sentiment when symbol-scoped). None = market-wide.
     /// A cursor means "load the next page" of an already shown feed.
     /// `min_relevance` is the score filter the app wants (echoed back on the
-    /// resulting `Event::Feed` so the bundle can record it).
+    /// resulting `Event::Feed` so the bundle can record it). `sort` picks the
+    /// published feed or a delta poll of it (see `Sort`); a delta fetch skips
+    /// the sentiment rollup, which the bundle already holds.
     FetchNews {
         symbol: Option<String>,
         cursor: Option<String>,
         min_relevance: Option<u8>,
+        sort: Sort,
     },
     /// Fetch the 48h trending top 10 (cached under `TRENDING_KEY`).
     FetchTrending,
     /// Fetch the insider feed + the Form 4 chart bundle for one symbol; a
     /// cursor pages. `min_relevance` works as in `FetchNews` (insider
     /// scores track the trade size, so this is effectively a size filter).
+    /// `sort` works as in `FetchNews`, and a delta fetch skips the chart
+    /// bundle the same way.
     FetchInsider {
         symbol: String,
         cursor: Option<String>,
         min_relevance: Option<u8>,
+        sort: Sort,
     },
 }
 
 pub enum Event {
-    /// One feed fetch's result: a fresh head (replaces the bundle) or a
-    /// cursor page (`append: true`, extends it).
+    /// One feed fetch's result; `mode` says what it does to the bundle.
     Feed {
         /// Cache key: a symbol / `MARKET_KEY` / `TRENDING_KEY` for news,
         /// `ins:SYM` for insider — the same key `App` tracks inflight and
@@ -241,8 +321,9 @@ pub enum Event {
         /// Side payload of the head fetch; pages never refetch it.
         side: Option<FeedPayload>,
         next_cursor: Option<String>,
-        /// True for a cursor fetch: extend the bundle instead of replacing it.
-        append: bool,
+        /// Replace the bundle, extend it with an older page, or merge
+        /// arrivals into its top (see `FeedMode`).
+        mode: FeedMode,
         /// The score filter this fetch carried; None for feeds without one
         /// (trending, insider). The bundle records it so a changed setting
         /// marks the cached feed stale.
@@ -255,6 +336,14 @@ pub enum Event {
         error: String,
         gated: bool,
     },
+    /// A background delta poll failed for a reason that is not the cursor:
+    /// the shown feed stays untouched and the app stops polling it until the
+    /// reader retries, because nothing here ever retries by itself.
+    PollError { key: String, error: String },
+    /// A background delta poll came back with the cursor rejected (400) or
+    /// past the plan's archive horizon (403). Neither is worth showing: drop
+    /// the poll position and the next poll starts a fresh one.
+    PollReprime { key: String },
     /// `key` matches the cache key of the fetch that failed.
     Error { key: String, error: String },
 }
@@ -293,14 +382,19 @@ async fn fetch_feed_page(
     client: &Client,
     feed: Feed<'_>,
     cursor: Option<&str>,
+    sort: Sort,
     page50: &mut Option<bool>,
 ) -> Result<NewsPage> {
-    let try50 = matches!(*page50, Some(true)) || (page50.is_none() && cursor.is_some());
+    // The probe spends a 400 on a non-Pro key, so it stays on the path the
+    // user asked for: an explicit load-more of the published feed. A delta
+    // poll never probes; it only takes 50 on a tier already known to be Pro.
+    let try50 = matches!(*page50, Some(true))
+        || (page50.is_none() && cursor.is_some() && sort == Sort::Published);
     if try50 {
         let result = match &feed {
-            Feed::News(symbol, min) => client.news(*symbol, cursor, Some(50), *min).await,
+            Feed::News(symbol, min) => client.news(*symbol, cursor, Some(50), *min, sort).await,
             Feed::Insider(symbol, min) => {
-                client.insider_news(symbol, cursor, Some(50), *min).await
+                client.insider_news(symbol, cursor, Some(50), *min, sort).await
             }
         };
         match result {
@@ -316,23 +410,41 @@ async fn fetch_feed_page(
         }
     }
     match &feed {
-        Feed::News(symbol, min) => client.news(*symbol, cursor, Some(PAGE_SIZE), *min).await,
+        Feed::News(symbol, min) => client.news(*symbol, cursor, Some(PAGE_SIZE), *min, sort).await,
         Feed::Insider(symbol, min) => {
-            client.insider_news(symbol, cursor, Some(PAGE_SIZE), *min).await
+            client.insider_news(symbol, cursor, Some(PAGE_SIZE), *min, sort).await
         }
     }
 }
 
-/// Error event for a fetch: page fetches degrade to a non-destructive
-/// `PageError`, initial fetches replace the view via `Error`.
-fn error_event(key: String, e: anyhow::Error, append: bool) -> Event {
+/// Error event for a fetch, by what the fetch was: a load-more degrades to a
+/// non-destructive `PageError`, a background delta poll to `PollError` (or to
+/// a silent reprime when the cursor it carried is what the server rejected),
+/// and an initial fetch replaces the view via `Error`.
+fn error_event(key: String, e: anyhow::Error, mode: FeedMode, cursor: Option<&str>) -> Event {
     let error = format!("{e:#}");
-    if append {
-        let gated = is_archive_gate(&error);
-        Event::PageError { key, error, gated }
-    } else {
-        Event::Error { key, error }
+    match mode {
+        FeedMode::Append => {
+            let gated = is_archive_gate(&error);
+            Event::PageError { key, error, gated }
+        }
+        // Only a poll carrying a cursor can have its cursor rejected, so the
+        // reprime it asks for (a poll with no cursor) cannot loop back here.
+        FeedMode::Merge if cursor.is_some() && is_cursor_rejected(&error) => {
+            Event::PollReprime { key }
+        }
+        FeedMode::Merge => Event::PollError { key, error },
+        FeedMode::Replace => Event::Error { key, error },
     }
+}
+
+/// Whether a delta poll failed over the cursor it carried: a 400, which is
+/// how the server answers a cursor it cannot read and one replayed into the
+/// other sort mode (it never silently restarts), or the archive gate, which
+/// in delta mode means the position aged past the plan's horizon rather than
+/// the reader paging too deep.
+fn is_cursor_rejected(error: &str) -> bool {
+    error.contains("API 400") || is_archive_gate(error)
 }
 
 pub async fn run(
@@ -349,23 +461,24 @@ pub async fn run(
                 client = key.and_then(|k| Client::new(k).ok());
                 page50 = None;
             }
-            Cmd::FetchNews { symbol, cursor, min_relevance } => {
+            Cmd::FetchNews { symbol, cursor, min_relevance, sort } => {
                 let key = news_key(symbol.as_deref());
                 let Some(client) = &client else {
                     send_error(&tx, key, "no AlphaAI API key configured");
                     continue;
                 };
-                let append = cursor.is_some();
+                let mode = feed_mode(sort, cursor.as_deref());
                 // Sentiment is a nice-to-have on the initial symbol fetch:
                 // its failure must not blank the news list, so it degrades
-                // to None. Pages never refetch it.
-                let (page, sentiment) = match (&symbol, append) {
-                    (Some(s), false) => {
+                // to None. Pages and delta polls never refetch it.
+                let (page, sentiment) = match (&symbol, mode) {
+                    (Some(s), FeedMode::Replace) => {
                         let (p, senti) = tokio::join!(
                             fetch_feed_page(
                                 client,
                                 Feed::News(Some(s), min_relevance),
                                 None,
+                                sort,
                                 &mut page50,
                             ),
                             client.sentiment(s)
@@ -377,6 +490,7 @@ pub async fn run(
                             client,
                             Feed::News(symbol.as_deref(), min_relevance),
                             cursor.as_deref(),
+                            sort,
                             &mut page50,
                         )
                         .await,
@@ -389,10 +503,10 @@ pub async fn run(
                         articles: p.results,
                         side: sentiment.map(FeedPayload::Sentiment),
                         next_cursor: p.next_cursor,
-                        append,
+                        mode,
                         min_relevance,
                     },
-                    Err(e) => error_event(key, e, append),
+                    Err(e) => error_event(key, e, mode, cursor.as_deref()),
                 };
                 if tx.send(SourceEvent::Alphai(event)).is_err() {
                     return;
@@ -411,7 +525,7 @@ pub async fn run(
                         articles,
                         side: None,
                         next_cursor: None,
-                        append: false,
+                        mode: FeedMode::Replace,
                         min_relevance: None,
                     },
                     Err(e) => Event::Error { key, error: format!("{e:#}") },
@@ -420,31 +534,33 @@ pub async fn run(
                     return;
                 }
             }
-            Cmd::FetchInsider { symbol, cursor, min_relevance } => {
+            Cmd::FetchInsider { symbol, cursor, min_relevance, sort } => {
                 let key = insider_key(&symbol);
                 let Some(client) = &client else {
                     send_error(&tx, key, "no AlphaAI API key configured");
                     continue;
                 };
-                let append = cursor.is_some();
-                let (page, trades) = match append {
-                    false => {
+                let mode = feed_mode(sort, cursor.as_deref());
+                let (page, trades) = match mode {
+                    FeedMode::Replace => {
                         let (p, t) = tokio::join!(
                             fetch_feed_page(
                                 client,
                                 Feed::Insider(&symbol, min_relevance),
                                 None,
+                                sort,
                                 &mut page50,
                             ),
                             client.insider_trades(&symbol)
                         );
                         (p, t.ok())
                     }
-                    true => (
+                    _ => (
                         fetch_feed_page(
                             client,
                             Feed::Insider(&symbol, min_relevance),
                             cursor.as_deref(),
+                            sort,
                             &mut page50,
                         )
                         .await,
@@ -457,10 +573,10 @@ pub async fn run(
                         articles: p.results,
                         side: trades.map(|t| FeedPayload::Insider(Box::new(t))),
                         next_cursor: p.next_cursor,
-                        append,
+                        mode,
                         min_relevance,
                     },
-                    Err(e) => error_event(key, e, append),
+                    Err(e) => error_event(key, e, mode, cursor.as_deref()),
                 };
                 if tx.send(SourceEvent::Alphai(event)).is_err() {
                     return;
@@ -1024,6 +1140,58 @@ mod tests {
         assert!(!is_archive_gate("AlphaAI API 400 Bad Request: bad cursor"));
     }
 
+    /// Published requests must stay byte for byte what they were before delta
+    /// mode existed: `published` is the server's default, so it goes on the
+    /// wire as no parameter at all.
+    #[test]
+    fn only_delta_requests_carry_a_sort() {
+        assert_eq!(Sort::Published.param(), None);
+        assert_eq!(Sort::Ingested.param(), Some("ingested"));
+        assert_eq!(Sort::default(), Sort::Published);
+    }
+
+    #[test]
+    fn fetch_mode_follows_the_sort_and_the_cursor() {
+        assert_eq!(feed_mode(Sort::Published, None), FeedMode::Replace);
+        assert_eq!(feed_mode(Sort::Published, Some("c1")), FeedMode::Append);
+        // A delta page merges either way: the priming poll carries no cursor.
+        assert_eq!(feed_mode(Sort::Ingested, None), FeedMode::Merge);
+        assert_eq!(feed_mode(Sort::Ingested, Some("d1")), FeedMode::Merge);
+    }
+
+    /// A poll that carried a position and had it rejected reprimes silently;
+    /// the same failure without a position is a real error, which is what
+    /// keeps a reprime from looping into another reprime.
+    #[test]
+    fn poll_failures_split_by_what_the_poll_carried() {
+        let bad_cursor = || anyhow::anyhow!("AlphaAI API 400: invalid cursor");
+        assert!(matches!(
+            error_event("k".into(), bad_cursor(), FeedMode::Merge, Some("d1")),
+            Event::PollReprime { .. }
+        ));
+        assert!(matches!(
+            error_event("k".into(), anyhow::anyhow!(ARCHIVE_GATE_MSG), FeedMode::Merge, Some("d1")),
+            Event::PollReprime { .. }
+        ));
+        assert!(matches!(
+            error_event("k".into(), bad_cursor(), FeedMode::Merge, None),
+            Event::PollError { .. }
+        ));
+        assert!(matches!(
+            error_event("k".into(), anyhow::anyhow!("AlphaAI API 429: slow down"), FeedMode::Merge, Some("d1")),
+            Event::PollError { .. }
+        ));
+        // The published paths keep their old shapes.
+        assert!(matches!(
+            error_event("k".into(), anyhow::anyhow!(ARCHIVE_GATE_MSG), FeedMode::Append, Some("c1")),
+            Event::PageError { gated: true, .. }
+        ));
+        assert!(matches!(
+            error_event("k".into(), bad_cursor(), FeedMode::Replace, None),
+            Event::Error { .. }
+        ));
+    }
+
     #[test]
     fn novelty_and_sources_sentinels_hide() {
         // novelty 0 marks rows enriched before the field existed; a single
@@ -1231,7 +1399,7 @@ mod tests {
         assert_eq!(fmt_usd("garbage"), "garbage");
     }
 
-    /// Live end-to-end check against the real API (6 requests).
+    /// Live end-to-end check against the real API (10 requests).
     /// Run: ALPHAI_API_KEY=ak_live_… cargo test live_api -- --ignored
     #[tokio::test]
     #[ignore = "live API call; needs ALPHAI_API_KEY"]
@@ -1245,7 +1413,7 @@ mod tests {
         // surfaces as a failing smoke test rather than a 400 for every free
         // user.
         let news = client
-            .news(Some("NVDA"), None, Some(PAGE_SIZE), Some(4))
+            .news(Some("NVDA"), None, Some(PAGE_SIZE), Some(4), Sort::Published)
             .await
             .unwrap();
         assert!(!news.results.is_empty(), "empty NVDA news feed");
@@ -1254,11 +1422,17 @@ mod tests {
         // The feed is deeper than one page, so the cursor must be present
         // and must fetch an older second page.
         let cursor = news.next_cursor.expect("no next_cursor on page 1");
-        let page2 = client.news(Some("NVDA"), Some(&cursor), None, Some(4)).await.unwrap();
+        let page2 = client
+            .news(Some("NVDA"), Some(&cursor), None, Some(4), Sort::Published)
+            .await
+            .unwrap();
         assert!(!page2.results.is_empty(), "empty second news page");
         let senti = client.sentiment("NVDA").await.unwrap();
         assert!(senti.days > 0);
-        let filings = client.insider_news("NVDA", None, None, Some(4)).await.unwrap();
+        let filings = client
+            .insider_news("NVDA", None, None, Some(4), Sort::Published)
+            .await
+            .unwrap();
         assert!(!filings.results.is_empty(), "empty NVDA insider feed");
         // Every Form 4 row is backed by transaction data, so the structured
         // block must be present on the live feed.
@@ -1273,6 +1447,45 @@ mod tests {
         assert!(!trades.series_weekly.is_empty(), "empty series_weekly for NVDA");
         let trending = client.trending().await.unwrap();
         assert!(!trending.is_empty(), "empty trending feed");
+
+        // Delta mode, the whole of the app's refresh path. The priming page
+        // carries rows and a position; replaying that position returns only
+        // what has arrived since, which is usually nothing, and still hands
+        // back a position (there is no terminal page in this mode).
+        let prime = client
+            .news(Some("NVDA"), None, Some(PAGE_SIZE), Some(4), Sort::Ingested)
+            .await
+            .unwrap();
+        assert!(!prime.results.is_empty(), "empty priming delta page");
+        let delta_cursor = prime.next_cursor.expect("no position on the priming page");
+        let delta = client
+            .news(Some("NVDA"), Some(&delta_cursor), None, Some(4), Sort::Ingested)
+            .await
+            .unwrap();
+        assert!(delta.next_cursor.is_some(), "delta mode dropped the position");
+        // The two cursor families must stay mutually unreadable: the app's
+        // reprime path exists because this is a 400 and not a silent restart
+        // into a different range of the feed.
+        let crossed = match client
+            .news(Some("NVDA"), Some(&cursor), None, Some(4), Sort::Ingested)
+            .await
+        {
+            Ok(_) => panic!("a published cursor was accepted in delta mode"),
+            Err(e) => format!("{e:#}"),
+        };
+        assert!(crossed.contains("API 400"), "crossed cursor did not 400: {crossed}");
+        assert!(is_cursor_rejected(&crossed), "a crossed cursor must reprime");
+        // The insider feed answers delta mode too (it did not in July 2026),
+        // which is where it matters most: a Form 4 is filed days after its
+        // trade and enters the feed below the published head.
+        let insider_delta = client
+            .insider_news("NVDA", None, Some(PAGE_SIZE), Some(4), Sort::Ingested)
+            .await
+            .unwrap();
+        assert!(
+            insider_delta.next_cursor.is_some(),
+            "insider feed refused a delta position"
+        );
     }
 
     /// 21 and above is a Pro-only page size: raising `PAGE_SIZE` past 20

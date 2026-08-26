@@ -1052,7 +1052,7 @@ fn insider_score_keys_adjust_own_filter() {
     assert_eq!(app.news_min_score, news_before, "+ leaked into the news filter");
     app.ensure_alphai_data();
     match cmds.try_recv() {
-        Ok(alphai::Cmd::FetchInsider { symbol, cursor, min_relevance }) => {
+        Ok(alphai::Cmd::FetchInsider { symbol, cursor, min_relevance, .. }) => {
             assert_eq!(symbol, "AAPL");
             assert_eq!(cursor, None);
             assert_eq!(min_relevance, Some(5));
@@ -1265,7 +1265,7 @@ fn score_keys_adjust_filter_and_refetch() {
 
     app.ensure_alphai_data();
     match cmds.try_recv() {
-        Ok(alphai::Cmd::FetchNews { symbol, cursor, min_relevance }) => {
+        Ok(alphai::Cmd::FetchNews { symbol, cursor, min_relevance, .. }) => {
             assert_eq!(symbol.as_deref(), Some("AAPL"));
             assert_eq!(cursor, None, "filter change must restart from page 1");
             assert_eq!(min_relevance, Some(8));
@@ -1352,7 +1352,7 @@ fn j_at_last_row_requests_next_page() {
     );
     press(&mut app, KeyCode::Char('j'));
     match cmds.try_recv() {
-        Ok(alphai::Cmd::FetchNews { symbol, cursor, min_relevance }) => {
+        Ok(alphai::Cmd::FetchNews { symbol, cursor, min_relevance, .. }) => {
             assert_eq!(symbol.as_deref(), Some("AAPL"));
             assert_eq!(cursor.as_deref(), Some("cur1"));
             assert_eq!(min_relevance, Some(app.news_min_score));
@@ -1380,7 +1380,7 @@ fn insider_j_at_last_row_requests_next_page() {
     );
     press(&mut app, KeyCode::Char('j'));
     match cmds.try_recv() {
-        Ok(alphai::Cmd::FetchInsider { symbol, cursor, min_relevance }) => {
+        Ok(alphai::Cmd::FetchInsider { symbol, cursor, min_relevance, .. }) => {
             assert_eq!(symbol, "AAPL");
             assert_eq!(cursor.as_deref(), Some("cur9"));
             assert_eq!(min_relevance, Some(app.insider_min_score));
@@ -1406,7 +1406,7 @@ fn head_fetch(app: &mut App, key: &str, articles: Vec<Article>, min_relevance: O
         articles,
         side: None,
         next_cursor: None,
-        append: false,
+        mode: alphai::FeedMode::Replace,
         min_relevance,
     });
 }
@@ -1423,7 +1423,7 @@ fn page_append_extends_list_and_dedupes() {
         articles: vec![uid_article("aaa", "First reprint"), uid_article("bbb", "Second")],
         side: None,
         next_cursor: Some("c2".into()),
-        append: true,
+        mode: alphai::FeedMode::Append,
         min_relevance: Some(7),
     });
     let b = &app.feeds["AAPL"];
@@ -1496,7 +1496,7 @@ fn pagination_and_filter_moves_never_mark() {
         articles: vec![uid_article("old1", "Older story")],
         side: None,
         next_cursor: None,
-        append: true,
+        mode: alphai::FeedMode::Append,
         min_relevance: Some(7),
     });
     assert!(
@@ -1564,8 +1564,229 @@ fn archive_gate_shows_upsell_and_stops_paging() {
     assert!(cmds.try_recv().is_err(), "gated feed still paged");
 }
 
+/// A uid row with an explicit publication time, for the merge ordering.
+fn timed_article(uid: &str, title: &str, published: &str) -> Article {
+    serde_json::from_str(&format!(
+        r#"{{"original": {{"uid": "{uid}", "title": "{title}", "time_published": "{published}"}}}}"#
+    ))
+    .unwrap()
+}
+
+/// A delta poll's page, as the AlphaAI task delivers it.
+fn delta_page(app: &mut App, key: &str, articles: Vec<Article>, cursor: &str) {
+    app.apply_alphai(alphai::Event::Feed {
+        key: key.into(),
+        articles,
+        side: None,
+        next_cursor: Some(cursor.into()),
+        mode: alphai::FeedMode::Merge,
+        min_relevance: Some(7),
+    });
+}
+
+/// Arrivals land above the shown feed, newest publication first, and a row
+/// the feed already carries is dropped. The paging cursor is untouched: the
+/// two cursor families are mutually unreadable and crossing them is a 400.
 #[test]
-fn ttl_refetch_waits_for_top_row() {
+fn delta_merge_prepends_arrivals_and_dedupes() {
+    let mut app = empty_app(vec!["AAPL".into()]);
+    app.view_idx = ui::view_index(ui::ViewId::News);
+    app.feeds.insert(
+        "AAPL".into(),
+        FeedBundle::new(
+            vec![timed_article("aaa", "Shown", "2026-07-10T12:00:00Z")],
+            None,
+            Some("page1".into()),
+        ),
+    );
+    delta_page(&mut app, "AAPL", vec![], "d1");
+    delta_page(
+        &mut app,
+        "AAPL",
+        vec![
+            timed_article("aaa", "Shown, reported again", "2026-07-10T12:00:00Z"),
+            timed_article("bbb", "Arrived, published earlier", "2026-07-10T11:00:00Z"),
+            timed_article("ccc", "Arrived, published later", "2026-07-10T11:30:00Z"),
+        ],
+        "d2",
+    );
+    let b = &app.feeds["AAPL"];
+    let titles: Vec<&str> = b.articles.iter().map(|a| a.original.title.as_str()).collect();
+    assert_eq!(
+        titles,
+        ["Arrived, published later", "Arrived, published earlier", "Shown"],
+        "arrivals must sit on top, newest publication first"
+    );
+    assert_eq!(b.delta_cursor.as_deref(), Some("d2"));
+    assert_eq!(b.next_cursor.as_deref(), Some("page1"), "merge moved the paging cursor");
+}
+
+/// The priming poll back-fills what the published head page could not show,
+/// so it is a baseline. Every later poll carries genuine arrivals and marks.
+#[test]
+fn delta_prime_is_a_baseline_and_later_polls_mark() {
+    let mut app = empty_app(vec!["AAPL".into()]);
+    app.view_idx = ui::view_index(ui::ViewId::News);
+    head_fetch(&mut app, "AAPL", vec![uid_article("aaa", "First")], Some(7));
+    delta_page(&mut app, "AAPL", vec![uid_article("bbb", "Late arrival")], "d1");
+    assert!(
+        !app.is_unseen("AAPL", &app.feeds["AAPL"].articles[0]),
+        "the priming page marked a row as new"
+    );
+    delta_page(&mut app, "AAPL", vec![uid_article("ccc", "Just in")], "d2");
+    assert!(
+        app.is_unseen("AAPL", &app.feeds["AAPL"].articles[0]),
+        "an arrival is not marked as new"
+    );
+}
+
+/// A background merge never changes the row under the cursor: without the
+/// shift, `mark_selected_seen` would retire the marker of a row the reader
+/// never opened. A merge into a feed that is not on screen moves nothing.
+#[test]
+fn merge_keeps_the_row_under_the_cursor() {
+    let mut app = empty_app(vec!["AAPL".into()]);
+    app.view_idx = ui::view_index(ui::ViewId::News);
+    head_fetch(
+        &mut app,
+        "AAPL",
+        vec![uid_article("aaa", "First"), uid_article("bbb", "Second")],
+        Some(7),
+    );
+    app.news_selected = 1;
+    delta_page(&mut app, "AAPL", vec![], "d1");
+    delta_page(
+        &mut app,
+        "AAPL",
+        vec![uid_article("ccc", "Arrived"), uid_article("ddd", "Also arrived")],
+        "d2",
+    );
+    assert_eq!(app.news_selected, 3, "the cursor did not move with the rows");
+    assert_eq!(
+        app.feeds["AAPL"].articles[app.news_selected].original.title,
+        "Second",
+        "the cursor changed rows under the reader"
+    );
+
+    let insider = alphai::insider_key("AAPL");
+    app.feeds.insert(
+        insider.clone(),
+        FeedBundle::new(vec![uid_article("i1", "Filing")], None, None),
+    );
+    delta_page(&mut app, &insider, vec![uid_article("i2", "New filing")], "d3");
+    assert_eq!(app.news_selected, 3, "a merge off screen moved the cursor");
+}
+
+/// A failed poll is not a failed view: the feed stays, the reason goes under
+/// the list, and polling stops until the reader retries, because nothing here
+/// ever retries by itself.
+#[test]
+fn poll_error_keeps_the_feed_and_stops_polling() {
+    let (mut app, mut cmds) = empty_app_with_cmds(vec!["AAPL".into()]);
+    app.view_idx = ui::view_index(ui::ViewId::News);
+    app.feeds.insert(
+        "AAPL".into(),
+        FeedBundle::new(
+            vec![article("Apple beats expectations", "AAPL", 9, "positive")],
+            None,
+            None,
+        ),
+    );
+    app.apply_alphai(alphai::Event::PollError {
+        key: "AAPL".into(),
+        error: "AlphaAI API 429: slow down".into(),
+    });
+    let screen = render(&mut app);
+    assert!(screen.contains("Apple beats expectations"), "poll error blanked the feed:\n{screen}");
+    assert!(screen.contains("429"), "poll error not reported:\n{screen}");
+    app.feeds.get_mut("AAPL").unwrap().polled =
+        Instant::now() - std::time::Duration::from_secs(600);
+    app.ensure_alphai_data();
+    assert!(cmds.try_recv().is_err(), "a failed poll retried by itself");
+}
+
+/// A rejected poll position (400) or one past the archive horizon (403) is
+/// not worth showing: drop it and prime a fresh one on the next tick.
+#[test]
+fn poll_reprime_drops_the_position_and_primes_again() {
+    let (mut app, mut cmds) = empty_app_with_cmds(vec!["AAPL".into()]);
+    app.view_idx = ui::view_index(ui::ViewId::News);
+    app.feeds.insert(
+        "AAPL".into(),
+        FeedBundle::new(vec![article("First", "AAPL", 9, "positive")], None, None),
+    );
+    app.feeds.get_mut("AAPL").unwrap().delta_cursor = Some("stale".into());
+    app.apply_alphai(alphai::Event::PollReprime { key: "AAPL".into() });
+    let b = &app.feeds["AAPL"];
+    assert_eq!(b.delta_cursor, None, "the rejected position survived");
+    assert!(!b.poll_stopped, "a reprime must not stop polling");
+    assert!(app.alphai_errors.is_empty(), "a reprime surfaced as an error");
+    app.feeds.get_mut("AAPL").unwrap().polled =
+        Instant::now() - std::time::Duration::from_secs(600);
+    app.ensure_alphai_data();
+    assert!(
+        matches!(
+            cmds.try_recv(),
+            Ok(alphai::Cmd::FetchNews { cursor: None, sort: alphai::Sort::Ingested, .. })
+        ),
+        "the next tick did not prime a fresh position"
+    );
+}
+
+/// Every fetch pauses while an overlay is open, the poll included: merging
+/// rows under a reader who is inside the article would move the list out
+/// from under them.
+#[test]
+fn an_open_overlay_pauses_the_poll() {
+    let (mut app, mut cmds) = empty_app_with_cmds(vec!["AAPL".into()]);
+    app.view_idx = ui::view_index(ui::ViewId::News);
+    app.feeds.insert(
+        "AAPL".into(),
+        FeedBundle::new(vec![article("First", "AAPL", 9, "positive")], None, None),
+    );
+    app.feeds.get_mut("AAPL").unwrap().polled =
+        Instant::now() - std::time::Duration::from_secs(600);
+    app.article_overlay.open = true;
+    app.ensure_alphai_data();
+    assert!(cmds.try_recv().is_err(), "polled with the article overlay open");
+    app.article_overlay.open = false;
+    app.ensure_alphai_data();
+    assert!(
+        matches!(
+            cmds.try_recv(),
+            Ok(alphai::Cmd::FetchNews { sort: alphai::Sort::Ingested, .. })
+        ),
+        "the poll did not resume once the overlay closed"
+    );
+}
+
+/// Trending is a fixed top-10 endpoint with no cursor and no `sort`, so its
+/// tick stays the head refetch every feed used to do.
+#[test]
+fn trending_tick_stays_a_head_refetch() {
+    let (mut app, mut cmds) = empty_app_with_cmds(vec!["AAPL".into()]);
+    app.view_idx = ui::view_index(ui::ViewId::News);
+    app.news_scope = NewsScope::Trending;
+    app.feeds.insert(
+        alphai::TRENDING_KEY.into(),
+        FeedBundle::new(vec![article("Trending story", "AAPL", 9, "positive")], None, None),
+    );
+    let stale = Instant::now() - std::time::Duration::from_secs(600);
+    let b = app.feeds.get_mut(alphai::TRENDING_KEY).unwrap();
+    b.fetched = stale;
+    b.polled = stale;
+    app.ensure_alphai_data();
+    assert!(
+        matches!(cmds.try_recv(), Ok(alphai::Cmd::FetchTrending)),
+        "trending stopped refetching its head"
+    );
+}
+
+/// The TTL tick is a delta poll now, and a merge keeps the reader's place,
+/// so it goes out wherever the cursor sits. It used to do nothing at all
+/// below the top row, which left a scrolled reader with no updates.
+#[test]
+fn ttl_tick_polls_wherever_the_reader_is() {
     let (mut app, mut cmds) = empty_app_with_cmds(vec!["AAPL".into()]);
     app.view_idx = ui::view_index(ui::ViewId::News);
     app.feeds.insert(
@@ -1579,17 +1800,61 @@ fn ttl_refetch_waits_for_top_row() {
             None,
         ),
     );
-    app.feeds.get_mut("AAPL").unwrap().fetched =
+    app.feeds.get_mut("AAPL").unwrap().polled =
         Instant::now() - std::time::Duration::from_secs(600);
-    // Reader is mid-list: a refetch would drop loaded pages, so hold off.
     app.news_selected = 1;
     app.ensure_alphai_data();
-    assert!(cmds.try_recv().is_err(), "refetched under the reader");
+    match cmds.try_recv() {
+        Ok(alphai::Cmd::FetchNews { cursor, sort, .. }) => {
+            assert_eq!(cursor, None, "the first poll primes a position");
+            assert_eq!(sort, alphai::Sort::Ingested, "the tick must be a delta poll");
+        }
+        other => panic!("expected a delta poll, got {:?}", other.is_ok()),
+    }
+    assert!(cmds.try_recv().is_err(), "one tick, one request");
+}
+
+/// The head fetch replaces the bundle, so it still waits for the top row —
+/// but it is now the rarer side-payload refresh, several TTLs apart, and the
+/// tick under a scrolled reader is a poll instead of nothing.
+#[test]
+fn head_refresh_still_waits_for_top_row() {
+    let (mut app, mut cmds) = empty_app_with_cmds(vec!["AAPL".into()]);
+    app.view_idx = ui::view_index(ui::ViewId::News);
+    app.feeds.insert(
+        "AAPL".into(),
+        FeedBundle::new(vec![article("First", "AAPL", 9, "positive")], None, None),
+    );
+    let stale = Instant::now() - std::time::Duration::from_secs(1_500);
+    let b = app.feeds.get_mut("AAPL").unwrap();
+    b.fetched = stale;
+    b.polled = stale;
+    app.news_selected = 1;
+    app.ensure_alphai_data();
+    assert!(
+        matches!(
+            cmds.try_recv(),
+            Ok(alphai::Cmd::FetchNews { sort: alphai::Sort::Ingested, .. })
+        ),
+        "a head fetch cannot run under the reader"
+    );
+    // The poll comes back caught up, which also clears the in-flight guard.
+    app.apply_alphai(alphai::Event::Feed {
+        key: "AAPL".into(),
+        articles: vec![],
+        side: None,
+        next_cursor: Some("delta1".into()),
+        mode: alphai::FeedMode::Merge,
+        min_relevance: None,
+    });
     app.news_selected = 0;
     app.ensure_alphai_data();
     assert!(
-        matches!(cmds.try_recv(), Ok(alphai::Cmd::FetchNews { cursor: None, .. })),
-        "no refetch at the top row"
+        matches!(
+            cmds.try_recv(),
+            Ok(alphai::Cmd::FetchNews { cursor: None, sort: alphai::Sort::Published, .. })
+        ),
+        "no head refresh at the top row"
     );
 }
 
@@ -1889,10 +2154,12 @@ fn settings_save_merge_preserves_file_only_sections() {
     assert_eq!(merged.watchlist, vec!["AAPL".to_string(), "MSFT".to_string()]);
 }
 
-/// The single-copy guards must hold for every feed kind: the insider TTL
-/// refetch also waits for the reader to return to the top row.
+/// The single-copy guards must hold for every feed kind: the insider tick
+/// polls too, and its head refresh still waits for the top row. Delta mode
+/// matters most here, since a Form 4 is filed days after its trade and
+/// lands below the head of the published page.
 #[test]
-fn insider_ttl_refetch_also_waits_for_top_row() {
+fn insider_tick_polls_and_head_refresh_waits_for_top_row() {
     let (mut app, mut cmds) = empty_app_with_cmds(vec!["AAPL".into()]);
     app.view_idx = ui::view_index(ui::ViewId::Insider);
     let key = alphai::insider_key("AAPL");
@@ -1907,16 +2174,35 @@ fn insider_ttl_refetch_also_waits_for_top_row() {
             None,
         ),
     );
-    app.feeds.get_mut(&key).unwrap().fetched =
-        Instant::now() - std::time::Duration::from_secs(600);
+    let stale = Instant::now() - std::time::Duration::from_secs(1_500);
+    let b = app.feeds.get_mut(&key).unwrap();
+    b.fetched = stale;
+    b.polled = stale;
     app.news_selected = 1;
     app.ensure_alphai_data();
-    assert!(cmds.try_recv().is_err(), "insider refetched under the reader");
+    assert!(
+        matches!(
+            cmds.try_recv(),
+            Ok(alphai::Cmd::FetchInsider { sort: alphai::Sort::Ingested, .. })
+        ),
+        "insider head fetch ran under the reader"
+    );
+    app.apply_alphai(alphai::Event::Feed {
+        key: key.clone(),
+        articles: vec![],
+        side: None,
+        next_cursor: Some("delta1".into()),
+        mode: alphai::FeedMode::Merge,
+        min_relevance: None,
+    });
     app.news_selected = 0;
     app.ensure_alphai_data();
     assert!(
-        matches!(cmds.try_recv(), Ok(alphai::Cmd::FetchInsider { cursor: None, .. })),
-        "no insider refetch at the top row"
+        matches!(
+            cmds.try_recv(),
+            Ok(alphai::Cmd::FetchInsider { cursor: None, sort: alphai::Sort::Published, .. })
+        ),
+        "no insider head refresh at the top row"
     );
 }
 

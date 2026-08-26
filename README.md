@@ -24,8 +24,12 @@ Built in Rust with [ratatui](https://ratatui.rs).
   default. Articles fresher than 15 minutes light up their age in the
   accent color, and rows that appeared since you last looked at the feed
   carry a `●` marker that goes out once the cursor rests on them (insider
-  rows get the same treatment). `x` flips the layout between side-by-side and
-  list-over-card, `v` expands the card to full screen, PgUp/PgDn scroll it.
+  rows get the same treatment). Arrivals are placed at the top of the list
+  even when the rows below them are newer: an article reaches the feed a
+  while after it was published (a Form 4 days after its trade), so at its
+  publish position it would land below the fold and never be seen. `x`
+  flips the layout between side-by-side and list-over-card, `v` expands the
+  card to full screen, PgUp/PgDn scroll it.
   On terminals narrower than 90 columns the side layout gives the whole
   width to the list and `v` remains the way to read the card. Pressing
   down on the last row loads the next page of the feed; the page size
@@ -309,9 +313,14 @@ get a sourced brief without leaving the terminal.
   scope is one extra request), caches each response for 5 minutes
   (`[ui] alphai_ttl_secs` in the config changes that), loads
   further pages only when you ask for them, and the article card reuses
-  data already fetched with the list. The relevance filter is applied by
-  the server, so filtered-out articles never occupy page slots; moving it
-  with `+`/`-` refetches the visible feed, one request per press at most.
+  data already fetched with the list. The refresh at the end of that cache
+  window asks the server what has arrived since the previous check rather
+  than re-reading the newest page, which costs the same single request,
+  keeps the pages you loaded and the row you are on, and is the only way to
+  see an article that entered the feed behind its own publish time. The
+  relevance filter is applied by the server, so filtered-out articles never
+  occupy page slots; moving it with `+`/`-` refetches the visible feed, one
+  request per press at most.
   The Insider view's rollup and trades chart arrive as one bundle
   alongside the feed's first page and live in the same cache, so the
   chart costs no extra requests and the `g` window switch is free.
