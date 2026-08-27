@@ -1,5 +1,6 @@
 # alphai-tui
 
+[![CI](https://github.com/makeev/alphai-tui/actions/workflows/ci.yml/badge.svg)](https://github.com/makeev/alphai-tui/actions/workflows/ci.yml)
 [![crates.io](https://img.shields.io/crates/v/alphai-tui.svg)](https://crates.io/crates/alphai-tui)
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/makeev/alphai-tui/blob/main/LICENSE)
 
@@ -547,6 +548,7 @@ request-budget guard lives in one file (`app/feeds.rs`).
 ```sh
 cargo test          # unit + TestBackend rendering tests
 cargo clippy --all-targets
+cargo fmt --all -- --check
 cargo run -- --once AAPL             # network smoke test without a TTY
 ALPHAI_API_KEY=ak_live_... cargo test live_api -- --ignored   # live API smoke
 ```
