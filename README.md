@@ -553,6 +553,10 @@ cargo run -- --once AAPL             # network smoke test without a TTY
 ALPHAI_API_KEY=ak_live_... cargo test live_api -- --ignored   # live API smoke
 ```
 
+CI runs the first three on every push and pull request, on Linux, macOS
+and Windows. What changed in each release is in
+[CHANGELOG.md](CHANGELOG.md).
+
 Issues and PRs are welcome.
 
 ## License
