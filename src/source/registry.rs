@@ -68,7 +68,12 @@ pub static SOURCES: &[SourceInfo] = &[
                 label: "Alpaca secret",
             },
         ],
-        make: |keys| Ok(Arc::new(alpaca::Alpaca::new(keys[0].clone(), keys[1].clone())?)),
+        make: |keys| {
+            Ok(Arc::new(alpaca::Alpaca::new(
+                keys[0].clone(),
+                keys[1].clone(),
+            )?))
+        },
     },
 ];
 
@@ -143,11 +148,18 @@ mod tests {
                     "{}: 'alphai' is reserved for the news key",
                     s.id
                 );
-                assert!(!f.env_var.is_empty() && !f.label.is_empty(), "{}: bare key field", s.id);
+                assert!(
+                    !f.env_var.is_empty() && !f.label.is_empty(),
+                    "{}: bare key field",
+                    s.id
+                );
                 config_names.push(f.config_name);
             }
         }
-        for (list, what) in [(&mut names, "source id/alias"), (&mut config_names, "key config_name")] {
+        for (list, what) in [
+            (&mut names, "source id/alias"),
+            (&mut config_names, "key config_name"),
+        ] {
             let before = list.len();
             list.sort_unstable();
             list.dedup();
@@ -162,7 +174,12 @@ mod tests {
         for s in SOURCES {
             let dummy = vec!["dummy".to_string(); s.key_fields.len()];
             let built = (s.make)(&dummy).unwrap_or_else(|e| panic!("{}: make failed: {e:#}", s.id));
-            assert_eq!(built.name(), s.id, "{}: DataSource::name() != registry id", s.id);
+            assert_eq!(
+                built.name(),
+                s.id,
+                "{}: DataSource::name() != registry id",
+                s.id
+            );
         }
     }
 
@@ -173,7 +190,12 @@ mod tests {
             assert!(msg.contains(s.id), "{msg}");
             assert!(msg.contains("settings screen (s)"), "{msg}");
             for f in s.key_fields {
-                assert!(msg.contains(f.env_var), "{}: error lacks {}: {msg}", s.id, f.env_var);
+                assert!(
+                    msg.contains(f.env_var),
+                    "{}: error lacks {}: {msg}",
+                    s.id,
+                    f.env_var
+                );
             }
         }
     }

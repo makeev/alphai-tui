@@ -435,7 +435,12 @@ impl App {
                 self.switch_view((self.view_idx + ui::VIEWS.len() - 1) % ui::VIEWS.len())
             }
             Action::Settings => self.open_settings(),
-            Action::Help => self.help = HelpOverlay { open: true, scroll: 0 },
+            Action::Help => {
+                self.help = HelpOverlay {
+                    open: true,
+                    scroll: 0,
+                }
+            }
             Action::Refresh => self.manual_refresh(),
             // News/Insider: up/down scroll articles, left/right switch ticker.
             Action::Up if news_view => {
@@ -484,7 +489,10 @@ impl App {
             Action::Card
                 if news_view && self.visible_articles().is_some_and(|list| !list.is_empty()) =>
             {
-                self.article_overlay = ArticleOverlay { open: true, scroll: 0 };
+                self.article_overlay = ArticleOverlay {
+                    open: true,
+                    scroll: 0,
+                };
             }
             Action::CycleScope if news_feed => {
                 self.news_scope = self.news_scope.next();

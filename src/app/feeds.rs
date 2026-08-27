@@ -231,7 +231,14 @@ impl App {
 
     pub(crate) fn apply_alphai(&mut self, event: alphai::Event) {
         match event {
-            alphai::Event::Feed { key, articles, side, next_cursor, mode, min_relevance } => {
+            alphai::Event::Feed {
+                key,
+                articles,
+                side,
+                next_cursor,
+                mode,
+                min_relevance,
+            } => {
                 self.inflight.remove(&key);
                 self.alphai_errors.remove(&key);
                 // Read before the bundle is borrowed: a merge into the feed
@@ -308,7 +315,9 @@ impl App {
             }
             alphai::Event::PageError { key, error, gated } => {
                 self.inflight.remove(&key);
-                let Some(b) = self.feeds.get_mut(&key) else { return };
+                let Some(b) = self.feeds.get_mut(&key) else {
+                    return;
+                };
                 b.page_error = Some(error);
                 if gated {
                     b.gated = true;
@@ -360,13 +369,13 @@ impl App {
         }
         // The view declares which feed it shows (`View::feed_shown`); the
         // guards below are the single copy for every feed kind.
-        let Some((key, kind)) = self.active_feed() else { return };
+        let Some((key, kind)) = self.active_feed() else {
+            return;
+        };
         // The score filter a head fetch of this feed would carry right now
         // (trending is the exception: server-curated 8+, no filter).
         let wanted = match kind {
-            FeedKind::News if self.news_scope != NewsScope::Trending => {
-                Some(self.news_min_score)
-            }
+            FeedKind::News if self.news_scope != NewsScope::Trending => Some(self.news_min_score),
             FeedKind::News => None,
             FeedKind::Insider => Some(self.insider_min_score),
         };
@@ -422,7 +431,9 @@ impl App {
         if !ui::VIEWS[self.view_idx].navigates_articles() {
             return;
         }
-        let Some((key, kind)) = self.active_feed() else { return };
+        let Some((key, kind)) = self.active_feed() else {
+            return;
+        };
         // A gated feed carries no cursor (the archive guard cleared it).
         let Some(cursor) = self.feeds.get(&key).and_then(|b| b.next_cursor.clone()) else {
             return;
@@ -441,7 +452,9 @@ impl App {
     /// `ensure_alphai_data` refetches it, at most one request per press
     /// (the shared inflight key absorbs faster presses).
     pub(super) fn adjust_min_score(&mut self, delta: i8) {
-        let Some((_, kind)) = self.active_feed() else { return };
+        let Some((_, kind)) = self.active_feed() else {
+            return;
+        };
         let field = match kind {
             FeedKind::News => &mut self.news_min_score,
             FeedKind::Insider => &mut self.insider_min_score,
@@ -473,7 +486,9 @@ impl App {
         if !ui::VIEWS[self.view_idx].navigates_articles() {
             return;
         }
-        let Some((key, _)) = self.active_feed() else { return };
+        let Some((key, _)) = self.active_feed() else {
+            return;
+        };
         let Some(uid) = self
             .feeds
             .get(&key)

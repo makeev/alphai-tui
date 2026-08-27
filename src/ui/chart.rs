@@ -93,9 +93,7 @@ pub fn render_chart(f: &mut Frame, area: Rect, app: &App) {
 
     let Some(data) = app.data.get(&symbol) else {
         let msg = match app.errors.get(&symbol) {
-            Some(e) => {
-                Line::from(format!("{symbol}: {e}")).style(Style::new().fg(app.theme.error))
-            }
+            Some(e) => Line::from(format!("{symbol}: {e}")).style(Style::new().fg(app.theme.error)),
             None => Line::from(format!("{symbol}: loading…")).dim(),
         };
         f.render_widget(
@@ -116,8 +114,7 @@ pub fn render_chart(f: &mut Frame, area: Rect, app: &App) {
     let cut = visible_from(&data.candles, app.range);
     // An empty volume panel would only steal rows from the price chart:
     // finnhub synthesizes candles from ticks and carries no volume at all.
-    let has_volume =
-        app.show_volume && data.candles[cut..].iter().any(|c| c.volume.is_some());
+    let has_volume = app.show_volume && data.candles[cut..].iter().any(|c| c.volume.is_some());
     let (volume_h, rsi_h) = panel_split(area.height, has_volume, app.show_rsi);
     let [price_area, volume_area, rsi_area] = Layout::vertical([
         Constraint::Min(0),
@@ -169,7 +166,11 @@ fn margin_cols(width: u16, pct: u16) -> u16 {
 /// The x-axis upper bound stretched so the data occupies (100-pct)% of the
 /// width and the rest stays free on the right.
 fn x_with_margin(x_hi: f64, pct: u16) -> f64 {
-    if pct == 0 { x_hi } else { x_hi * 100.0 / (100.0 - pct as f64) }
+    if pct == 0 {
+        x_hi
+    } else {
+        x_hi * 100.0 / (100.0 - pct as f64)
+    }
 }
 
 /// Timestamp at fractional candle index `x`; past the last candle it
@@ -207,12 +208,7 @@ fn dir_color(q: &Quote, theme: &Theme) -> Color {
 /// Legend labels appear only for average lines that actually have points on
 /// screen: an average needs `period` candles of history, which short series
 /// (finnhub's growing synthetic one, thin symbols) may not have yet.
-fn chart_title(
-    symbol: &str,
-    data: &TickerData,
-    app: &App,
-    flash: Option<bool>,
-) -> Line<'static> {
+fn chart_title(symbol: &str, data: &TickerData, app: &App, flash: Option<bool>) -> Line<'static> {
     let (q, theme) = (&data.quote, &app.theme);
     let change_str = match (q.change(), q.change_pct()) {
         (Some(c), Some(p)) => format!("{c:+.2} ({p:+.2}%)"),
@@ -228,7 +224,10 @@ fn chart_title(
         ),
         Span::styled(fmt_price(q.price), price_style),
         Span::raw(format!(" {} ", q.currency.as_deref().unwrap_or(""))),
-        Span::styled(format!("{change_str} "), Style::new().fg(dir_color(q, theme))),
+        Span::styled(
+            format!("{change_str} "),
+            Style::new().fg(dir_color(q, theme)),
+        ),
     ];
     if app.show_sma {
         for (period, color) in [
@@ -249,7 +248,11 @@ fn chart_title(
 /// Clock labels inside a ~day, dates beyond: "19:00" is ambiguous once the
 /// window spans several days (e.g. the 1mo/60m preset).
 fn axis_time_fmt(first_ts: i64, last_ts: i64) -> &'static str {
-    if last_ts - first_ts <= 2 * 86_400 { "%H:%M" } else { "%d %b" }
+    if last_ts - first_ts <= 2 * 86_400 {
+        "%H:%M"
+    } else {
+        "%d %b"
+    }
 }
 
 fn time_label(ts: i64, fmt: &str) -> String {
@@ -320,7 +323,10 @@ fn render_price_line(
             .collect()
     };
     let (sma_fast, sma_slow) = if app.show_sma {
-        (sma_points(app.chart.sma_fast), sma_points(app.chart.sma_slow))
+        (
+            sma_points(app.chart.sma_fast),
+            sma_points(app.chart.sma_slow),
+        )
     } else {
         (Vec::new(), Vec::new())
     };
@@ -337,7 +343,10 @@ fn render_price_line(
                 .data(&prev_close_points),
         );
     }
-    for (pts, color) in [(&sma_slow, app.theme.sma_slow), (&sma_fast, app.theme.sma_fast)] {
+    for (pts, color) in [
+        (&sma_slow, app.theme.sma_slow),
+        (&sma_fast, app.theme.sma_fast),
+    ] {
         if !pts.is_empty() {
             datasets.push(
                 Dataset::default()
@@ -467,7 +476,11 @@ fn render_price_candles(
     let pad = ((hi - lo) * 0.05).max(hi.abs() * 0.0005).max(1e-9);
     let (y_lo, y_hi) = (lo - pad, hi + pad);
 
-    let y_labels = [fmt_price(y_hi), fmt_price((y_lo + y_hi) / 2.0), fmt_price(y_lo)];
+    let y_labels = [
+        fmt_price(y_hi),
+        fmt_price((y_lo + y_hi) / 2.0),
+        fmt_price(y_lo),
+    ];
     let gutter = y_labels.iter().map(|s| s.chars().count()).max().unwrap() as u16 + 1;
     if inner.width <= gutter + 2 || inner.height <= 2 {
         return None; // too small: leave the bare block
@@ -490,7 +503,10 @@ fn render_price_candles(
     let (display, sample_idx): (Vec<Candle>, Vec<usize>) = if visible.len() > max_candles {
         let ranges = bucket_ranges(visible.len(), max_candles);
         (
-            ranges.iter().map(|r| aggregate(&visible[r.clone()])).collect(),
+            ranges
+                .iter()
+                .map(|r| aggregate(&visible[r.clone()]))
+                .collect(),
             ranges.iter().map(|r| r.end - 1).collect(),
         )
     } else {
@@ -621,7 +637,14 @@ fn render_price_candles(
         buf.set_string(mid_x, axis_y, &mid, dim);
     }
 
-    Some(CandleGeom { gutter, plot_x: plot.x, usable, slot, body_w, display })
+    Some(CandleGeom {
+        gutter,
+        plot_x: plot.x,
+        usable,
+        slot,
+        body_w,
+        display,
+    })
 }
 
 /// Price -> subrow index in `[0, sub_rows)`, 0 = top.
@@ -831,7 +854,11 @@ fn volume_title(last: Option<f64>, theme: &Theme) -> Line<'static> {
 /// there, a bar under it would read as one more candle). Each bar takes its
 /// candle's color, so the panel shows which side the volume was on.
 fn render_volume_candles(f: &mut Frame, area: Rect, geom: &CandleGeom, theme: &Theme) {
-    let vmax = geom.display.iter().filter_map(|c| c.volume).fold(0.0, f64::max);
+    let vmax = geom
+        .display
+        .iter()
+        .filter_map(|c| c.volume)
+        .fold(0.0, f64::max);
     let last = geom.display.last().and_then(|c| c.volume);
     let block = theme.panel().title(volume_title(last, theme));
     let inner = block.inner(area);
@@ -1020,14 +1047,24 @@ mod tests {
     use super::*;
 
     fn candle(open: f64, high: f64, low: f64, close: f64) -> Candle {
-        Candle { ts: 0, open, high, low, close, volume: None }
+        Candle {
+            ts: 0,
+            open,
+            high,
+            low,
+            close,
+            volume: None,
+        }
     }
 
     /// RSI reserves first, so its threshold is exactly where it always was
     /// (height 20), and volume only takes rows the price chart can spare.
     #[test]
     fn panel_split_feeds_the_price_chart_first() {
-        assert_eq!(panel_split(40, true, true), (VOLUME_PANEL_HEIGHT, RSI_PANEL_HEIGHT));
+        assert_eq!(
+            panel_split(40, true, true),
+            (VOLUME_PANEL_HEIGHT, RSI_PANEL_HEIGHT)
+        );
         assert_eq!(panel_split(20, true, true), (0, RSI_PANEL_HEIGHT));
         // One row short of RSI, but the cheaper volume panel still fits.
         assert_eq!(panel_split(19, true, true), (VOLUME_PANEL_HEIGHT, 0));
@@ -1114,7 +1151,10 @@ mod tests {
         assert_eq!(bucket_ranges(10, 4), vec![0..2, 2..5, 5..7, 7..10]);
         assert_eq!(bucket_ranges(130, 108).len(), 108);
         // Fewer candles than columns: identity buckets.
-        assert_eq!(bucket_ranges(5, 10), (0..5).map(|i| i..i + 1).collect::<Vec<_>>());
+        assert_eq!(
+            bucket_ranges(5, 10),
+            (0..5).map(|i| i..i + 1).collect::<Vec<_>>()
+        );
     }
 
     #[test]
@@ -1143,7 +1183,11 @@ mod tests {
         let mut buf = Buffer::empty(plot);
         buf.cell_mut((0, 0)).unwrap().set_char('█'); // candle body
         o.blit(&mut buf, plot);
-        assert_eq!(buf.cell((0, 0)).unwrap().symbol(), "█", "body lost its cell");
+        assert_eq!(
+            buf.cell((0, 0)).unwrap().symbol(),
+            "█",
+            "body lost its cell"
+        );
         assert_eq!(buf.cell((1, 0)).unwrap().symbol(), "⠉");
         assert_eq!(buf.cell((1, 0)).unwrap().fg, Color::Red);
 

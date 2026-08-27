@@ -222,7 +222,10 @@ fn entry(name: &str) -> Option<&'static (&'static str, Theme)> {
 /// wrapping. An unknown name restarts the cycle.
 pub fn step_preset(name: &str, dir: isize) -> &'static str {
     let count = PRESETS.len() as isize;
-    match PRESETS.iter().position(|(n, _)| n.eq_ignore_ascii_case(name)) {
+    match PRESETS
+        .iter()
+        .position(|(n, _)| n.eq_ignore_ascii_case(name))
+    {
         Some(i) => PRESETS[((i as isize + dir).rem_euclid(count)) as usize].0,
         None => DEFAULT_PRESET,
     }
@@ -231,7 +234,10 @@ pub fn step_preset(name: &str, dir: isize) -> &'static str {
 /// Help for `--theme`, built from the table so the two can not drift.
 pub fn cli_theme_help() -> String {
     let names: Vec<&str> = PRESETS.iter().map(|(n, _)| *n).collect();
-    format!("Color preset: {} [default: {DEFAULT_PRESET}]", names.join(", "))
+    format!(
+        "Color preset: {} [default: {DEFAULT_PRESET}]",
+        names.join(", ")
+    )
 }
 
 #[cfg(test)]
@@ -281,7 +287,10 @@ mod tests {
 
     #[test]
     fn presets_are_coherent() {
-        assert_eq!(PRESETS[0].0, "default", "the cycle starts at the built-in theme");
+        assert_eq!(
+            PRESETS[0].0, "default",
+            "the cycle starts at the built-in theme"
+        );
         for (name, theme) in PRESETS {
             assert_eq!(
                 PRESETS.iter().filter(|(n, _)| n == name).count(),

@@ -77,11 +77,21 @@ fn columns(avail: u16) -> Columns {
             } else {
                 0
             };
-            return Columns { change, pct, range, spark };
+            return Columns {
+                change,
+                pct,
+                range,
+                spark,
+            };
         }
     }
     // Narrower than symbol plus price: nothing left to drop.
-    Columns { change: false, pct: false, range: false, spark: 0 }
+    Columns {
+        change: false,
+        pct: false,
+        range: false,
+        spark: 0,
+    }
 }
 
 /// Shared by TableView and SplitView.

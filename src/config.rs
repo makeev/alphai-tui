@@ -248,7 +248,16 @@ pub fn resolve(cfg: &Config, cli_theme: Option<&str>) -> (Resolved, Vec<String>)
             .map(|(name, spec)| (name.as_str(), spec.as_list())),
         &mut warnings,
     );
-    (Resolved { theme, theme_name, chart, ui, keymap }, warnings)
+    (
+        Resolved {
+            theme,
+            theme_name,
+            chart,
+            ui,
+            keymap,
+        },
+        warnings,
+    )
 }
 
 /// `[ui] borders`: the line set panel frames draw with. Lives in `[ui]`
@@ -299,7 +308,13 @@ fn resolve_chart(raw: Option<&ChartConfig>, warnings: &mut Vec<String>) -> Chart
     }
     out.sma_fast = period(raw.sma_fast, out.sma_fast, "sma_fast", 2..=250, warnings);
     out.sma_slow = period(raw.sma_slow, out.sma_slow, "sma_slow", 2..=250, warnings);
-    out.rsi_period = period(raw.rsi_period, out.rsi_period, "rsi_period", 2..=100, warnings);
+    out.rsi_period = period(
+        raw.rsi_period,
+        out.rsi_period,
+        "rsi_period",
+        2..=100,
+        warnings,
+    );
     if let Some(pct) = raw.right_margin_pct {
         if RIGHT_MARGIN_RANGE.contains(&pct) {
             out.right_margin_pct = pct as u16;
@@ -365,7 +380,10 @@ fn resolve_ui(raw: Option<&UiConfig>, warnings: &mut Vec<String>) -> UiDefaults 
     let Some(raw) = raw else { return out };
     if let Some(name) = &raw.default_view {
         // Matched by title, so the list stays correct as views register.
-        match ui::VIEWS.iter().position(|v| v.title().eq_ignore_ascii_case(name)) {
+        match ui::VIEWS
+            .iter()
+            .position(|v| v.title().eq_ignore_ascii_case(name))
+        {
             Some(idx) => out.view_idx = idx,
             None => {
                 let names: Vec<String> =
@@ -406,7 +424,12 @@ fn resolve_ui(raw: Option<&UiConfig>, warnings: &mut Vec<String>) -> UiDefaults 
             )),
         }
     }
-    out.news_min_score = min_score(raw.news_min_score, out.news_min_score, "news_min_score", warnings);
+    out.news_min_score = min_score(
+        raw.news_min_score,
+        out.news_min_score,
+        "news_min_score",
+        warnings,
+    );
     out.insider_min_score = min_score(
         raw.insider_min_score,
         out.insider_min_score,
@@ -433,7 +456,9 @@ fn min_score(raw: Option<i64>, default: u8, name: &str, warnings: &mut Vec<Strin
     match raw {
         Some(n) if (1..=10).contains(&n) => n as u8,
         Some(n) => {
-            warnings.push(format!("[ui] {name}: {n} is outside 1..=10, keeping {default}"));
+            warnings.push(format!(
+                "[ui] {name}: {n} is outside 1..=10, keeping {default}"
+            ));
             default
         }
         None => default,
@@ -576,7 +601,10 @@ mod tests {
                 presets: Some(vec![vec!["1d".into(), "5m".into()]]),
                 ..Default::default()
             }),
-            theme: Some(BTreeMap::from([("accent".to_string(), "magenta".to_string())])),
+            theme: Some(BTreeMap::from([(
+                "accent".to_string(),
+                "magenta".to_string(),
+            )])),
             keybindings: Some(BTreeMap::from([
                 ("quit".to_string(), KeysSpec::One("ctrl-q".into())),
                 (
@@ -620,8 +648,14 @@ mod tests {
             "#,
         )
         .unwrap();
-        assert_eq!(cfg.keys.get("alphai").map(String::as_str), Some("ak_live_x"));
-        assert_eq!(cfg.keys.get("alpaca_secret").map(String::as_str), Some("sec"));
+        assert_eq!(
+            cfg.keys.get("alphai").map(String::as_str),
+            Some("ak_live_x")
+        );
+        assert_eq!(
+            cfg.keys.get("alpaca_secret").map(String::as_str),
+            Some("sec")
+        );
         // A blank file value counts as unset at resolution time.
         assert_eq!(cfg.key_value(&TEST_FIELD), None);
     }
@@ -659,7 +693,10 @@ mod tests {
         assert!(warnings.is_empty(), "{warnings:?}");
         assert_eq!(resolved.theme.accent, ratatui::style::Color::Magenta);
 
-        let (_, warnings) = resolve(&toml::from_str::<Config>("[theme]\nup = \"banana\"").unwrap(), None);
+        let (_, warnings) = resolve(
+            &toml::from_str::<Config>("[theme]\nup = \"banana\"").unwrap(),
+            None,
+        );
         assert_eq!(warnings.len(), 1, "{warnings:?}");
 
         // Absent sections must not serialize: Save would spray empty tables
@@ -709,8 +746,8 @@ mod tests {
 
     #[test]
     fn keybindings_section_resolves_per_entry() {
-        use crossterm::event::{KeyCode, KeyEvent};
         use crate::keymap::Action;
+        use crossterm::event::{KeyCode, KeyEvent};
 
         // A bare string and a list both parse; the keymap follows.
         let cfg: Config =
@@ -725,11 +762,13 @@ mod tests {
             resolved.keymap.resolve(&KeyEvent::from(KeyCode::Char('z'))),
             Some(Action::Open)
         );
-        assert_eq!(resolved.keymap.resolve(&KeyEvent::from(KeyCode::Char('r'))), None);
+        assert_eq!(
+            resolved.keymap.resolve(&KeyEvent::from(KeyCode::Char('r'))),
+            None
+        );
 
         // A bad entry warns and keeps the default; the good one still lands.
-        let cfg: Config =
-            toml::from_str("[keybindings]\nquit = \"supr\"\ncard = \"n\"").unwrap();
+        let cfg: Config = toml::from_str("[keybindings]\nquit = \"supr\"\ncard = \"n\"").unwrap();
         let (resolved, warnings) = resolve(&cfg, None);
         assert_eq!(warnings.len(), 2, "{warnings:?}");
         assert_eq!(
@@ -784,8 +823,7 @@ mod tests {
     /// keeps the default, exactly like `style`.
     #[test]
     fn chart_panel_and_ma_type_validate_per_entry() {
-        let cfg: Config =
-            toml::from_str("[chart]\nvolume = false\nma_type = \"EMA\"").unwrap();
+        let cfg: Config = toml::from_str("[chart]\nvolume = false\nma_type = \"EMA\"").unwrap();
         let (resolved, warnings) = resolve(&cfg, None);
         assert!(warnings.is_empty(), "{warnings:?}");
         assert!(!resolved.chart.volume);
@@ -819,11 +857,17 @@ mod tests {
             let cfg: Config =
                 toml::from_str(&format!("[chart]\nright_margin_pct = {bad}")).expect("must parse");
             let (resolved, warnings) = resolve(&cfg, None);
-            assert_eq!(resolved.chart.right_margin_pct, DEFAULT_RIGHT_MARGIN_PCT, "at {bad}");
+            assert_eq!(
+                resolved.chart.right_margin_pct, DEFAULT_RIGHT_MARGIN_PCT,
+                "at {bad}"
+            );
             assert_eq!(warnings.len(), 1, "at {bad}: {warnings:?}");
         }
 
-        assert_eq!(ChartDefaults::default().right_margin_pct, DEFAULT_RIGHT_MARGIN_PCT);
+        assert_eq!(
+            ChartDefaults::default().right_margin_pct,
+            DEFAULT_RIGHT_MARGIN_PCT
+        );
     }
 
     #[test]
@@ -852,8 +896,7 @@ mod tests {
             ("3m", InsiderChartWindow::M3),
             ("12M", InsiderChartWindow::M12),
         ] {
-            let cfg: Config =
-                toml::from_str(&format!("[ui]\ninsider_chart = \"{raw}\"")).unwrap();
+            let cfg: Config = toml::from_str(&format!("[ui]\ninsider_chart = \"{raw}\"")).unwrap();
             let (resolved, warnings) = resolve(&cfg, None);
             assert!(warnings.is_empty(), "{warnings:?}");
             assert_eq!(resolved.ui.insider_chart, want);
@@ -881,7 +924,10 @@ mod tests {
             let cfg: Config =
                 toml::from_str(&format!("[ui]\nnews_min_score = {bad}")).expect("must parse");
             let (resolved, warnings) = resolve(&cfg, None);
-            assert_eq!(resolved.ui.news_min_score, DEFAULT_NEWS_MIN_SCORE, "at {bad}");
+            assert_eq!(
+                resolved.ui.news_min_score, DEFAULT_NEWS_MIN_SCORE,
+                "at {bad}"
+            );
             assert_eq!(warnings.len(), 1, "at {bad}: {warnings:?}");
         }
 
@@ -929,7 +975,10 @@ mod tests {
                 let cfg: Config = toml::from_str(&block)
                     .unwrap_or_else(|e| panic!("README toml does not parse: {e}\n{block}"));
                 let (_, warnings) = resolve(&cfg, None);
-                assert!(warnings.is_empty(), "README example warns: {warnings:?}\n{block}");
+                assert!(
+                    warnings.is_empty(),
+                    "README example warns: {warnings:?}\n{block}"
+                );
                 checked += 1;
                 continue;
             }
@@ -938,6 +987,9 @@ mod tests {
                 block.push('\n');
             }
         }
-        assert!(checked >= 2, "expected at least two toml blocks in the README");
+        assert!(
+            checked >= 2,
+            "expected at least two toml blocks in the README"
+        );
     }
 }

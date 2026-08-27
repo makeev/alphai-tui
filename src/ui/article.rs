@@ -52,9 +52,11 @@ pub fn render_pane(
     scroll: &mut u16,
     theme: &Theme,
 ) {
-    let block = theme
-        .panel()
-        .title(news::hint_title(" card ", "· pgup/pgdn scroll · v full ", theme));
+    let block = theme.panel().title(news::hint_title(
+        " card ",
+        "· pgup/pgdn scroll · v full ",
+        theme,
+    ));
     let Some(a) = article else {
         f.render_widget(block, area);
         return;
@@ -67,7 +69,13 @@ pub fn render_pane(
 /// The height estimate divides by character width instead of real word-wrap
 /// points, so it can be off by a line or two on very long cards; harmless
 /// for a clamp.
-fn render_card(f: &mut Frame, area: Rect, block: Block, lines: Vec<Line<'static>>, scroll: &mut u16) {
+fn render_card(
+    f: &mut Frame,
+    area: Rect,
+    block: Block,
+    lines: Vec<Line<'static>>,
+    scroll: &mut u16,
+) {
     let inner_w = area.width.saturating_sub(2);
     let inner_h = area.height.saturating_sub(2);
     let max_scroll = wrapped_height(&lines, inner_w).saturating_sub(inner_h);
@@ -144,7 +152,9 @@ fn card_lines(a: &Article, symbol: &str, theme: &Theme) -> Vec<Line<'static>> {
 
     if let Some(insights) = &a.enrichment.ai_trading_insights {
         for t in insights.ticker_analysis.iter().take(4) {
-            let Some(i) = &t.impact_analysis else { continue };
+            let Some(i) = &t.impact_analysis else {
+                continue;
+            };
             lines.push(Line::from(""));
             let mut head = vec![Span::styled(
                 t.ticker.clone(),
@@ -193,7 +203,11 @@ fn card_lines(a: &Article, symbol: &str, theme: &Theme) -> Vec<Line<'static>> {
                 .iter()
                 .take(3)
                 .map(|e| {
-                    let kind = e.kind.as_deref().map(|k| format!(" ({k})")).unwrap_or_default();
+                    let kind = e
+                        .kind
+                        .as_deref()
+                        .map(|k| format!(" ({k})"))
+                        .unwrap_or_default();
                     let desc = e
                         .description
                         .as_deref()

@@ -394,7 +394,9 @@ async fn fetch_feed_page(
         let result = match &feed {
             Feed::News(symbol, min) => client.news(*symbol, cursor, Some(50), *min, sort).await,
             Feed::Insider(symbol, min) => {
-                client.insider_news(symbol, cursor, Some(50), *min, sort).await
+                client
+                    .insider_news(symbol, cursor, Some(50), *min, sort)
+                    .await
             }
         };
         match result {
@@ -410,9 +412,15 @@ async fn fetch_feed_page(
         }
     }
     match &feed {
-        Feed::News(symbol, min) => client.news(*symbol, cursor, Some(PAGE_SIZE), *min, sort).await,
+        Feed::News(symbol, min) => {
+            client
+                .news(*symbol, cursor, Some(PAGE_SIZE), *min, sort)
+                .await
+        }
         Feed::Insider(symbol, min) => {
-            client.insider_news(symbol, cursor, Some(PAGE_SIZE), *min, sort).await
+            client
+                .insider_news(symbol, cursor, Some(PAGE_SIZE), *min, sort)
+                .await
         }
     }
 }
@@ -461,7 +469,12 @@ pub async fn run(
                 client = key.and_then(|k| Client::new(k).ok());
                 page50 = None;
             }
-            Cmd::FetchNews { symbol, cursor, min_relevance, sort } => {
+            Cmd::FetchNews {
+                symbol,
+                cursor,
+                min_relevance,
+                sort,
+            } => {
                 let key = news_key(symbol.as_deref());
                 let Some(client) = &client else {
                     send_error(&tx, key, "no AlphaAI API key configured");
@@ -528,13 +541,21 @@ pub async fn run(
                         mode: FeedMode::Replace,
                         min_relevance: None,
                     },
-                    Err(e) => Event::Error { key, error: format!("{e:#}") },
+                    Err(e) => Event::Error {
+                        key,
+                        error: format!("{e:#}"),
+                    },
                 };
                 if tx.send(SourceEvent::Alphai(event)).is_err() {
                     return;
                 }
             }
-            Cmd::FetchInsider { symbol, cursor, min_relevance, sort } => {
+            Cmd::FetchInsider {
+                symbol,
+                cursor,
+                min_relevance,
+                sort,
+            } => {
                 let key = insider_key(&symbol);
                 let Some(client) = &client else {
                     send_error(&tx, key, "no AlphaAI API key configured");
@@ -1114,7 +1135,10 @@ mod tests {
         assert!(a.published().is_some());
         let impact = a.impact_for("NVDA").unwrap();
         assert_eq!(impact.confidence.as_deref(), Some("high"));
-        assert_eq!(impact.price_impact_prediction.as_deref(), Some("+2-4% near term"));
+        assert_eq!(
+            impact.price_impact_prediction.as_deref(),
+            Some("+2-4% near term")
+        );
         assert_eq!(a.novelty(), Some(7));
         assert_eq!(a.sources_badge(), Some(7));
         assert_eq!(
@@ -1170,7 +1194,12 @@ mod tests {
             Event::PollReprime { .. }
         ));
         assert!(matches!(
-            error_event("k".into(), anyhow::anyhow!(ARCHIVE_GATE_MSG), FeedMode::Merge, Some("d1")),
+            error_event(
+                "k".into(),
+                anyhow::anyhow!(ARCHIVE_GATE_MSG),
+                FeedMode::Merge,
+                Some("d1")
+            ),
             Event::PollReprime { .. }
         ));
         assert!(matches!(
@@ -1178,12 +1207,22 @@ mod tests {
             Event::PollError { .. }
         ));
         assert!(matches!(
-            error_event("k".into(), anyhow::anyhow!("AlphaAI API 429: slow down"), FeedMode::Merge, Some("d1")),
+            error_event(
+                "k".into(),
+                anyhow::anyhow!("AlphaAI API 429: slow down"),
+                FeedMode::Merge,
+                Some("d1")
+            ),
             Event::PollError { .. }
         ));
         // The published paths keep their old shapes.
         assert!(matches!(
-            error_event("k".into(), anyhow::anyhow!(ARCHIVE_GATE_MSG), FeedMode::Append, Some("c1")),
+            error_event(
+                "k".into(),
+                anyhow::anyhow!(ARCHIVE_GATE_MSG),
+                FeedMode::Append,
+                Some("c1")
+            ),
             Event::PageError { gated: true, .. }
         ));
         assert!(matches!(
@@ -1223,10 +1262,12 @@ mod tests {
         let raw = r#"{"original": {"title": "sold stock", "ownership_form": "indirect"}}"#;
         let a: Article = serde_json::from_str(raw).unwrap();
         assert_eq!(a.original.ownership_form.as_deref(), Some("indirect"));
-        let plain: Article =
-            serde_json::from_str(r#"{"original": {"title": "no form"}}"#).unwrap();
+        let plain: Article = serde_json::from_str(r#"{"original": {"title": "no form"}}"#).unwrap();
         assert_eq!(plain.original.ownership_form, None);
-        assert!(plain.insider.is_none(), "legacy rows must parse without the block");
+        assert!(
+            plain.insider.is_none(),
+            "legacy rows must parse without the block"
+        );
     }
 
     #[test]
@@ -1303,9 +1344,15 @@ mod tests {
 
     #[test]
     fn slugify_matches_site_convention() {
-        assert_eq!(slugify("NVIDIA beats on Q2 earnings"), "nvidia-beats-on-q2-earnings");
+        assert_eq!(
+            slugify("NVIDIA beats on Q2 earnings"),
+            "nvidia-beats-on-q2-earnings"
+        );
         assert_eq!(slugify("Apple's Q2: beats!"), "apples-q2-beats");
-        assert_eq!(slugify("AI  -  the new   gold rush"), "ai-the-new-gold-rush");
+        assert_eq!(
+            slugify("AI  -  the new   gold rush"),
+            "ai-the-new-gold-rush"
+        );
         assert_eq!(slugify("Привет"), "");
     }
 
@@ -1370,7 +1417,10 @@ mod tests {
         assert_eq!(fmt_usd(m12.sell_value_usd.as_deref().unwrap()), "$6.4B");
         assert_eq!(m12.unique_insiders, 11);
         assert_eq!(s.top_insiders[0].event_count, 134);
-        assert_eq!(fmt_usd(s.top_insiders[0].net_value_usd.as_deref().unwrap()), "-$505.0M");
+        assert_eq!(
+            fmt_usd(s.top_insiders[0].net_value_usd.as_deref().unwrap()),
+            "-$505.0M"
+        );
         assert_eq!(t.series_weekly.len(), 2);
         assert_eq!(t.series_weekly[0].week_start, "2026-07-27");
         assert_eq!(t.series_weekly[0].sell_count, 9);
@@ -1413,11 +1463,20 @@ mod tests {
         // surfaces as a failing smoke test rather than a 400 for every free
         // user.
         let news = client
-            .news(Some("NVDA"), None, Some(PAGE_SIZE), Some(4), Sort::Published)
+            .news(
+                Some("NVDA"),
+                None,
+                Some(PAGE_SIZE),
+                Some(4),
+                Sort::Published,
+            )
             .await
             .unwrap();
         assert!(!news.results.is_empty(), "empty NVDA news feed");
-        assert!(news.results.len() <= PAGE_SIZE as usize, "page over PAGE_SIZE");
+        assert!(
+            news.results.len() <= PAGE_SIZE as usize,
+            "page over PAGE_SIZE"
+        );
         assert!(news.results[0].original.title.len() > 3);
         // The feed is deeper than one page, so the cursor must be present
         // and must fetch an older second page.
@@ -1443,8 +1502,14 @@ mod tests {
         let trades = client.insider_trades("NVDA").await.unwrap();
         let windows = trades.summary.expect("no summary block on insider-trades");
         assert!(windows.last_12m.is_some(), "no last_12m window");
-        assert!(!trades.chart_events.is_empty(), "empty chart_events for NVDA");
-        assert!(!trades.series_weekly.is_empty(), "empty series_weekly for NVDA");
+        assert!(
+            !trades.chart_events.is_empty(),
+            "empty chart_events for NVDA"
+        );
+        assert!(
+            !trades.series_weekly.is_empty(),
+            "empty series_weekly for NVDA"
+        );
         let trending = client.trending().await.unwrap();
         assert!(!trending.is_empty(), "empty trending feed");
 
@@ -1459,10 +1524,19 @@ mod tests {
         assert!(!prime.results.is_empty(), "empty priming delta page");
         let delta_cursor = prime.next_cursor.expect("no position on the priming page");
         let delta = client
-            .news(Some("NVDA"), Some(&delta_cursor), None, Some(4), Sort::Ingested)
+            .news(
+                Some("NVDA"),
+                Some(&delta_cursor),
+                None,
+                Some(4),
+                Sort::Ingested,
+            )
             .await
             .unwrap();
-        assert!(delta.next_cursor.is_some(), "delta mode dropped the position");
+        assert!(
+            delta.next_cursor.is_some(),
+            "delta mode dropped the position"
+        );
         // The two cursor families must stay mutually unreadable: the app's
         // reprime path exists because this is a 400 and not a silent restart
         // into a different range of the feed.
@@ -1473,8 +1547,14 @@ mod tests {
             Ok(_) => panic!("a published cursor was accepted in delta mode"),
             Err(e) => format!("{e:#}"),
         };
-        assert!(crossed.contains("API 400"), "crossed cursor did not 400: {crossed}");
-        assert!(is_cursor_rejected(&crossed), "a crossed cursor must reprime");
+        assert!(
+            crossed.contains("API 400"),
+            "crossed cursor did not 400: {crossed}"
+        );
+        assert!(
+            is_cursor_rejected(&crossed),
+            "a crossed cursor must reprime"
+        );
         // The insider feed answers delta mode too (it did not in July 2026),
         // which is where it matters most: a Form 4 is filed days after its
         // trade and enters the feed below the published head.

@@ -55,7 +55,13 @@ impl DataSource for Yahoo {
         let result = body
             .chart
             .result
-            .and_then(|mut r| if r.is_empty() { None } else { Some(r.remove(0)) })
+            .and_then(|mut r| {
+                if r.is_empty() {
+                    None
+                } else {
+                    Some(r.remove(0))
+                }
+            })
             .ok_or_else(|| anyhow!("empty chart result"))?;
 
         let candles = build_candles(&result);

@@ -82,9 +82,7 @@ impl View for NewsView {
         // fullscreen one. The side list drops the novelty column; the card
         // carries it in its meta.
         let (list_area, card_area, full) = match app.news_layout {
-            crate::app::NewsLayout::Side if main.width < SIDE_CARD_MIN_WIDTH => {
-                (main, None, false)
-            }
+            crate::app::NewsLayout::Side if main.width < SIDE_CARD_MIN_WIDTH => (main, None, false),
             crate::app::NewsLayout::Side => {
                 let [l, r] =
                     Layout::horizontal([Constraint::Percentage(55), Constraint::Percentage(45)])
@@ -196,7 +194,9 @@ fn empty_feed_message(scope: NewsScope, label: &str, min_score: u8) -> String {
     match scope {
         NewsScope::Trending => "no trending stories right now".to_string(),
         _ if min_score > 1 => {
-            format!("no recent news for {label} with score {min_score}+ (press - to lower the filter)")
+            format!(
+                "no recent news for {label} with score {min_score}+ (press - to lower the filter)"
+            )
         }
         _ => format!("no recent news for {label}"),
     }
@@ -214,9 +214,10 @@ pub fn render_panel(f: &mut Frame, area: Rect, app: &mut App) {
         .panel_titled(news_title(scope, &label, app.news_min_score));
 
     if !app.alphai_enabled {
-        let line =
-            Line::from(" AI news needs a free AlphaAI key from https://alphai.io, press s to add it")
-                .dim();
+        let line = Line::from(
+            " AI news needs a free AlphaAI key from https://alphai.io, press s to add it",
+        )
+        .dim();
         f.render_widget(Paragraph::new(line).block(block), area);
         return;
     }
@@ -267,7 +268,14 @@ struct RowCtx<'a> {
 /// sentiment (or tickers plus outlet count outside the ticker scope),
 /// category, title. Shared by the News view (`full`) and the Split strip.
 fn article_row(a: &Article, ctx: &RowCtx, unseen: bool) -> Row<'static> {
-    let RowCtx { scope, symbol, now, full, theme, title_w } = *ctx;
+    let RowCtx {
+        scope,
+        symbol,
+        now,
+        full,
+        theme,
+        title_w,
+    } = *ctx;
     // Breaking rows stand out: a fresh age renders in the accent color.
     let age = if is_fresh(a, now) {
         Cell::from(a.age(now)).style(Style::new().fg(theme.accent))
@@ -281,7 +289,13 @@ fn article_row(a: &Article, ctx: &RowCtx, unseen: bool) -> Row<'static> {
     if scope == NewsScope::Ticker {
         cells.push(sentiment_cell(a.sentiment_for(symbol), theme));
     } else {
-        let tickers: Vec<&str> = a.enrichment.tickers.iter().take(2).map(String::as_str).collect();
+        let tickers: Vec<&str> = a
+            .enrichment
+            .tickers
+            .iter()
+            .take(2)
+            .map(String::as_str)
+            .collect();
         cells.push(Cell::from(tickers.join(",")).bold());
         cells.push(sources_cell(a.sources_badge()));
     }
@@ -376,11 +390,17 @@ fn head_line(app: &App, sentiment: Option<&crate::alphai::SentimentSummary>) -> 
     };
     Paragraph::new(Line::from(vec![
         Span::raw(format!(" {}d sentiment  ", s.days)).dim(),
-        Span::styled(format!("▲ {} bullish", s.bullish), Style::new().fg(app.theme.pos)),
+        Span::styled(
+            format!("▲ {} bullish", s.bullish),
+            Style::new().fg(app.theme.pos),
+        ),
         Span::raw(" · ").dim(),
         Span::raw(format!("{} neutral", s.neutral)).dim(),
         Span::raw(" · ").dim(),
-        Span::styled(format!("▼ {} bearish", s.bearish), Style::new().fg(app.theme.neg)),
+        Span::styled(
+            format!("▼ {} bearish", s.bearish),
+            Style::new().fg(app.theme.neg),
+        ),
         Span::raw(format!("  ({} scored)", s.total)).dim(),
     ]))
 }
@@ -411,7 +431,9 @@ pub fn render_gate(f: &mut Frame, area: Rect, block: &Block, app: &App, key: &st
             Line::from("  press r to retry").dim(),
         ];
         f.render_widget(
-            Paragraph::new(lines).wrap(Wrap { trim: false }).block(block.clone()),
+            Paragraph::new(lines)
+                .wrap(Wrap { trim: false })
+                .block(block.clone()),
             area,
         );
         return true;
@@ -507,7 +529,10 @@ pub fn meta_line(a: &Article, ticker: &str) -> Vec<String> {
             _ => {}
         }
     }
-    if let Some(act) = a.trading_value().and_then(|t| t.actionability_score.clone()) {
+    if let Some(act) = a
+        .trading_value()
+        .and_then(|t| t.actionability_score.clone())
+    {
         meta.push(format!("act {act}"));
     }
     // Insider rows: the structured trade beats anything parsed from text.
@@ -532,7 +557,8 @@ pub fn meta_line(a: &Article, ticker: &str) -> Vec<String> {
 
 /// Under 15 minutes old counts as breaking; unparsable timestamps never do.
 pub(crate) fn is_fresh(a: &Article, now: DateTime<Utc>) -> bool {
-    a.published().is_some_and(|ts| (now - ts).num_minutes() < 15)
+    a.published()
+        .is_some_and(|ts| (now - ts).num_minutes() < 15)
 }
 
 pub fn score_cell(score: i64, theme: &Theme) -> Cell<'static> {

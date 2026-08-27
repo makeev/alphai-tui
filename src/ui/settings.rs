@@ -22,7 +22,9 @@ pub fn render(f: &mut Frame, app: &App) {
     let mut lines: Vec<Line> = Vec::new();
     if s.first_run {
         lines.push(Line::from(" Welcome to alphai-tui.").bold());
-        lines.push(Line::from(" Prices work out of the box via Yahoo, no key needed."));
+        lines.push(Line::from(
+            " Prices work out of the box via Yahoo, no key needed.",
+        ));
         lines.push(Line::from(
             " The News and Insider views use the AlphaAI API: get a free key at",
         ));
@@ -57,8 +59,15 @@ pub fn render(f: &mut Frame, app: &App) {
                 source_hint(s.source_choice.as_str()),
             ),
             SettingsRow::Key(field) => {
-                let stored = s.key_values.get(field.config_name).map_or("", String::as_str);
-                (field.label, field_value(s, i, stored), key_hint(field, stored))
+                let stored = s
+                    .key_values
+                    .get(field.config_name)
+                    .map_or("", String::as_str);
+                (
+                    field.label,
+                    field_value(s, i, stored),
+                    key_hint(field, stored),
+                )
             }
             SettingsRow::PollEvery => (
                 "Poll every",
@@ -107,9 +116,7 @@ pub fn render(f: &mut Frame, app: &App) {
     } else {
         lines.push(Line::from(""));
     }
-    lines.push(
-        Line::from("  ↑↓ move · ←→ change · enter edit / save · esc close").dim(),
-    );
+    lines.push(Line::from("  ↑↓ move · ←→ change · enter edit / save · esc close").dim());
     if let Some(p) = &app.config_path {
         lines.push(Line::from(format!("  config: {}", tilde(&p.display().to_string()))).dim());
     }
@@ -120,7 +127,9 @@ pub fn render(f: &mut Frame, app: &App) {
         .title(app.theme.heading(" Settings "))
         .border_style(Style::new().fg(app.theme.accent));
     f.render_widget(
-        Paragraph::new(lines).wrap(Wrap { trim: false }).block(block),
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .block(block),
         area,
     );
 }

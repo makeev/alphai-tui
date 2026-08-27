@@ -66,8 +66,7 @@ impl View for SplitView {
             area
         };
         let [left, right] =
-            Layout::horizontal([Constraint::Percentage(45), Constraint::Percentage(55)])
-                .areas(top);
+            Layout::horizontal([Constraint::Percentage(45), Constraint::Percentage(55)]).areas(top);
         table::render_table(f, left, app);
         chart::render_chart(f, right, app);
     }

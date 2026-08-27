@@ -225,7 +225,9 @@ fn chart_toggles_to_line_mode() {
     assert_eq!(app.chart_style, ChartStyle::Line);
     let screen = render(&mut app);
     assert!(
-        screen.chars().any(|c| ('\u{2800}'..='\u{28FF}').contains(&c)),
+        screen
+            .chars()
+            .any(|c| ('\u{2800}'..='\u{28FF}').contains(&c)),
         "no Braille line in line mode:\n{screen}"
     );
     press(&mut app, KeyCode::Char('c'));
@@ -257,12 +259,19 @@ fn right_margin_frees_columns_and_hosts_the_price_tag() {
     let screen = render(&mut app);
     let with_margin = max_body_x(&screen);
     // The price appears in the title and again as the tag in the margin.
-    assert!(screen.matches("214.50").count() >= 2, "price tag missing:\n{screen}");
+    assert!(
+        screen.matches("214.50").count() >= 2,
+        "price tag missing:\n{screen}"
+    );
 
     app.chart.right_margin_pct = 0;
     let screen = render(&mut app);
     let flush = max_body_x(&screen);
-    assert_eq!(screen.matches("214.50").count(), 1, "margin off, tag still drawn:\n{screen}");
+    assert_eq!(
+        screen.matches("214.50").count(),
+        1,
+        "margin off, tag still drawn:\n{screen}"
+    );
     assert!(
         with_margin + 10 <= flush,
         "margin freed no columns: {with_margin} vs {flush}\n{screen}"
@@ -297,14 +306,22 @@ fn price_flash_tracks_update_direction() {
         },
     };
     app.apply(data(100.0));
-    assert_eq!(app.price_flash_dir("AAPL"), None, "first data must not flash");
+    assert_eq!(
+        app.price_flash_dir("AAPL"),
+        None,
+        "first data must not flash"
+    );
     app.apply(data(101.0));
     assert_eq!(app.price_flash_dir("AAPL"), Some(true));
     app.apply(data(100.5));
     assert_eq!(app.price_flash_dir("AAPL"), Some(false));
     app.price_flash.clear();
     app.apply(data(100.5));
-    assert_eq!(app.price_flash_dir("AAPL"), None, "unchanged price must not flash");
+    assert_eq!(
+        app.price_flash_dir("AAPL"),
+        None,
+        "unchanged price must not flash"
+    );
 }
 
 /// The live quote is folded into the in-progress last candle on apply, so
@@ -382,15 +399,26 @@ fn reversed_cells(app: &mut App) -> Vec<ratatui::style::Color> {
 fn price_flash_inverts_the_price_on_the_chart() {
     let mut app = fake_app();
     app.view_idx = ui::view_index(ui::ViewId::Chart);
-    assert!(reversed_cells(&mut app).is_empty(), "inverted cells without a flash");
+    assert!(
+        reversed_cells(&mut app).is_empty(),
+        "inverted cells without a flash"
+    );
 
-    app.price_flash.insert("AAPL".into(), (Instant::now(), true));
+    app.price_flash
+        .insert("AAPL".into(), (Instant::now(), true));
     let cells = reversed_cells(&mut app);
     assert!(!cells.is_empty(), "flash did not invert the price");
-    assert!(cells.iter().all(|&fg| fg == app.theme.up), "up tick must use the up color");
+    assert!(
+        cells.iter().all(|&fg| fg == app.theme.up),
+        "up tick must use the up color"
+    );
 
-    app.price_flash.insert("AAPL".into(), (Instant::now() - PRICE_FLASH, true));
-    assert!(reversed_cells(&mut app).is_empty(), "expired flash still inverted");
+    app.price_flash
+        .insert("AAPL".into(), (Instant::now() - PRICE_FLASH, true));
+    assert!(
+        reversed_cells(&mut app).is_empty(),
+        "expired flash still inverted"
+    );
 }
 
 /// The candle-mode SMA overlay draws connected braille lines, not the old
@@ -406,10 +434,16 @@ fn candle_sma_overlay_is_a_braille_line() {
     assert!(braille(&screen), "no braille SMA overlay:\n{screen}");
     // The header and footer use "·" as a separator; only the plot matters.
     let plot: String = screen.lines().skip(2).take(25).collect();
-    assert!(!plot.contains('·'), "old per-column SMA dots still drawn:\n{screen}");
+    assert!(
+        !plot.contains('·'),
+        "old per-column SMA dots still drawn:\n{screen}"
+    );
     press(&mut app, KeyCode::Char('m'));
     let screen = render(&mut app);
-    assert!(!braille(&screen), "SMA hidden but braille remains:\n{screen}");
+    assert!(
+        !braille(&screen),
+        "SMA hidden but braille remains:\n{screen}"
+    );
 }
 
 #[test]
@@ -493,7 +527,10 @@ fn ma_type_key_switches_the_overlays_to_ema() {
     press(&mut app, KeyCode::Char('c'));
     assert!(render(&mut app).contains("EMA20"), "line mode kept SMA");
     press(&mut app, KeyCode::Char('e'));
-    assert!(render(&mut app).contains("SMA20"), "the toggle does not go back");
+    assert!(
+        render(&mut app).contains("SMA20"),
+        "the toggle does not go back"
+    );
 }
 
 /// The volume panel ships on and rides the `b` toggle.
@@ -548,8 +585,14 @@ fn volume_bars_share_the_candle_columns() {
     app.view_idx = ui::view_index(ui::ViewId::Chart);
     let screen = render_sized(&mut app, 100, 40);
     let lines: Vec<&str> = screen.lines().collect();
-    let vol_top = lines.iter().position(|l| l.contains("Vol")).expect("volume panel");
-    let rsi_top = lines.iter().position(|l| l.contains("RSI(")).expect("rsi panel");
+    let vol_top = lines
+        .iter()
+        .position(|l| l.contains("Vol"))
+        .expect("volume panel");
+    let rsi_top = lines
+        .iter()
+        .position(|l| l.contains("RSI("))
+        .expect("rsi panel");
     let max_body_x = |rows: &[&str]| {
         rows.iter()
             .flat_map(|l| {
@@ -562,7 +605,10 @@ fn volume_bars_share_the_candle_columns() {
     };
     let candles = max_body_x(&lines[..vol_top]).expect("candles");
     let bars = max_body_x(&lines[vol_top + 1..rsi_top]).expect("bars");
-    assert_eq!(candles, bars, "bars and candles end in different columns:\n{screen}");
+    assert_eq!(
+        candles, bars,
+        "bars and candles end in different columns:\n{screen}"
+    );
     // Both stop well short of the right border: that is the price margin.
     assert!(bars < 90, "the margin is not clear: {bars}\n{screen}");
 }
@@ -575,7 +621,11 @@ fn footer_hints_fit_110_columns() {
     for (i, view) in ui::VIEWS.iter().enumerate() {
         app.view_idx = i;
         let width = crate::ui::hints_text(&app).chars().count();
-        assert!(width <= 110, "{:?}: footer is {width} columns wide", view.id());
+        assert!(
+            width <= 110,
+            "{:?}: footer is {width} columns wide",
+            view.id()
+        );
     }
 }
 
@@ -612,7 +662,10 @@ fn range_switch_keeps_news_bundle() {
         ),
     );
     press(&mut app, KeyCode::Char('t'));
-    assert!(app.feeds.contains_key("AAPL"), "range switch dropped the news bundle");
+    assert!(
+        app.feeds.contains_key("AAPL"),
+        "range switch dropped the news bundle"
+    );
 }
 
 #[test]
@@ -634,7 +687,10 @@ fn split_view_combines_table_chart_and_news() {
         "no candle chart in split view:\n{screen}"
     );
     assert!(screen.contains("News · AAPL"), "screen:\n{screen}");
-    assert!(screen.contains("Apple beats expectations"), "screen:\n{screen}");
+    assert!(
+        screen.contains("Apple beats expectations"),
+        "screen:\n{screen}"
+    );
 }
 
 #[test]
@@ -662,7 +718,10 @@ fn split_view_drops_news_panel_on_tiny_terminal() {
         screen.push('\n');
     }
     assert!(screen.contains("Watchlist"), "screen:\n{screen}");
-    assert!(!screen.contains("News ·"), "news strip should be hidden:\n{screen}");
+    assert!(
+        !screen.contains("News ·"),
+        "news strip should be hidden:\n{screen}"
+    );
 }
 
 /// Every view registers a distinct ViewId (a duplicate would make
@@ -670,8 +729,17 @@ fn split_view_drops_news_panel_on_tiny_terminal() {
 #[test]
 fn view_ids_are_unique_and_indexable() {
     for (i, view) in ui::VIEWS.iter().enumerate() {
-        assert_eq!(ui::view_index(view.id()), i, "duplicate ViewId {:?}", view.id());
-        assert!(!view.hints().is_empty(), "{:?}: empty footer hints", view.id());
+        assert_eq!(
+            ui::view_index(view.id()),
+            i,
+            "duplicate ViewId {:?}",
+            view.id()
+        );
+        assert!(
+            !view.hints().is_empty(),
+            "{:?}: empty footer hints",
+            view.id()
+        );
     }
 }
 
@@ -716,7 +784,10 @@ fn footer_and_dispatch_follow_a_remap() {
     assert!(!screen.contains("⏎ open"), "screen:\n{screen}");
     // The new key drives the action, the old one is gone.
     press(&mut app, KeyCode::Char('v'));
-    assert!(!app.article_overlay.open, "the replaced default still fired");
+    assert!(
+        !app.article_overlay.open,
+        "the replaced default still fired"
+    );
     press(&mut app, KeyCode::Char('n'));
     assert!(app.article_overlay.open, "the remapped key did not fire");
 }
@@ -740,8 +811,7 @@ fn help_overlay_lists_every_action() {
     assert!(!app.handle_key(KeyEvent::from(KeyCode::Esc)));
     assert!(!app.help.open);
     // A remap shows up in the table: the overlay reads the live keymap.
-    app.keymap =
-        crate::keymap::Keymap::from_config([("refresh", vec!["f5"])], &mut Vec::new());
+    app.keymap = crate::keymap::Keymap::from_config([("refresh", vec!["f5"])], &mut Vec::new());
     press(&mut app, KeyCode::Char('?'));
     let screen = render_sized(&mut app, 90, 45);
     assert!(screen.contains("f5"), "screen:\n{screen}");
@@ -803,7 +873,10 @@ fn news_view_lists_articles_and_sentiment() {
     );
     let screen = render(&mut app);
     assert!(screen.contains("News · AAPL"), "screen:\n{screen}");
-    assert!(screen.contains("Apple beats expectations"), "screen:\n{screen}");
+    assert!(
+        screen.contains("Apple beats expectations"),
+        "screen:\n{screen}"
+    );
     assert!(screen.contains("12 bullish"), "screen:\n{screen}");
     assert!(screen.contains("▲"), "sentiment glyph missing:\n{screen}");
     // detail pane shows the selected article's summary and the AI meta calls
@@ -811,9 +884,18 @@ fn news_view_lists_articles_and_sentiment() {
         screen.contains("Summary of Apple beats expectations"),
         "screen:\n{screen}"
     );
-    assert!(screen.contains("nov 7"), "novelty missing from meta:\n{screen}");
-    assert!(screen.contains("positive/high"), "sentiment/confidence missing:\n{screen}");
-    assert!(screen.contains("act high"), "actionability missing:\n{screen}");
+    assert!(
+        screen.contains("nov 7"),
+        "novelty missing from meta:\n{screen}"
+    );
+    assert!(
+        screen.contains("positive/high"),
+        "sentiment/confidence missing:\n{screen}"
+    );
+    assert!(
+        screen.contains("act high"),
+        "actionability missing:\n{screen}"
+    );
 }
 
 #[test]
@@ -833,7 +915,10 @@ fn news_view_shows_error_state() {
     app.alphai_errors
         .insert("AAPL".into(), "invalid AlphaAI API key".into());
     let screen = render(&mut app);
-    assert!(screen.contains("invalid AlphaAI API key"), "screen:\n{screen}");
+    assert!(
+        screen.contains("invalid AlphaAI API key"),
+        "screen:\n{screen}"
+    );
     assert!(screen.contains("press r to retry"), "screen:\n{screen}");
 }
 
@@ -874,7 +959,10 @@ fn insider_view_shows_summary_and_filings() {
     // and the plan/value columns stay blank.
     assert!(screen.contains("▼  D"), "screen:\n{screen}");
     assert!(screen.contains("Apple insider sold"), "screen:\n{screen}");
-    assert!(screen.contains("score 4+"), "size filter missing from the title:\n{screen}");
+    assert!(
+        screen.contains("score 4+"),
+        "size filter missing from the title:\n{screen}"
+    );
 }
 
 /// A filing with the structured `insider` block: side/value/plan render from
@@ -910,7 +998,12 @@ fn insider_structured_block_drives_row_and_card() {
                 with_block("X sold $4.7M of stock", "sell", Some("4683000.00"), true),
                 // Code D: shares sold BACK TO THE ISSUER; side "other" must
                 // not fall back to the "sold" keyword in the title.
-                with_block("Y sold $1.0M of stock to the issuer", "other", Some("1000000.00"), false),
+                with_block(
+                    "Y sold $1.0M of stock to the issuer",
+                    "other",
+                    Some("1000000.00"),
+                    false,
+                ),
             ],
             None,
             None,
@@ -918,15 +1011,30 @@ fn insider_structured_block_drives_row_and_card() {
     );
     let screen = render(&mut app);
     assert!(screen.contains("$4.7M"), "value column missing:\n{screen}");
-    assert!(screen.contains("▼  D p"), "sell glyph + plan flag missing:\n{screen}");
-    assert!(screen.contains("·  D"), "structured \"other\" not neutral:\n{screen}");
+    assert!(
+        screen.contains("▼  D p"),
+        "sell glyph + plan flag missing:\n{screen}"
+    );
+    assert!(
+        screen.contains("·  D"),
+        "structured \"other\" not neutral:\n{screen}"
+    );
     // The detail meta carries the structured trade.
-    assert!(screen.contains("SELL $4.7M"), "meta trade missing:\n{screen}");
-    assert!(screen.contains("10b5-1 plan"), "meta plan flag missing:\n{screen}");
+    assert!(
+        screen.contains("SELL $4.7M"),
+        "meta trade missing:\n{screen}"
+    );
+    assert!(
+        screen.contains("10b5-1 plan"),
+        "meta plan flag missing:\n{screen}"
+    );
     // The fullscreen card shows the full structured trade.
     press(&mut app, KeyCode::Char('v'));
     let card = render(&mut app);
-    assert!(card.contains("SELL 25,000 sh @ $187.32 = $4.7M (code S)"), "card:\n{card}");
+    assert!(
+        card.contains("SELL 25,000 sh @ $187.32 = $4.7M (code S)"),
+        "card:\n{card}"
+    );
     assert!(card.contains("STEVENS MARK A (Director)"), "card:\n{card}");
     assert!(card.contains("2026-07-09"), "card:\n{card}");
 }
@@ -977,7 +1085,11 @@ fn insider_app_with_chart() -> App {
     sold.original.uid = "uid-1".into();
     app.feeds.insert(
         alphai::insider_key("AAPL"),
-        FeedBundle::new(vec![sold], Some(FeedPayload::Insider(Box::new(trades))), None),
+        FeedBundle::new(
+            vec![sold],
+            Some(FeedPayload::Insider(Box::new(trades))),
+            None,
+        ),
     );
     app
 }
@@ -988,29 +1100,50 @@ fn insider_app_with_chart() -> App {
 fn insider_chart_panel_draws_and_cycles() {
     let mut app = insider_app_with_chart();
     let screen = render(&mut app);
-    assert!(screen.contains("Form 4 · 3m"), "panel title missing:\n{screen}");
+    assert!(
+        screen.contains("Form 4 · 3m"),
+        "panel title missing:\n{screen}"
+    );
     // Window totals in the title: both sides priced.
     assert!(screen.contains("▼ $10.9M"), "sell total missing:\n{screen}");
     assert!(screen.contains("▲ $500.0K"), "buy total missing:\n{screen}");
-    assert!(screen.contains("3 events"), "event count missing:\n{screen}");
+    assert!(
+        screen.contains("3 events"),
+        "event count missing:\n{screen}"
+    );
     // The three mark shapes: filled sell, hollow sale-to-issuer, filled buy.
-    assert!(screen.contains("▽"), "sale-to-issuer mark missing:\n{screen}");
+    assert!(
+        screen.contains("▽"),
+        "sale-to-issuer mark missing:\n{screen}"
+    );
     // Log decade labels from $100K up to $10M.
     assert!(screen.contains("$10M"), "decade label missing:\n{screen}");
     assert!(screen.contains("$100K"), "decade label missing:\n{screen}");
-    assert!(screen.contains("▲ buy · ▼ sell · ▽ to issuer"), "legend missing:\n{screen}");
+    assert!(
+        screen.contains("▲ buy · ▼ sell · ▽ to issuer"),
+        "legend missing:\n{screen}"
+    );
     // Weekly bars: two-sided window renders block glyphs under the scatter.
     assert!(has_candles(&screen), "weekly bars missing:\n{screen}");
     // The selected filing's extras join the detail pane by uid.
-    assert!(screen.contains("stake -100.0%"), "stake extra missing:\n{screen}");
-    assert!(screen.contains("8 tranches"), "tranche extra missing:\n{screen}");
+    assert!(
+        screen.contains("stake -100.0%"),
+        "stake extra missing:\n{screen}"
+    );
+    assert!(
+        screen.contains("8 tranches"),
+        "tranche extra missing:\n{screen}"
+    );
 
     // g cycles 3m -> 12m -> off -> 3m; the panel yields its rows when off.
     press(&mut app, KeyCode::Char('g'));
     assert!(render(&mut app).contains("Form 4 · 12m"));
     press(&mut app, KeyCode::Char('g'));
     let screen = render(&mut app);
-    assert!(!screen.contains("Form 4 ·"), "panel must hide when off:\n{screen}");
+    assert!(
+        !screen.contains("Form 4 ·"),
+        "panel must hide when off:\n{screen}"
+    );
     press(&mut app, KeyCode::Char('g'));
     assert!(render(&mut app).contains("Form 4 · 3m"));
 }
@@ -1022,12 +1155,21 @@ fn insider_chart_degrades_bars_then_panel() {
     let mut app = insider_app_with_chart();
     // 24-row terminal: the panel fits only without its bars.
     let screen = render_sized(&mut app, 100, 24);
-    assert!(screen.contains("Form 4 · 3m"), "short panel missing:\n{screen}");
-    assert!(!has_candles(&screen), "bars must drop on short terminals:\n{screen}");
+    assert!(
+        screen.contains("Form 4 · 3m"),
+        "short panel missing:\n{screen}"
+    );
+    assert!(
+        !has_candles(&screen),
+        "bars must drop on short terminals:\n{screen}"
+    );
     // 20 rows: the panel is gone, the list and detail stay.
     let screen = render_sized(&mut app, 100, 20);
     assert!(!screen.contains("Form 4 ·"), "panel must yield:\n{screen}");
-    assert!(screen.contains("Apple insider sold"), "list lost:\n{screen}");
+    assert!(
+        screen.contains("Apple insider sold"),
+        "list lost:\n{screen}"
+    );
 }
 
 /// +/- on the Insider view adjust the insider filter only, and the refetch
@@ -1049,10 +1191,18 @@ fn insider_score_keys_adjust_own_filter() {
     let news_before = app.news_min_score;
     press(&mut app, KeyCode::Char('+'));
     assert_eq!(app.insider_min_score, 5);
-    assert_eq!(app.news_min_score, news_before, "+ leaked into the news filter");
+    assert_eq!(
+        app.news_min_score, news_before,
+        "+ leaked into the news filter"
+    );
     app.ensure_alphai_data();
     match cmds.try_recv() {
-        Ok(alphai::Cmd::FetchInsider { symbol, cursor, min_relevance, .. }) => {
+        Ok(alphai::Cmd::FetchInsider {
+            symbol,
+            cursor,
+            min_relevance,
+            ..
+        }) => {
             assert_eq!(symbol, "AAPL");
             assert_eq!(cursor, None);
             assert_eq!(min_relevance, Some(5));
@@ -1092,9 +1242,15 @@ fn market_scope_shows_tickers_and_sources_count() {
         ),
     );
     let screen = render(&mut app);
-    assert!(screen.contains("AAPL,MSFT"), "ticker cell missing:\n{screen}");
+    assert!(
+        screen.contains("AAPL,MSFT"),
+        "ticker cell missing:\n{screen}"
+    );
     assert!(screen.contains("×7"), "outlet count missing:\n{screen}");
-    assert!(screen.contains("reprints collapsed"), "head line missing:\n{screen}");
+    assert!(
+        screen.contains("reprints collapsed"),
+        "head line missing:\n{screen}"
+    );
 }
 
 #[test]
@@ -1112,7 +1268,10 @@ fn trending_view_lists_articles() {
     );
     let screen = render(&mut app);
     assert!(screen.contains("News · trending"), "screen:\n{screen}");
-    assert!(screen.contains("top 10 of the last 48h"), "screen:\n{screen}");
+    assert!(
+        screen.contains("top 10 of the last 48h"),
+        "screen:\n{screen}"
+    );
     assert!(screen.contains("Chip stocks rally"), "screen:\n{screen}");
     assert!(screen.contains("×5"), "outlet count missing:\n{screen}");
 }
@@ -1133,17 +1292,29 @@ fn article_overlay_opens_scrolls_and_closes() {
     assert!(app.article_overlay.open);
     let screen = render(&mut app);
     assert!(screen.contains("Article"), "overlay missing:\n{screen}");
-    assert!(screen.contains("price: +2-4% near term"), "impact missing:\n{screen}");
+    assert!(
+        screen.contains("price: +2-4% near term"),
+        "impact missing:\n{screen}"
+    );
     assert!(screen.contains("Trading value"), "screen:\n{screen}");
-    assert!(screen.contains("contrarian: Priced in already."), "screen:\n{screen}");
-    assert!(screen.contains("entities: Acme (company)"), "screen:\n{screen}");
+    assert!(
+        screen.contains("contrarian: Priced in already."),
+        "screen:\n{screen}"
+    );
+    assert!(
+        screen.contains("entities: Acme (company)"),
+        "screen:\n{screen}"
+    );
     press(&mut app, KeyCode::Char('j'));
     assert_eq!(app.article_overlay.scroll, 1);
     render(&mut app); // must not panic; the render pass clamps the scroll
     press(&mut app, KeyCode::Esc);
     assert!(!app.article_overlay.open);
     // The card pane still shows the article; only the modal frame must go.
-    assert!(!render(&mut app).contains(" Article "), "overlay did not close");
+    assert!(
+        !render(&mut app).contains(" Article "),
+        "overlay did not close"
+    );
 }
 
 #[test]
@@ -1183,8 +1354,14 @@ fn overlay_works_from_insider_view() {
     press(&mut app, KeyCode::Char('v'));
     assert!(app.article_overlay.open);
     let screen = render(&mut app);
-    assert!(screen.contains("Officer bought 10,000 shares"), "screen:\n{screen}");
-    assert!(screen.contains("Summary of Officer bought"), "screen:\n{screen}");
+    assert!(
+        screen.contains("Officer bought 10,000 shares"),
+        "screen:\n{screen}"
+    );
+    assert!(
+        screen.contains("Summary of Officer bought"),
+        "screen:\n{screen}"
+    );
 }
 
 #[test]
@@ -1192,7 +1369,10 @@ fn overlay_noop_when_no_articles() {
     let mut app = fake_app();
     app.view_idx = ui::view_index(ui::ViewId::News);
     press(&mut app, KeyCode::Char('v'));
-    assert!(!app.article_overlay.open, "overlay opened with nothing to show");
+    assert!(
+        !app.article_overlay.open,
+        "overlay opened with nothing to show"
+    );
 }
 
 #[test]
@@ -1210,8 +1390,14 @@ fn news_card_pane_shown_by_default() {
     let screen = render(&mut app);
     // The full AI card sits next to the list without opening the overlay.
     assert!(screen.contains(" card ·"), "card pane missing:\n{screen}");
-    assert!(screen.contains("Trading value"), "card content missing:\n{screen}");
-    assert!(screen.contains("contrarian: Priced in already."), "screen:\n{screen}");
+    assert!(
+        screen.contains("Trading value"),
+        "card content missing:\n{screen}"
+    );
+    assert!(
+        screen.contains("contrarian: Priced in already."),
+        "screen:\n{screen}"
+    );
 }
 
 #[test]
@@ -1230,7 +1416,10 @@ fn x_cycles_news_layout() {
     press(&mut app, KeyCode::Char('x'));
     assert_eq!(app.news_layout, NewsLayout::Stacked);
     let screen = render(&mut app);
-    assert!(screen.contains(" card ·"), "card pane missing in stacked:\n{screen}");
+    assert!(
+        screen.contains(" card ·"),
+        "card pane missing in stacked:\n{screen}"
+    );
     press(&mut app, KeyCode::Char('x'));
     assert_eq!(app.news_layout, NewsLayout::Side);
 }
@@ -1257,15 +1446,26 @@ fn score_keys_adjust_filter_and_refetch() {
     assert!(cmds.try_recv().is_err(), "matching filter refetched");
 
     // The title advertises the active filter before and after the change.
-    assert!(render(&mut app).contains("score 7+"), "filter missing from the title");
+    assert!(
+        render(&mut app).contains("score 7+"),
+        "filter missing from the title"
+    );
     press(&mut app, KeyCode::Char('+'));
     assert_eq!(app.news_min_score, 8);
-    assert_eq!(app.news_selected, 0, "selection not reset on a filter change");
+    assert_eq!(
+        app.news_selected, 0,
+        "selection not reset on a filter change"
+    );
     assert!(render(&mut app).contains("score 8+"));
 
     app.ensure_alphai_data();
     match cmds.try_recv() {
-        Ok(alphai::Cmd::FetchNews { symbol, cursor, min_relevance, .. }) => {
+        Ok(alphai::Cmd::FetchNews {
+            symbol,
+            cursor,
+            min_relevance,
+            ..
+        }) => {
             assert_eq!(symbol.as_deref(), Some("AAPL"));
             assert_eq!(cursor, None, "filter change must restart from page 1");
             assert_eq!(min_relevance, Some(8));
@@ -1274,7 +1474,10 @@ fn score_keys_adjust_filter_and_refetch() {
     }
     // The second ensure pass is absorbed by the inflight guard.
     app.ensure_alphai_data();
-    assert!(cmds.try_recv().is_err(), "duplicate refetch for one filter change");
+    assert!(
+        cmds.try_recv().is_err(),
+        "duplicate refetch for one filter change"
+    );
 }
 
 #[test]
@@ -1310,13 +1513,25 @@ fn narrow_news_view_hides_side_card() {
     // The pane title carries "pgup/pgdn scroll"; the footer's "v card" hint
     // stays in both sizes, so it cannot be the needle.
     let wide = render_sized(&mut app, 100, 30);
-    assert!(wide.contains("pgup/pgdn scroll"), "card pane missing at 100 cols:\n{wide}");
+    assert!(
+        wide.contains("pgup/pgdn scroll"),
+        "card pane missing at 100 cols:\n{wide}"
+    );
     let narrow = render_sized(&mut app, 80, 30);
-    assert!(!narrow.contains("pgup/pgdn scroll"), "card pane still there at 80 cols:\n{narrow}");
-    assert!(narrow.contains("Apple beats expectations"), "list missing:\n{narrow}");
+    assert!(
+        !narrow.contains("pgup/pgdn scroll"),
+        "card pane still there at 80 cols:\n{narrow}"
+    );
+    assert!(
+        narrow.contains("Apple beats expectations"),
+        "list missing:\n{narrow}"
+    );
     press(&mut app, KeyCode::Char('v'));
     let overlay = render_sized(&mut app, 80, 30);
-    assert!(overlay.contains(" Article "), "v overlay unavailable when narrow:\n{overlay}");
+    assert!(
+        overlay.contains(" Article "),
+        "v overlay unavailable when narrow:\n{overlay}"
+    );
 }
 
 /// Ages under 15 minutes count as breaking (they render in the accent
@@ -1352,7 +1567,12 @@ fn j_at_last_row_requests_next_page() {
     );
     press(&mut app, KeyCode::Char('j'));
     match cmds.try_recv() {
-        Ok(alphai::Cmd::FetchNews { symbol, cursor, min_relevance, .. }) => {
+        Ok(alphai::Cmd::FetchNews {
+            symbol,
+            cursor,
+            min_relevance,
+            ..
+        }) => {
             assert_eq!(symbol.as_deref(), Some("AAPL"));
             assert_eq!(cursor.as_deref(), Some("cur1"));
             assert_eq!(min_relevance, Some(app.news_min_score));
@@ -1361,7 +1581,10 @@ fn j_at_last_row_requests_next_page() {
     }
     // While the page is in flight the hint reports progress and a second j
     // must not spend another request.
-    assert!(render(&mut app).contains("loading…"), "no in-flight feedback");
+    assert!(
+        render(&mut app).contains("loading…"),
+        "no in-flight feedback"
+    );
     press(&mut app, KeyCode::Char('j'));
     assert!(cmds.try_recv().is_err(), "duplicate page fetch sent");
 }
@@ -1380,7 +1603,12 @@ fn insider_j_at_last_row_requests_next_page() {
     );
     press(&mut app, KeyCode::Char('j'));
     match cmds.try_recv() {
-        Ok(alphai::Cmd::FetchInsider { symbol, cursor, min_relevance, .. }) => {
+        Ok(alphai::Cmd::FetchInsider {
+            symbol,
+            cursor,
+            min_relevance,
+            ..
+        }) => {
             assert_eq!(symbol, "AAPL");
             assert_eq!(cursor.as_deref(), Some("cur9"));
             assert_eq!(min_relevance, Some(app.insider_min_score));
@@ -1420,7 +1648,10 @@ fn page_append_extends_list_and_dedupes() {
     );
     app.apply_alphai(alphai::Event::Feed {
         key: "AAPL".into(),
-        articles: vec![uid_article("aaa", "First reprint"), uid_article("bbb", "Second")],
+        articles: vec![
+            uid_article("aaa", "First reprint"),
+            uid_article("bbb", "Second"),
+        ],
         side: None,
         next_cursor: Some("c2".into()),
         mode: alphai::FeedMode::Append,
@@ -1459,17 +1690,29 @@ fn refetch_marks_new_rows_until_hovered() {
         ],
         Some(7),
     );
-    assert!(app.is_unseen("AAPL", &app.feeds["AAPL"].articles[0]), "new row unmarked");
-    assert!(!app.is_unseen("AAPL", &app.feeds["AAPL"].articles[1]), "old row marked");
+    assert!(
+        app.is_unseen("AAPL", &app.feeds["AAPL"].articles[0]),
+        "new row unmarked"
+    );
+    assert!(
+        !app.is_unseen("AAPL", &app.feeds["AAPL"].articles[1]),
+        "old row marked"
+    );
 
     // The marker renders while the cursor is parked elsewhere...
     app.news_selected = 1;
     let screen = render(&mut app);
-    assert!(screen.contains("● Breaking story"), "marker missing:\n{screen}");
+    assert!(
+        screen.contains("● Breaking story"),
+        "marker missing:\n{screen}"
+    );
     // ...and hovering the row retires it.
     app.news_selected = 0;
     let screen = render(&mut app);
-    assert!(!screen.contains("●"), "marker survived the hover:\n{screen}");
+    assert!(
+        !screen.contains("●"),
+        "marker survived the hover:\n{screen}"
+    );
 
     // Manual r drops the bundle but not the seen set: the refetch after it
     // still marks only what is genuinely new.
@@ -1477,11 +1720,20 @@ fn refetch_marks_new_rows_until_hovered() {
     head_fetch(
         &mut app,
         "AAPL",
-        vec![uid_article("ddd", "Newer still"), uid_article("ccc", "Breaking story")],
+        vec![
+            uid_article("ddd", "Newer still"),
+            uid_article("ccc", "Breaking story"),
+        ],
         Some(7),
     );
-    assert!(app.is_unseen("AAPL", &app.feeds["AAPL"].articles[0]), "post-r new row unmarked");
-    assert!(!app.is_unseen("AAPL", &app.feeds["AAPL"].articles[1]), "post-r hovered row marked");
+    assert!(
+        app.is_unseen("AAPL", &app.feeds["AAPL"].articles[0]),
+        "post-r new row unmarked"
+    );
+    assert!(
+        !app.is_unseen("AAPL", &app.feeds["AAPL"].articles[1]),
+        "post-r hovered row marked"
+    );
 }
 
 /// Paged-in older rows and a refetch after moving the score filter are the
@@ -1508,7 +1760,10 @@ fn pagination_and_filter_moves_never_mark() {
     head_fetch(
         &mut app,
         "AAPL",
-        vec![uid_article("aaa", "First"), uid_article("low", "Low score story")],
+        vec![
+            uid_article("aaa", "First"),
+            uid_article("low", "Low score story"),
+        ],
         Some(6),
     );
     assert!(
@@ -1526,14 +1781,23 @@ fn split_strip_shows_markers_without_clearing() {
     head_fetch(
         &mut app,
         "AAPL",
-        vec![uid_article("ccc", "Breaking story"), uid_article("aaa", "First")],
+        vec![
+            uid_article("ccc", "Breaking story"),
+            uid_article("aaa", "First"),
+        ],
         Some(7),
     );
     app.view_idx = ui::view_index(ui::ViewId::Split);
     let screen = render(&mut app);
-    assert!(screen.contains("● Breaking story"), "marker missing:\n{screen}");
+    assert!(
+        screen.contains("● Breaking story"),
+        "marker missing:\n{screen}"
+    );
     let screen = render(&mut app);
-    assert!(screen.contains("● Breaking story"), "the strip retired a marker:\n{screen}");
+    assert!(
+        screen.contains("● Breaking story"),
+        "the strip retired a marker:\n{screen}"
+    );
 }
 
 #[test]
@@ -1558,8 +1822,14 @@ fn archive_gate_shows_upsell_and_stops_paging() {
     assert_eq!(b.next_cursor, None, "gated feed still offers a cursor");
     // The list survives and the hint sells the upgrade instead of an error.
     let screen = render(&mut app);
-    assert!(screen.contains("Apple beats expectations"), "list dropped:\n{screen}");
-    assert!(screen.contains("archive limit"), "upsell missing:\n{screen}");
+    assert!(
+        screen.contains("Apple beats expectations"),
+        "list dropped:\n{screen}"
+    );
+    assert!(
+        screen.contains("archive limit"),
+        "upsell missing:\n{screen}"
+    );
     press(&mut app, KeyCode::Char('j'));
     assert!(cmds.try_recv().is_err(), "gated feed still paged");
 }
@@ -1611,14 +1881,26 @@ fn delta_merge_prepends_arrivals_and_dedupes() {
         "d2",
     );
     let b = &app.feeds["AAPL"];
-    let titles: Vec<&str> = b.articles.iter().map(|a| a.original.title.as_str()).collect();
+    let titles: Vec<&str> = b
+        .articles
+        .iter()
+        .map(|a| a.original.title.as_str())
+        .collect();
     assert_eq!(
         titles,
-        ["Arrived, published later", "Arrived, published earlier", "Shown"],
+        [
+            "Arrived, published later",
+            "Arrived, published earlier",
+            "Shown"
+        ],
         "arrivals must sit on top, newest publication first"
     );
     assert_eq!(b.delta_cursor.as_deref(), Some("d2"));
-    assert_eq!(b.next_cursor.as_deref(), Some("page1"), "merge moved the paging cursor");
+    assert_eq!(
+        b.next_cursor.as_deref(),
+        Some("page1"),
+        "merge moved the paging cursor"
+    );
 }
 
 /// The priming poll back-fills what the published head page could not show,
@@ -1628,7 +1910,12 @@ fn delta_prime_is_a_baseline_and_later_polls_mark() {
     let mut app = empty_app(vec!["AAPL".into()]);
     app.view_idx = ui::view_index(ui::ViewId::News);
     head_fetch(&mut app, "AAPL", vec![uid_article("aaa", "First")], Some(7));
-    delta_page(&mut app, "AAPL", vec![uid_article("bbb", "Late arrival")], "d1");
+    delta_page(
+        &mut app,
+        "AAPL",
+        vec![uid_article("bbb", "Late arrival")],
+        "d1",
+    );
     assert!(
         !app.is_unseen("AAPL", &app.feeds["AAPL"].articles[0]),
         "the priming page marked a row as new"
@@ -1658,13 +1945,18 @@ fn merge_keeps_the_row_under_the_cursor() {
     delta_page(
         &mut app,
         "AAPL",
-        vec![uid_article("ccc", "Arrived"), uid_article("ddd", "Also arrived")],
+        vec![
+            uid_article("ccc", "Arrived"),
+            uid_article("ddd", "Also arrived"),
+        ],
         "d2",
     );
-    assert_eq!(app.news_selected, 3, "the cursor did not move with the rows");
     assert_eq!(
-        app.feeds["AAPL"].articles[app.news_selected].original.title,
-        "Second",
+        app.news_selected, 3,
+        "the cursor did not move with the rows"
+    );
+    assert_eq!(
+        app.feeds["AAPL"].articles[app.news_selected].original.title, "Second",
         "the cursor changed rows under the reader"
     );
 
@@ -1673,7 +1965,12 @@ fn merge_keeps_the_row_under_the_cursor() {
         insider.clone(),
         FeedBundle::new(vec![uid_article("i1", "Filing")], None, None),
     );
-    delta_page(&mut app, &insider, vec![uid_article("i2", "New filing")], "d3");
+    delta_page(
+        &mut app,
+        &insider,
+        vec![uid_article("i2", "New filing")],
+        "d3",
+    );
     assert_eq!(app.news_selected, 3, "a merge off screen moved the cursor");
 }
 
@@ -1697,7 +1994,10 @@ fn poll_error_keeps_the_feed_and_stops_polling() {
         error: "AlphaAI API 429: slow down".into(),
     });
     let screen = render(&mut app);
-    assert!(screen.contains("Apple beats expectations"), "poll error blanked the feed:\n{screen}");
+    assert!(
+        screen.contains("Apple beats expectations"),
+        "poll error blanked the feed:\n{screen}"
+    );
     assert!(screen.contains("429"), "poll error not reported:\n{screen}");
     app.feeds.get_mut("AAPL").unwrap().polled =
         Instant::now() - std::time::Duration::from_secs(600);
@@ -1720,14 +2020,21 @@ fn poll_reprime_drops_the_position_and_primes_again() {
     let b = &app.feeds["AAPL"];
     assert_eq!(b.delta_cursor, None, "the rejected position survived");
     assert!(!b.poll_stopped, "a reprime must not stop polling");
-    assert!(app.alphai_errors.is_empty(), "a reprime surfaced as an error");
+    assert!(
+        app.alphai_errors.is_empty(),
+        "a reprime surfaced as an error"
+    );
     app.feeds.get_mut("AAPL").unwrap().polled =
         Instant::now() - std::time::Duration::from_secs(600);
     app.ensure_alphai_data();
     assert!(
         matches!(
             cmds.try_recv(),
-            Ok(alphai::Cmd::FetchNews { cursor: None, sort: alphai::Sort::Ingested, .. })
+            Ok(alphai::Cmd::FetchNews {
+                cursor: None,
+                sort: alphai::Sort::Ingested,
+                ..
+            })
         ),
         "the next tick did not prime a fresh position"
     );
@@ -1748,13 +2055,19 @@ fn an_open_overlay_pauses_the_poll() {
         Instant::now() - std::time::Duration::from_secs(600);
     app.article_overlay.open = true;
     app.ensure_alphai_data();
-    assert!(cmds.try_recv().is_err(), "polled with the article overlay open");
+    assert!(
+        cmds.try_recv().is_err(),
+        "polled with the article overlay open"
+    );
     app.article_overlay.open = false;
     app.ensure_alphai_data();
     assert!(
         matches!(
             cmds.try_recv(),
-            Ok(alphai::Cmd::FetchNews { sort: alphai::Sort::Ingested, .. })
+            Ok(alphai::Cmd::FetchNews {
+                sort: alphai::Sort::Ingested,
+                ..
+            })
         ),
         "the poll did not resume once the overlay closed"
     );
@@ -1769,7 +2082,11 @@ fn trending_tick_stays_a_head_refetch() {
     app.news_scope = NewsScope::Trending;
     app.feeds.insert(
         alphai::TRENDING_KEY.into(),
-        FeedBundle::new(vec![article("Trending story", "AAPL", 9, "positive")], None, None),
+        FeedBundle::new(
+            vec![article("Trending story", "AAPL", 9, "positive")],
+            None,
+            None,
+        ),
     );
     let stale = Instant::now() - std::time::Duration::from_secs(600);
     let b = app.feeds.get_mut(alphai::TRENDING_KEY).unwrap();
@@ -1807,7 +2124,11 @@ fn ttl_tick_polls_wherever_the_reader_is() {
     match cmds.try_recv() {
         Ok(alphai::Cmd::FetchNews { cursor, sort, .. }) => {
             assert_eq!(cursor, None, "the first poll primes a position");
-            assert_eq!(sort, alphai::Sort::Ingested, "the tick must be a delta poll");
+            assert_eq!(
+                sort,
+                alphai::Sort::Ingested,
+                "the tick must be a delta poll"
+            );
         }
         other => panic!("expected a delta poll, got {:?}", other.is_ok()),
     }
@@ -1834,7 +2155,10 @@ fn head_refresh_still_waits_for_top_row() {
     assert!(
         matches!(
             cmds.try_recv(),
-            Ok(alphai::Cmd::FetchNews { sort: alphai::Sort::Ingested, .. })
+            Ok(alphai::Cmd::FetchNews {
+                sort: alphai::Sort::Ingested,
+                ..
+            })
         ),
         "a head fetch cannot run under the reader"
     );
@@ -1852,7 +2176,11 @@ fn head_refresh_still_waits_for_top_row() {
     assert!(
         matches!(
             cmds.try_recv(),
-            Ok(alphai::Cmd::FetchNews { cursor: None, sort: alphai::Sort::Published, .. })
+            Ok(alphai::Cmd::FetchNews {
+                cursor: None,
+                sort: alphai::Sort::Published,
+                ..
+            })
         ),
         "no head refresh at the top row"
     );
@@ -1948,13 +2276,19 @@ fn narrow_watchlist_drops_columns_instead_of_truncating() {
 
     // Room for everything but the range column.
     let mid = render_sized(&mut app, 60, 12);
-    assert!(!mid.contains("Lo–Hi"), "range column should be gone:\n{mid}");
+    assert!(
+        !mid.contains("Lo–Hi"),
+        "range column should be gone:\n{mid}"
+    );
     assert!(mid.contains("214.50"), "price truncated:\n{mid}");
     assert!(mid.contains("+7.25%"), "percent truncated:\n{mid}");
 
     // Narrower still: the absolute change goes too, the price stays whole.
     let narrow = render_sized(&mut app, 46, 12);
-    assert!(!narrow.contains("+14.50"), "change should be gone:\n{narrow}");
+    assert!(
+        !narrow.contains("+14.50"),
+        "change should be gone:\n{narrow}"
+    );
     assert!(narrow.contains("214.50"), "price truncated:\n{narrow}");
     assert!(narrow.contains("+7.25%"), "percent truncated:\n{narrow}");
 }
@@ -2015,8 +2349,16 @@ fn theme_key_cycles_presets_over_explicit_slots() {
     app.theme.border_type = BorderType::Plain;
     app.set_theme("catppuccin-mocha");
     assert_eq!(app.theme.accent, Color::Rgb(0xcb, 0xa6, 0xf7));
-    assert_eq!(app.theme.up, Color::Rgb(0x00, 0xc8, 0x53), "explicit slot lost");
-    assert_eq!(app.theme.border_type, BorderType::Plain, "[ui] borders lost");
+    assert_eq!(
+        app.theme.up,
+        Color::Rgb(0x00, 0xc8, 0x53),
+        "explicit slot lost"
+    );
+    assert_eq!(
+        app.theme.border_type,
+        BorderType::Plain,
+        "[ui] borders lost"
+    );
 
     press(&mut app, KeyCode::Char('p'));
     assert_eq!(app.theme_name, "catppuccin-macchiato");
@@ -2042,7 +2384,10 @@ fn theme_key_cycles_presets_over_explicit_slots() {
 fn settings_theme_row_persists_the_preset() {
     let mut app = empty_app(vec!["AAPL".into()]);
     press(&mut app, KeyCode::Char('s'));
-    while !matches!(settings_rows()[app.settings.cursor], SettingsRow::ThemeChoice) {
+    while !matches!(
+        settings_rows()[app.settings.cursor],
+        SettingsRow::ThemeChoice
+    ) {
         press(&mut app, KeyCode::Down);
     }
     let screen = render(&mut app);
@@ -2063,7 +2408,10 @@ fn settings_theme_row_persists_the_preset() {
     assert_eq!(app.theme_name, "catppuccin-mocha");
     let cfg = app.settings_merged_config();
     assert_eq!(
-        cfg.theme.as_ref().and_then(|t| t.get("preset")).map(String::as_str),
+        cfg.theme
+            .as_ref()
+            .and_then(|t| t.get("preset"))
+            .map(String::as_str),
         Some("catppuccin-mocha")
     );
 
@@ -2144,14 +2492,26 @@ fn settings_save_merge_preserves_file_only_sections() {
         "magenta".to_string(),
     )]));
     app.open_settings();
-    app.settings.key_values.insert("alphai", "ak_live_new".into());
+    app.settings
+        .key_values
+        .insert("alphai", "ak_live_new".into());
     let merged = app.settings_merged_config();
     assert_eq!(
-        merged.theme.as_ref().and_then(|t| t.get("accent")).map(String::as_str),
+        merged
+            .theme
+            .as_ref()
+            .and_then(|t| t.get("accent"))
+            .map(String::as_str),
         Some("magenta")
     );
-    assert_eq!(merged.keys.get("alphai").map(String::as_str), Some("ak_live_new"));
-    assert_eq!(merged.watchlist, vec!["AAPL".to_string(), "MSFT".to_string()]);
+    assert_eq!(
+        merged.keys.get("alphai").map(String::as_str),
+        Some("ak_live_new")
+    );
+    assert_eq!(
+        merged.watchlist,
+        vec!["AAPL".to_string(), "MSFT".to_string()]
+    );
 }
 
 /// The single-copy guards must hold for every feed kind: the insider tick
@@ -2183,7 +2543,10 @@ fn insider_tick_polls_and_head_refresh_waits_for_top_row() {
     assert!(
         matches!(
             cmds.try_recv(),
-            Ok(alphai::Cmd::FetchInsider { sort: alphai::Sort::Ingested, .. })
+            Ok(alphai::Cmd::FetchInsider {
+                sort: alphai::Sort::Ingested,
+                ..
+            })
         ),
         "insider head fetch ran under the reader"
     );
@@ -2200,7 +2563,11 @@ fn insider_tick_polls_and_head_refresh_waits_for_top_row() {
     assert!(
         matches!(
             cmds.try_recv(),
-            Ok(alphai::Cmd::FetchInsider { cursor: None, sort: alphai::Sort::Published, .. })
+            Ok(alphai::Cmd::FetchInsider {
+                cursor: None,
+                sort: alphai::Sort::Published,
+                ..
+            })
         ),
         "no insider head refresh at the top row"
     );
@@ -2219,7 +2586,9 @@ fn settings_alphai_key_hint_when_missing() {
         "missing-key hint absent:\n{screen}"
     );
     // Once a key is stored the hint disappears.
-    app.config.keys.insert("alphai".into(), "ak_live_abcdefgh1234".into());
+    app.config
+        .keys
+        .insert("alphai".into(), "ak_live_abcdefgh1234".into());
     app.open_settings();
     let screen = render(&mut app);
     assert!(
@@ -2231,8 +2600,12 @@ fn settings_alphai_key_hint_when_missing() {
 #[test]
 fn settings_overlay_masks_keys() {
     let mut app = fake_app();
-    app.config.keys.insert("alphai".into(), "ak_live_abcdefgh1234".into());
-    app.config.keys.insert("alpaca_secret".into(), "alpaca-secret-abcd9876".into());
+    app.config
+        .keys
+        .insert("alphai".into(), "ak_live_abcdefgh1234".into());
+    app.config
+        .keys
+        .insert("alpaca_secret".into(), "alpaca-secret-abcd9876".into());
     app.open_settings();
     let screen = render(&mut app);
     assert!(screen.contains("Settings"), "screen:\n{screen}");
@@ -2280,7 +2653,10 @@ fn first_run_opens_settings_with_welcome() {
     });
     assert!(app.settings.open);
     let screen = render(&mut app);
-    assert!(screen.contains("Welcome to alphai-tui"), "screen:\n{screen}");
+    assert!(
+        screen.contains("Welcome to alphai-tui"),
+        "screen:\n{screen}"
+    );
     assert!(screen.contains("https://alphai.io"), "screen:\n{screen}");
 }
 
@@ -2330,13 +2706,22 @@ fn settings_poll_every_rejects_bad_input() {
             press(&mut app, KeyCode::Down);
         }
         press(&mut app, KeyCode::Enter);
-        assert!(app.settings.open, "at {bad:?}: settings closed on bad input");
         assert!(
-            app.settings.message.as_deref().is_some_and(|m| m.contains("poll interval")),
+            app.settings.open,
+            "at {bad:?}: settings closed on bad input"
+        );
+        assert!(
+            app.settings
+                .message
+                .as_deref()
+                .is_some_and(|m| m.contains("poll interval")),
             "at {bad:?}: no validation message"
         );
         assert_eq!(app.config.every, None, "at {bad:?}: bad value persisted");
         app.open_settings();
-        assert_eq!(app.settings.every_input, "15", "at {bad:?}: live interval changed");
+        assert_eq!(
+            app.settings.every_input, "15",
+            "at {bad:?}: live interval changed"
+        );
     }
 }

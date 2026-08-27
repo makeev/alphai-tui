@@ -10,8 +10,14 @@ use crate::domain::{Interval, Range, TickerData, fetch_range};
 use crate::source::DataSource;
 
 pub enum SourceEvent {
-    Data { symbol: String, data: TickerData },
-    Error { symbol: String, error: String },
+    Data {
+        symbol: String,
+        data: TickerData,
+    },
+    Error {
+        symbol: String,
+        error: String,
+    },
     /// News / insider / sentiment results from the AlphaAI task.
     Alphai(alphai::Event),
 }

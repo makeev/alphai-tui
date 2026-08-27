@@ -94,7 +94,9 @@ pub fn render(f: &mut Frame, app: &mut App) {
     let max_scroll = (lines.len() as u16).saturating_sub(area.height.saturating_sub(2));
     app.help.scroll = app.help.scroll.min(max_scroll);
     f.render_widget(
-        Paragraph::new(lines).scroll((app.help.scroll, 0)).block(block),
+        Paragraph::new(lines)
+            .scroll((app.help.scroll, 0))
+            .block(block),
         area,
     );
 }

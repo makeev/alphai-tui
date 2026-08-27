@@ -75,7 +75,10 @@ fn main() -> Result<()> {
     } else if !cfg.watchlist.is_empty() {
         cfg.watchlist.iter().map(|s| s.to_uppercase()).collect()
     } else {
-        config::DEFAULT_WATCHLIST.iter().map(|s| s.to_string()).collect()
+        config::DEFAULT_WATCHLIST
+            .iter()
+            .map(|s| s.to_string())
+            .collect()
     };
 
     let source_name = args

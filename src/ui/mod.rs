@@ -39,11 +39,19 @@ pub struct Hint {
 
 impl Hint {
     pub const fn act(actions: &'static [Action], label: &'static str) -> Self {
-        Self { actions, fixed: "", label }
+        Self {
+            actions,
+            fixed: "",
+            label,
+        }
     }
 
     pub const fn fixed(fixed: &'static str, label: &'static str) -> Self {
-        Self { actions: &[], fixed, label }
+        Self {
+            actions: &[],
+            fixed,
+            label,
+        }
     }
 }
 
@@ -117,9 +125,12 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     // Before rows are built, so the hovered row renders without its unseen
     // marker on this very frame.
     app.mark_selected_seen();
-    let [header, body, footer] =
-        Layout::vertical([Constraint::Length(1), Constraint::Min(0), Constraint::Length(1)])
-            .areas(f.area());
+    let [header, body, footer] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Min(0),
+        Constraint::Length(1),
+    ])
+    .areas(f.area());
 
     f.render_widget(header_line(app), header);
     VIEWS[app.view_idx].render(f, body, app);
@@ -225,7 +236,9 @@ fn footer_line(app: &App) -> Paragraph<'static> {
         let msg = ellipsize(&format!("  {symbol}: {error}"), 120);
         spans.push(Span::styled(
             msg,
-            Style::new().fg(app.theme.error).add_modifier(Modifier::BOLD),
+            Style::new()
+                .fg(app.theme.error)
+                .add_modifier(Modifier::BOLD),
         ));
     }
     Paragraph::new(Line::from(spans))

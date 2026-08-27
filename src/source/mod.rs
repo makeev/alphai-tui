@@ -95,6 +95,9 @@ mod tests {
         let mk = |ts| candle_from_ohlc(ts, None, None, None, Some(1.0), None).unwrap();
         let mut candles = vec![mk(3), mk(1), mk(2)];
         sort_ascending(&mut candles);
-        assert_eq!(candles.iter().map(|c| c.ts).collect::<Vec<_>>(), vec![1, 2, 3]);
+        assert_eq!(
+            candles.iter().map(|c| c.ts).collect::<Vec<_>>(),
+            vec![1, 2, 3]
+        );
     }
 }

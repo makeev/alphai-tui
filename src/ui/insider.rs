@@ -9,12 +9,12 @@ use crate::alphai::{Article, InsiderTrades, fmt_usd, insider_key};
 use crate::app::{App, FeedKind};
 use crate::keymap::Action;
 use crate::theme::Theme;
-use crate::ui::{Hint, View, ViewId};
 use crate::ui::insider_chart;
 use crate::ui::news::{
     feed_bottom_hint, is_fresh, render_detail, render_gate, score_cell, sentiment_cell, title_cell,
     title_width,
 };
+use crate::ui::{Hint, View, ViewId};
 
 pub struct InsiderView;
 
@@ -124,7 +124,10 @@ impl View for InsiderView {
             } else {
                 format!("no Form 4 activity for {symbol} in the feed")
             };
-            f.render_widget(Paragraph::new(Line::from(msg).dim()).block(block), list_area);
+            f.render_widget(
+                Paragraph::new(Line::from(msg).dim()).block(block),
+                list_area,
+            );
             return;
         }
 
@@ -180,7 +183,11 @@ fn event_extra(trades: Option<&InsiderTrades>, uid: &str) -> Option<String> {
         .iter()
         .find(|e| e.news_uid.as_deref() == Some(uid))?;
     let mut parts = Vec::new();
-    if let Some(pct) = e.stake_change_pct.as_deref().and_then(|p| p.parse::<f64>().ok()) {
+    if let Some(pct) = e
+        .stake_change_pct
+        .as_deref()
+        .and_then(|p| p.parse::<f64>().ok())
+    {
         parts.push(format!("stake {pct:+.1}%"));
     }
     if let Some(n) = e.tranche_count.filter(|&n| n > 1) {
@@ -232,7 +239,13 @@ fn filing_row(
         ownership_cell(a.original.ownership_form.as_deref()),
         plan,
         value,
-        title_cell(a.original.title.clone(), title_style, unseen, theme, title_w),
+        title_cell(
+            a.original.title.clone(),
+            title_style,
+            unseen,
+            theme,
+            title_w,
+        ),
     ])
 }
 
@@ -259,7 +272,9 @@ fn side_from_title(title: &str) -> Option<String> {
     let t = title.to_lowercase();
     if t.contains("sold") || t.contains("sale") {
         Some("negative".to_string())
-    } else if t.contains("bought") || t.contains("purchase") || t.contains("buy")
+    } else if t.contains("bought")
+        || t.contains("purchase")
+        || t.contains("buy")
         || t.contains("acquired")
     {
         Some("positive".to_string())

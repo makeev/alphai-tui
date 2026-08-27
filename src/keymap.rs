@@ -86,7 +86,10 @@ pub struct KeyCombo {
 }
 
 const fn plain(code: KeyCode) -> KeyCombo {
-    KeyCombo { code, mods: KeyModifiers::NONE }
+    KeyCombo {
+        code,
+        mods: KeyModifiers::NONE,
+    }
 }
 
 const fn ch(c: char) -> KeyCombo {
@@ -163,7 +166,9 @@ impl Keymap {
         let mut map = Self::default();
         for (name, specs) in entries {
             let Some(action) = ACTIONS.iter().find(|(_, n)| *n == name).map(|(a, _)| *a) else {
-                warnings.push(format!("[keybindings] unknown action \"{name}\", ignoring it"));
+                warnings.push(format!(
+                    "[keybindings] unknown action \"{name}\", ignoring it"
+                ));
                 continue;
             };
             let mut keys: Vec<KeyCombo> = Vec::new();
@@ -248,7 +253,11 @@ impl Keymap {
         let all_glyphs = labels
             .iter()
             .all(|l| l.chars().count() == 1 && !l.chars().next().unwrap().is_alphanumeric());
-        if all_glyphs { labels.concat() } else { labels.join("/") }
+        if all_glyphs {
+            labels.concat()
+        } else {
+            labels.join("/")
+        }
     }
 
     fn first_label(&self, action: Action) -> Option<String> {
@@ -297,7 +306,9 @@ pub fn parse_key(spec: &str) -> Result<KeyCombo, String> {
             ("shift-", KeyModifiers::SHIFT),
         ] {
             if rest.len() > prefix.len()
-                && rest.get(..prefix.len()).is_some_and(|p| p.eq_ignore_ascii_case(prefix))
+                && rest
+                    .get(..prefix.len())
+                    .is_some_and(|p| p.eq_ignore_ascii_case(prefix))
             {
                 mods |= m;
                 rest = &rest[prefix.len()..];
@@ -375,7 +386,10 @@ fn is_reserved(c: &KeyCombo) -> bool {
 /// for Char codes (shift-Tab already arrives as BackTab).
 fn normalize(code: KeyCode, mods: KeyModifiers) -> KeyCombo {
     match code {
-        KeyCode::Char(c) => KeyCombo { code: KeyCode::Char(c), mods: mods - KeyModifiers::SHIFT },
+        KeyCode::Char(c) => KeyCombo {
+            code: KeyCode::Char(c),
+            mods: mods - KeyModifiers::SHIFT,
+        },
         code => KeyCombo { code, mods },
     }
 }
@@ -440,8 +454,14 @@ mod tests {
         let map = Keymap::default();
         let shifted_t = KeyEvent::new(KeyCode::Char('T'), KeyModifiers::SHIFT);
         assert_eq!(map.resolve(&shifted_t), Some(Action::PrevPreset));
-        assert_eq!(map.resolve(&KeyEvent::from(KeyCode::Char('t'))), Some(Action::NextPreset));
-        assert_eq!(map.resolve(&KeyEvent::from(KeyCode::BackTab)), Some(Action::PrevView));
+        assert_eq!(
+            map.resolve(&KeyEvent::from(KeyCode::Char('t'))),
+            Some(Action::NextPreset)
+        );
+        assert_eq!(
+            map.resolve(&KeyEvent::from(KeyCode::BackTab)),
+            Some(Action::PrevView)
+        );
         assert_eq!(map.resolve(&KeyEvent::from(KeyCode::Char('z'))), None);
         // Ctrl-modified chars are distinct from plain ones.
         let ctrl_r = KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL);
@@ -454,8 +474,14 @@ mod tests {
         // '+' usually arrives shifted; '=' is its unshifted position.
         let shifted_plus = KeyEvent::new(KeyCode::Char('+'), KeyModifiers::SHIFT);
         assert_eq!(map.resolve(&shifted_plus), Some(Action::ScoreUp));
-        assert_eq!(map.resolve(&KeyEvent::from(KeyCode::Char('='))), Some(Action::ScoreUp));
-        assert_eq!(map.resolve(&KeyEvent::from(KeyCode::Char('-'))), Some(Action::ScoreDown));
+        assert_eq!(
+            map.resolve(&KeyEvent::from(KeyCode::Char('='))),
+            Some(Action::ScoreUp)
+        );
+        assert_eq!(
+            map.resolve(&KeyEvent::from(KeyCode::Char('-'))),
+            Some(Action::ScoreDown)
+        );
         // The footer shows the two filter keys as one glyph pair.
         assert_eq!(map.labels(&[Action::ScoreUp, Action::ScoreDown]), "+-");
     }
@@ -468,7 +494,10 @@ mod tests {
         assert_eq!(parse_key("shift-q"), Ok(ch('Q')));
         assert_eq!(
             parse_key("ctrl-x"),
-            Ok(KeyCombo { code: KeyCode::Char('x'), mods: KeyModifiers::CONTROL })
+            Ok(KeyCombo {
+                code: KeyCode::Char('x'),
+                mods: KeyModifiers::CONTROL
+            })
         );
         assert_eq!(
             parse_key("ctrl-alt-x"),
@@ -500,12 +529,21 @@ mod tests {
         let mut warnings = Vec::new();
         let map = Keymap::from_config([("open", vec!["z", "enter"])], &mut warnings);
         assert!(warnings.is_empty(), "{warnings:?}");
-        assert_eq!(map.resolve(&KeyEvent::from(KeyCode::Char('z'))), Some(Action::Open));
-        assert_eq!(map.resolve(&KeyEvent::from(KeyCode::Enter)), Some(Action::Open));
+        assert_eq!(
+            map.resolve(&KeyEvent::from(KeyCode::Char('z'))),
+            Some(Action::Open)
+        );
+        assert_eq!(
+            map.resolve(&KeyEvent::from(KeyCode::Enter)),
+            Some(Action::Open)
+        );
         // Replace semantics: the default 'o' is gone with the new list.
         assert_eq!(map.resolve(&KeyEvent::from(KeyCode::Char('o'))), None);
         // Unlisted actions keep their defaults.
-        assert_eq!(map.resolve(&KeyEvent::from(KeyCode::Char('q'))), Some(Action::Quit));
+        assert_eq!(
+            map.resolve(&KeyEvent::from(KeyCode::Char('q'))),
+            Some(Action::Quit)
+        );
         // The footer follows the remap through the same labels() path.
         assert_eq!(map.labels(&[Action::Open]), "z");
     }
@@ -522,7 +560,10 @@ mod tests {
         let mut warnings = Vec::new();
         let map = Keymap::from_config([("quit", vec!["supr", "esc"])], &mut warnings);
         assert_eq!(warnings.len(), 3, "{warnings:?}");
-        assert_eq!(map.resolve(&KeyEvent::from(KeyCode::Char('q'))), Some(Action::Quit));
+        assert_eq!(
+            map.resolve(&KeyEvent::from(KeyCode::Char('q'))),
+            Some(Action::Quit)
+        );
 
         // One good key among bad ones is enough to remap.
         let mut warnings = Vec::new();
@@ -540,8 +581,14 @@ mod tests {
         let mut warnings = Vec::new();
         let map = Keymap::from_config([("card", vec!["r"])], &mut warnings);
         assert_eq!(warnings.len(), 2, "{warnings:?}");
-        assert_eq!(map.resolve(&KeyEvent::from(KeyCode::Char('r'))), Some(Action::Refresh));
-        assert_eq!(map.resolve(&KeyEvent::from(KeyCode::Char('v'))), Some(Action::Card));
+        assert_eq!(
+            map.resolve(&KeyEvent::from(KeyCode::Char('r'))),
+            Some(Action::Refresh)
+        );
+        assert_eq!(
+            map.resolve(&KeyEvent::from(KeyCode::Char('v'))),
+            Some(Action::Card)
+        );
 
         // Both sides remapped by the user: no conflict remains.
         let mut warnings = Vec::new();
@@ -550,8 +597,14 @@ mod tests {
             &mut warnings,
         );
         assert!(warnings.is_empty(), "{warnings:?}");
-        assert_eq!(map.resolve(&KeyEvent::from(KeyCode::F(5))), Some(Action::Refresh));
-        assert_eq!(map.resolve(&KeyEvent::from(KeyCode::Char('r'))), Some(Action::Card));
+        assert_eq!(
+            map.resolve(&KeyEvent::from(KeyCode::F(5))),
+            Some(Action::Refresh)
+        );
+        assert_eq!(
+            map.resolve(&KeyEvent::from(KeyCode::Char('r'))),
+            Some(Action::Card)
+        );
     }
 
     #[test]

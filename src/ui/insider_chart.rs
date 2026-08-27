@@ -78,7 +78,11 @@ pub fn render(
         .filter_map(|e| {
             let date = e.transaction_date.as_deref().and_then(day)?;
             let value = e.total_value_usd.as_deref().and_then(usd)?;
-            (value > 0.0).then_some(Mark { date, value, event: e })
+            (value > 0.0).then_some(Mark {
+                date,
+                value,
+                event: e,
+            })
         })
         .collect();
 
@@ -93,7 +97,11 @@ pub fn render(
         f.render_widget(
             Paragraph::new(Line::from(format!("no Form 4 events in the last {label}")).dim())
                 .centered(),
-            Rect { y: inner.y + inner.height / 2, height: 1, ..inner },
+            Rect {
+                y: inner.y + inner.height / 2,
+                height: 1,
+                ..inner
+            },
         );
         return;
     }
@@ -101,7 +109,12 @@ pub fn render(
     // Left gutter sized to the widest decade label, like the candle chart.
     let (lo_exp, hi_exp) = log_domain(&marks);
     let y_labels: Vec<String> = (lo_exp..=hi_exp).map(decade_label).collect();
-    let gutter = y_labels.iter().map(|s| s.chars().count()).max().unwrap_or(0) as u16 + 1;
+    let gutter = y_labels
+        .iter()
+        .map(|s| s.chars().count())
+        .max()
+        .unwrap_or(0) as u16
+        + 1;
     if inner.width <= gutter + 4 || inner.height < SCATTER_ROWS + 1 {
         return; // too small: leave the bare block
     }
@@ -123,7 +136,10 @@ pub fn render(
 
     // Decade labels: top and bottom always, the middle decade when distinct.
     let row_of = |exp: f64| plot.y + value_row(10f64.powf(exp), lo_exp, hi_exp, SCATTER_ROWS);
-    let mut label_rows = vec![(hi_exp, row_of(hi_exp as f64)), (lo_exp, row_of(lo_exp as f64))];
+    let mut label_rows = vec![
+        (hi_exp, row_of(hi_exp as f64)),
+        (lo_exp, row_of(lo_exp as f64)),
+    ];
     let mid = (lo_exp + hi_exp) / 2;
     if mid != lo_exp && mid != hi_exp {
         label_rows.push((mid, row_of(mid as f64)));
@@ -137,11 +153,9 @@ pub fn render(
     // Scatter: selected mark drawn last so its inverted cell always wins;
     // a taken cell nudges the mark up, then down, then overwrites.
     let mut taken = vec![false; plot.width as usize * SCATTER_ROWS as usize];
-    let selected = |e: &TradeEvent| {
-        selected_uid.is_some_and(|uid| e.news_uid.as_deref() == Some(uid))
-    };
-    let (chosen, rest): (Vec<&Mark>, Vec<&Mark>) =
-        marks.iter().partition(|m| selected(m.event));
+    let selected =
+        |e: &TradeEvent| selected_uid.is_some_and(|uid| e.news_uid.as_deref() == Some(uid));
+    let (chosen, rest): (Vec<&Mark>, Vec<&Mark>) = marks.iter().partition(|m| selected(m.event));
     for mark in rest.iter().chain(chosen.iter()) {
         let x = col(mark.date);
         let ideal = value_row(mark.value, lo_exp, hi_exp, SCATTER_ROWS);
@@ -170,7 +184,11 @@ pub fn render(
 
     // Weekly bars under the scatter, sharing its x mapping.
     if with_bars {
-        let bars = Rect { y: plot.y + SCATTER_ROWS, height: BARS_ROWS, ..plot };
+        let bars = Rect {
+            y: plot.y + SCATTER_ROWS,
+            height: BARS_ROWS,
+            ..plot
+        };
         render_bars(buf, bars, trades, start, today, gutter, &col, theme);
     }
 
@@ -261,7 +279,9 @@ fn render_bars(
     }
     let mut bars: Vec<Bar> = Vec::new();
     for b in &trades.series_weekly {
-        let Some(week) = day(&b.week_start) else { continue };
+        let Some(week) = day(&b.week_start) else {
+            continue;
+        };
         let week_end = week + Days::new(6);
         if week_end < start || week > today {
             continue;
@@ -296,46 +316,60 @@ fn render_bars(
             return usize::from(stub);
         }
         let f = ((v / vmax) * sub_rows as f64).round() as usize;
-        if v > 0.0 || stub { f.clamp(1, sub_rows) } else { 0 }
+        if v > 0.0 || stub {
+            f.clamp(1, sub_rows)
+        } else {
+            0
+        }
     };
     // Rows filled from the bottom up ('▄' half-step), like the volume panel.
-    let up = |buf: &mut ratatui::buffer::Buffer, x0: u16, x1: u16, y: u16, h: u16, f: usize, color| {
-        for row in 0..h {
-            let lower = (h - 1 - row) as usize * 2;
-            let ch = match f.saturating_sub(lower) {
-                0 => continue,
-                1 => '▄',
-                _ => '█',
-            };
-            for x in x0..=x1 {
-                if let Some(cell) = buf.cell_mut((x, y + row)) {
-                    cell.set_char(ch).set_fg(color);
+    let up =
+        |buf: &mut ratatui::buffer::Buffer, x0: u16, x1: u16, y: u16, h: u16, f: usize, color| {
+            for row in 0..h {
+                let lower = (h - 1 - row) as usize * 2;
+                let ch = match f.saturating_sub(lower) {
+                    0 => continue,
+                    1 => '▄',
+                    _ => '█',
+                };
+                for x in x0..=x1 {
+                    if let Some(cell) = buf.cell_mut((x, y + row)) {
+                        cell.set_char(ch).set_fg(color);
+                    }
                 }
             }
-        }
-    };
+        };
     // And hanging from the zero line down ('▀' half-step) for the sell half.
-    let down = |buf: &mut ratatui::buffer::Buffer, x0: u16, x1: u16, y: u16, h: u16, f: usize, color| {
-        for row in 0..h {
-            let above = row as usize * 2;
-            let ch = match f.saturating_sub(above) {
-                0 => continue,
-                1 => '▀',
-                _ => '█',
-            };
-            for x in x0..=x1 {
-                if let Some(cell) = buf.cell_mut((x, y + row)) {
-                    cell.set_char(ch).set_fg(color);
+    let down =
+        |buf: &mut ratatui::buffer::Buffer, x0: u16, x1: u16, y: u16, h: u16, f: usize, color| {
+            for row in 0..h {
+                let above = row as usize * 2;
+                let ch = match f.saturating_sub(above) {
+                    0 => continue,
+                    1 => '▀',
+                    _ => '█',
+                };
+                for x in x0..=x1 {
+                    if let Some(cell) = buf.cell_mut((x, y + row)) {
+                        cell.set_char(ch).set_fg(color);
+                    }
                 }
             }
-        }
-    };
+        };
 
     let half = area.height / 2;
     for b in &bars {
         if two_sided {
             let sub = half as usize * 2;
-            up(buf, b.c0, b.c1, area.y, half, filled(b.buy, b.buy_stub, sub), theme.pos);
+            up(
+                buf,
+                b.c0,
+                b.c1,
+                area.y,
+                half,
+                filled(b.buy, b.buy_stub, sub),
+                theme.pos,
+            );
             down(
                 buf,
                 b.c0,
@@ -352,7 +386,15 @@ fn render_bars(
             } else {
                 (b.buy, b.buy_stub, theme.pos)
             };
-            up(buf, b.c0, b.c1, area.y, area.height, filled(v, stub, sub), color);
+            up(
+                buf,
+                b.c0,
+                b.c1,
+                area.y,
+                area.height,
+                filled(v, stub, sub),
+                color,
+            );
         }
     }
 

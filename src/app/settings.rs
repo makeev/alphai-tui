@@ -87,7 +87,11 @@ impl App {
             .filter_map(|row| match row {
                 SettingsRow::Key(field) => Some((
                     field.config_name,
-                    self.config.keys.get(field.config_name).cloned().unwrap_or_default(),
+                    self.config
+                        .keys
+                        .get(field.config_name)
+                        .cloned()
+                        .unwrap_or_default(),
                 )),
                 _ => None,
             })
@@ -153,7 +157,11 @@ impl App {
                 }
                 SettingsRow::Key(field) => {
                     let s = &mut self.settings;
-                    s.input = s.key_values.get(field.config_name).cloned().unwrap_or_default();
+                    s.input = s
+                        .key_values
+                        .get(field.config_name)
+                        .cloned()
+                        .unwrap_or_default();
                     s.editing = true;
                 }
                 SettingsRow::PollEvery => {
@@ -236,8 +244,7 @@ impl App {
 
     fn settings_save(&mut self) {
         let Some(every_secs) = parse_every(&self.settings.every_input) else {
-            self.settings.message =
-                Some("poll interval: whole seconds, 2 or more".to_string());
+            self.settings.message = Some("poll interval: whole seconds, 2 or more".to_string());
             return;
         };
         let cfg = self.settings_merged_config();
@@ -341,7 +348,10 @@ mod tests {
         assert_eq!(seen, ids);
         assert_eq!(step_source(cur, 1), SOURCES[0].id);
         // The left arrow walks the other way and wraps too.
-        assert_eq!(step_source(SOURCES[0].id, -1), SOURCES[SOURCES.len() - 1].id);
+        assert_eq!(
+            step_source(SOURCES[0].id, -1),
+            SOURCES[SOURCES.len() - 1].id
+        );
         // Anything unexpected resets to the keyless default.
         assert_eq!(step_source("weird", 1), SOURCES[0].id);
     }

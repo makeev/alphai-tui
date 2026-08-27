@@ -105,7 +105,11 @@ impl Alpaca {
             .unwrap_or_default()
             .remove(pair)
             .ok_or_else(|| http::unknown_symbol(symbol, None))?;
-        let bars = bars?.bars.unwrap_or_default().remove(pair).unwrap_or_default();
+        let bars = bars?
+            .bars
+            .unwrap_or_default()
+            .remove(pair)
+            .unwrap_or_default();
         Ok(TickerData {
             quote: quote_from_snapshot(symbol, &snap)?,
             candles: candles_from_desc(bars),
@@ -201,11 +205,9 @@ fn error_message(status: StatusCode, body: &str) -> String {
         return format!("{msg} (free plan uses ALPACA_FEED=iex)");
     }
     match status.as_u16() {
-        401 | 403 => {
-            "invalid Alpaca key id or secret, press s to update them \
+        401 | 403 => "invalid Alpaca key id or secret, press s to update them \
              (free keys: alpaca.markets)"
-                .into()
-        }
+            .into(),
         429 => http::rate_limit_msg("Alpaca rate limit hit (200 req/min on the free plan)"),
         _ => format!("Alpaca API {status}: {msg}"),
     }
@@ -336,7 +338,10 @@ mod tests {
         let parsed: StockBars = serde_json::from_str(raw).unwrap();
         let candles = candles_from_desc(parsed.bars.unwrap());
         assert_eq!(candles.len(), 3);
-        assert!(candles.windows(2).all(|w| w[0].ts < w[1].ts), "not ascending");
+        assert!(
+            candles.windows(2).all(|w| w[0].ts < w[1].ts),
+            "not ascending"
+        );
         assert_eq!(candles[0].close, 214.1);
         assert_eq!(candles[0].volume, None);
         assert_eq!(candles[2].close, 214.5);
@@ -346,9 +351,21 @@ mod tests {
     #[test]
     fn bars_without_close_or_timestamp_are_dropped() {
         let bars = vec![
-            AlpacaBar { t: "2026-07-10T15:55:00Z".into(), c: Some(1.0), ..Default::default() },
-            AlpacaBar { t: "2026-07-10T15:50:00Z".into(), c: None, ..Default::default() },
-            AlpacaBar { t: "not-a-date".into(), c: Some(2.0), ..Default::default() },
+            AlpacaBar {
+                t: "2026-07-10T15:55:00Z".into(),
+                c: Some(1.0),
+                ..Default::default()
+            },
+            AlpacaBar {
+                t: "2026-07-10T15:50:00Z".into(),
+                c: None,
+                ..Default::default()
+            },
+            AlpacaBar {
+                t: "not-a-date".into(),
+                c: Some(2.0),
+                ..Default::default()
+            },
         ];
         let candles = candles_from_desc(bars);
         assert_eq!(candles.len(), 1);
@@ -375,7 +392,12 @@ mod tests {
           }
         }"#;
         let mut parsed: CryptoSnapshots = serde_json::from_str(raw).unwrap();
-        let snap = parsed.snapshots.as_mut().unwrap().remove("BTC/USD").unwrap();
+        let snap = parsed
+            .snapshots
+            .as_mut()
+            .unwrap()
+            .remove("BTC/USD")
+            .unwrap();
         let q = quote_from_snapshot("BTC-USD", &snap).unwrap();
         assert_eq!(q.symbol, "BTC-USD");
         assert_eq!(q.price, 65000.5);
@@ -403,7 +425,10 @@ mod tests {
         assert!(auth.contains("alpaca.markets"), "{auth}");
 
         // Bad keys answer 401 with an nginx HTML page, not JSON.
-        let html = error_message(StatusCode::UNAUTHORIZED, "<html>401 Authorization Required</html>");
+        let html = error_message(
+            StatusCode::UNAUTHORIZED,
+            "<html>401 Authorization Required</html>",
+        );
         assert!(html.contains("invalid Alpaca key"), "{html}");
 
         // The subscription error is a 403 on snapshots and a 422 elsewhere;
@@ -435,7 +460,10 @@ mod tests {
         let secret = std::env::var("APCA_API_SECRET_KEY").expect("set APCA_API_SECRET_KEY");
         let client = Alpaca::new(id, secret).unwrap();
         for symbol in ["AAPL", "BTC-USD"] {
-            let data = client.fetch(symbol, Range::D5, Interval::M15).await.unwrap();
+            let data = client
+                .fetch(symbol, Range::D5, Interval::M15)
+                .await
+                .unwrap();
             assert!(data.quote.price > 0.0, "{symbol}: no price");
             assert!(!data.candles.is_empty(), "{symbol}: no candles");
             assert!(

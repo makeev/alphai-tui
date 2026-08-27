@@ -57,7 +57,9 @@ pub async fn get_json<T: DeserializeOwned>(
         let body = resp.text().await.unwrap_or_default();
         bail!("{}", err_map(status, &body));
     }
-    resp.json().await.with_context(|| format!("bad JSON from {api}"))
+    resp.json()
+        .await
+        .with_context(|| format!("bad JSON from {api}"))
 }
 
 /// Shared advice for a 429; the caller prefixes its plan's numbers, e.g.
@@ -99,8 +101,14 @@ mod tests {
 
     #[test]
     fn body_message_extracts_common_keys() {
-        assert_eq!(body_message(r#"{"message":"boom"}"#).as_deref(), Some("boom"));
-        assert_eq!(body_message(r#"{"detail":"nope"}"#).as_deref(), Some("nope"));
+        assert_eq!(
+            body_message(r#"{"message":"boom"}"#).as_deref(),
+            Some("boom")
+        );
+        assert_eq!(
+            body_message(r#"{"detail":"nope"}"#).as_deref(),
+            Some("nope")
+        );
         assert_eq!(body_message(r#"{"error":"bad"}"#).as_deref(), Some("bad"));
         // Message wins over the later keys when several are present.
         assert_eq!(
@@ -111,7 +119,10 @@ mod tests {
 
     #[test]
     fn body_message_rejects_non_json_and_non_string() {
-        assert_eq!(body_message("<html>401 Authorization Required</html>"), None);
+        assert_eq!(
+            body_message("<html>401 Authorization Required</html>"),
+            None
+        );
         assert_eq!(body_message(""), None);
         assert_eq!(body_message(r#"{"code":42}"#), None);
         assert_eq!(body_message(r#"{"message":""}"#), None);
