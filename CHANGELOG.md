@@ -5,6 +5,37 @@ the crates.io releases; from 0.7.0 on each one is also a git tag and a
 GitHub release with prebuilt binaries. The Homebrew tap, the AUR and the
 apt repository joined later, and carry every version since.
 
+## 0.15.0 - 2026-09-02
+
+- New Earnings view (`6`): AlphaAI's structured read of the selected
+  ticker's own earnings filing. The verdict and the reason for it, the
+  metric table with prior quarter, prior year and both changes, segments,
+  the outlook, concerns, what to watch and the analysis. Every figure was
+  checked against the filing text before publication and prints as the
+  filing wrote it, with units shortened and nothing rounded into a new
+  number. American 8-K item 2.02 filings and foreign private issuers' 6-K
+  releases are both covered, and older quarters continue below the newest
+  read. The metric table is banded row by row and led by dots from each
+  name across to its figures, and it is only as wide as its own content,
+  so a wide terminal does not leave half a screen between a name and its
+  numbers. Paragraphs stop at a readable width for the same reason.
+- A ticker with no read yet shows the date of its next report when the
+  company has confirmed one, instead of an empty screen.
+- The bottom line of the view carries the next US macro releases (CPI, the
+  jobs report, FOMC decisions and the rest), with estimated dates named as
+  estimated.
+- News feed: the earnings filing itself is now marked `8-K` or `6-K` in
+  place of its category, which tells it apart from the coverage around it,
+  and its article card carries a short form of the read once the Earnings
+  view has loaded one. The card still makes no requests of its own.
+- New `--earnings TICKER` flag prints the latest read to stdout and exits,
+  for a pipe or a tmux pane.
+- The view tabs in the header shrink to their hotkeys on narrow terminals,
+  so the clock and the chart interval stay visible.
+- Budget: one request per ticker while the Earnings view is on screen,
+  cached for an hour, plus one shared macro-calendar request every six
+  hours. Both are silent about failures that no retry would fix.
+
 ## 0.14.0 - 2026-08-26
 
 - Feeds now poll for arrivals instead of refetching the published head of

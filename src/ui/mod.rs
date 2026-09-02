@@ -1,5 +1,6 @@
 pub mod article;
 pub mod chart;
+pub mod earnings;
 pub mod help;
 pub mod insider;
 pub mod insider_chart;
@@ -26,6 +27,7 @@ pub enum ViewId {
     Table,
     Chart,
     Insider,
+    Earnings,
 }
 
 /// One footer hint: the keys of `actions` (looked up in the live keymap so
@@ -99,17 +101,24 @@ pub trait View: Sync {
         false
     }
 
+    /// True when this view shows the selected ticker's earnings read, which
+    /// is fetched per ticker on its own long TTL rather than as a feed.
+    fn shows_earnings(&self) -> bool {
+        false
+    }
+
     fn render(&self, f: &mut Frame, area: Rect, app: &mut App);
 }
 
 /// Register new display modes here. Order defines the tab cycle and the
 /// 1..9 hotkeys.
-pub static VIEWS: [&dyn View; 5] = [
+pub static VIEWS: [&dyn View; 6] = [
     &split::SplitView,
     &news::NewsView,
     &table::TableView,
     &chart::ChartView,
     &insider::InsiderView,
+    &earnings::EarningsView,
 ];
 
 /// Index of a view in `VIEWS`. Every `ViewId` is registered exactly once
@@ -132,7 +141,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     ])
     .areas(f.area());
 
-    f.render_widget(header_line(app), header);
+    f.render_widget(header_line(app, header.width), header);
     VIEWS[app.view_idx].render(f, body, app);
     f.render_widget(footer_line(app), footer);
     if app.article_overlay.open {
@@ -171,18 +180,33 @@ pub(crate) fn centered(r: Rect, width: u16, height: u16) -> Rect {
     }
 }
 
-fn header_line(app: &App) -> Paragraph<'static> {
+/// Columns the header needs outside the view tabs: the name, the source,
+/// the key state, the clock and the interval.
+const STATUS_ROOM: usize = 50;
+
+fn header_line(app: &App, width: u16) -> Paragraph<'static> {
     let mut spans = vec![
         Span::styled(" alphai-tui ", Style::new().bold().fg(app.theme.accent)),
         Span::raw(format!("· {} ", app.source_name)).dim(),
     ];
+    // Named tabs take about 60 columns; when the line would not fit, the
+    // inactive ones shrink to their hotkey digit so the status at the end
+    // (the clock and the chart interval) is not the part that gets cut.
+    let named: usize = VIEWS.iter().map(|v| v.title().len() + 4).sum();
+    let compact = named + STATUS_ROOM > width as usize;
     for (i, view) in VIEWS.iter().enumerate() {
-        let style = if i == app.view_idx {
+        let active = i == app.view_idx;
+        let style = if active {
             Style::new().fg(app.theme.accent_text).bg(app.theme.accent)
         } else {
             Style::new().dim()
         };
-        spans.push(Span::styled(format!(" {}:{} ", i + 1, view.title()), style));
+        let label = if compact && !active {
+            format!(" {} ", i + 1)
+        } else {
+            format!(" {}:{} ", i + 1, view.title())
+        };
+        spans.push(Span::styled(label, style));
     }
     if app.alphai_enabled {
         spans.push(Span::raw(" · alphai ✓").dim());

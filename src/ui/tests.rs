@@ -2725,3 +2725,458 @@ fn settings_poll_every_rejects_bad_input() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// Earnings view, the article card's read, and the request budget behind both.
+
+/// One ticker's earnings payload, trimmed to what a render needs.
+fn earnings_data(ticker: &str, next: &str, metrics: &str) -> alphai::TickerEarnings {
+    let next = if next.is_empty() {
+        "null".to_string()
+    } else {
+        format!("\"{next}\"")
+    };
+    serde_json::from_str(&format!(
+        r#"{{
+          "ticker": "{ticker}",
+          "next_report_date": {next},
+          "reports": [{{
+            "uid": "earn1",
+            "time_published": "2026-08-26T20:21:19Z",
+            "title": "{ticker} CORP: Results of Operations and Financial Condition",
+            "source_type": "sec_form8k",
+            "ticker": "{ticker}",
+            "fiscal_period": "Second Quarter Fiscal 2027",
+            "analysis": {{
+              "company": "{ticker} CORP",
+              "ticker": "{ticker}",
+              "fiscal_period": "Second Quarter Fiscal 2027",
+              "period_end": "July 26, 2026",
+              "headline": "{ticker} announces second quarter results",
+              "verdict": "strong",
+              "verdict_reason": "Revenue grew 18% sequentially.",
+              "key_metrics": [{metrics}],
+              "segments": [{{"name": "Data Center", "revenue": "$89.0 billion",
+                             "yoy_change": "117%", "qoq_change": "18%",
+                             "driver": "Vera Rubin ramping."}}],
+              "guidance": {{"period": "Third quarter fiscal 2027",
+                           "revenue": "$108.0 billion, plus or minus 2%",
+                           "gross_margin": null, "operating_expenses": null,
+                           "tax_rate": null, "other": []}},
+              "vs_prior_guidance": [],
+              "capital_returns": [], "balance_sheet_cash_flow": [], "drivers": [],
+              "concerns": ["No China compute revenue is assumed."],
+              "what_to_watch": [], "quotes": [],
+              "analysis": "The quarter was strong.",
+              "missing_items": [],
+              "numbers_verified_from_document": true
+            }}
+          }}]
+        }}"#
+    ))
+    .unwrap()
+}
+
+const FULL_METRICS: &str = r#"
+  {"name": "Revenue", "value": "$96,221 million", "basis": "GAAP",
+   "prior_year": "$46,743 million", "prior_quarter": "$81,615 million",
+   "yoy_change": "106%", "qoq_change": "18%"},
+  {"name": "Cost of revenue", "value": "$24,079 million", "basis": "GAAP",
+   "prior_year": "$12,890 million", "prior_quarter": "$20,458 million",
+   "yoy_change": null, "qoq_change": null},
+  {"name": "Basic earnings per share", "value": "$2.47 per share", "basis": "GAAP",
+   "prior_year": "$1.08 per share", "prior_quarter": null,
+   "yoy_change": null, "qoq_change": null},
+  {"name": "Diluted earnings per share", "value": "$2.46 per diluted share", "basis": "GAAP",
+   "prior_year": "$1.08 per diluted share", "prior_quarter": "$2.39 per diluted share",
+   "yoy_change": "128%", "qoq_change": "3%"}
+"#;
+
+/// Deliver a fetched payload the way the background task would.
+fn earnings_fetch(app: &mut App, symbol: &str, data: alphai::TickerEarnings) {
+    app.apply_alphai(alphai::Event::Earnings {
+        key: alphai::earnings_key(symbol),
+        data: Box::new(data),
+    });
+}
+
+fn earnings_app(
+    metrics: &str,
+    next: &str,
+) -> (App, tokio::sync::mpsc::UnboundedReceiver<alphai::Cmd>) {
+    let (mut app, cmds) = empty_app_with_cmds(vec!["NVDA".into(), "AVGO".into()]);
+    app.view_idx = ui::view_index(ui::ViewId::Earnings);
+    let data = earnings_data("NVDA", next, metrics);
+    earnings_fetch(&mut app, "NVDA", data);
+    (app, cmds)
+}
+
+#[test]
+fn earnings_view_renders_a_read() {
+    let (mut app, _cmds) = earnings_app(FULL_METRICS, "2026-11-17");
+    let screen = render_sized(&mut app, 110, 32);
+    assert!(
+        screen.contains("Second Quarter Fiscal 2027"),
+        "screen:\n{screen}"
+    );
+    assert!(
+        screen.contains("strong"),
+        "the verdict is the one colored word"
+    );
+    assert!(
+        screen.contains("prior Q") && screen.contains("y/y"),
+        "screen:\n{screen}"
+    );
+    assert!(
+        screen.contains("$96,221M"),
+        "figures shorten units, not numbers"
+    );
+    assert!(
+        !screen.contains("$96.2B"),
+        "a rounded figure is a new number"
+    );
+    assert!(screen.contains("Data Center"), "segments render");
+    assert!(
+        screen.contains("Third quarter fiscal 2027"),
+        "guidance renders"
+    );
+    assert!(
+        screen.contains("No China compute revenue"),
+        "concerns render"
+    );
+    assert!(
+        screen.contains("next report Nov 17, 2026"),
+        "screen:\n{screen}"
+    );
+}
+
+/// The most common screen of the feature: covered, nothing published yet.
+/// It has to read as an answer, not as a failure.
+#[test]
+fn earnings_empty_state_shows_the_next_report_date() {
+    let (mut app, _cmds) = empty_app_with_cmds(vec!["AVGO".into()]);
+    app.view_idx = ui::view_index(ui::ViewId::Earnings);
+    earnings_fetch(
+        &mut app,
+        "AVGO",
+        serde_json::from_str(r#"{"ticker":"AVGO","reports":[],"next_report_date":"2026-09-02"}"#)
+            .unwrap(),
+    );
+    let screen = render(&mut app);
+    assert!(
+        screen.contains("No earnings read for AVGO yet"),
+        "screen:\n{screen}"
+    );
+    assert!(
+        screen.contains("next report Sep 2, 2026"),
+        "screen:\n{screen}"
+    );
+    assert!(
+        !screen.to_lowercase().contains("error"),
+        "screen:\n{screen}"
+    );
+    assert!(!screen.contains("press r"), "nothing here is retryable");
+
+    // No confirmed date is a different sentence, and still not an error.
+    earnings_fetch(
+        &mut app,
+        "AVGO",
+        serde_json::from_str(r#"{"ticker":"AVGO","reports":[],"next_report_date":null}"#).unwrap(),
+    );
+    let screen = render(&mut app);
+    assert!(screen.contains("not confirmed yet"), "screen:\n{screen}");
+}
+
+/// A 404 is a state, not a failure: offering a retry that can never work is
+/// exactly the loop the budget rules forbid.
+#[test]
+fn earnings_unknown_ticker_is_terminal() {
+    let (mut app, _cmds) = empty_app_with_cmds(vec!["BTC-USD".into()]);
+    app.view_idx = ui::view_index(ui::ViewId::Earnings);
+    let data = alphai::TickerEarnings {
+        unknown: true,
+        ..Default::default()
+    };
+    earnings_fetch(&mut app, "BTC-USD", data);
+    let screen = render(&mut app);
+    assert!(
+        screen.contains("no earnings coverage for BTC-USD"),
+        "screen:\n{screen}"
+    );
+    assert!(!screen.contains("press r"), "screen:\n{screen}");
+}
+
+/// Thirty numeric rows only read if the eye can get from a name to its
+/// figures: alternating bands and a leader of dots do that work.
+#[test]
+fn earnings_metric_rows_are_banded_and_led() {
+    let (mut app, _cmds) = earnings_app(FULL_METRICS, "2026-11-17");
+    let screen = render_sized(&mut app, 200, 32);
+    assert!(
+        screen.contains("Revenue   · ·"),
+        "no leader between a short name and its figures:\n{screen}"
+    );
+
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(200, 32)).unwrap();
+    terminal.draw(|f| ui::draw(f, &mut app)).unwrap();
+    let buffer = terminal.backend().buffer().clone();
+    // Locate the two rows by their own figures, so this measures the metric
+    // rows themselves and not whatever prose happens to sit above them.
+    let row_of = |needle: &str| {
+        (0..32)
+            .find(|y| {
+                (0..200)
+                    .map(|x| buffer.cell((x, *y)).unwrap().symbol())
+                    .collect::<String>()
+                    .contains(needle)
+            })
+            .unwrap_or_else(|| panic!("no row carrying {needle}"))
+    };
+    let revenue = row_of("$96,221M");
+    let next = row_of("$24,079M");
+    assert_eq!(next, revenue + 1, "the two rows are not neighbours");
+    assert_ne!(
+        buffer.cell((4, revenue)).unwrap().style(),
+        buffer.cell((4, next)).unwrap().style(),
+        "neighbouring metric rows render identically, so nothing bands them"
+    );
+}
+
+#[test]
+fn earnings_view_fits_80x24() {
+    let (mut app, _cmds) = earnings_app(FULL_METRICS, "2026-11-17");
+    let screen = render_sized(&mut app, 80, 24);
+    assert!(screen.contains("strong"), "screen:\n{screen}");
+    assert!(screen.contains("value"), "the column header survives");
+    assert!(screen.contains("$96,221M"), "screen:\n{screen}");
+}
+
+/// Budget: nothing is fetched for a view that is not on screen, the fetch
+/// is one request per ticker, and a second pass is absorbed by the inflight
+/// guard rather than spending another.
+#[test]
+fn earnings_fetch_is_demand_driven() {
+    let (mut app, mut cmds) = empty_app_with_cmds(vec!["NVDA".into()]);
+    app.view_idx = ui::view_index(ui::ViewId::Table);
+    app.ensure_alphai_data();
+    while let Ok(cmd) = cmds.try_recv() {
+        assert!(
+            !matches!(cmd, alphai::Cmd::FetchEarnings { .. }),
+            "a hidden view fetched its earnings"
+        );
+    }
+
+    app.view_idx = ui::view_index(ui::ViewId::Earnings);
+    app.ensure_alphai_data();
+    let mut fetches = 0;
+    while let Ok(cmd) = cmds.try_recv() {
+        if matches!(cmd, alphai::Cmd::FetchEarnings { .. }) {
+            fetches += 1;
+        }
+    }
+    assert_eq!(fetches, 1, "one request per ticker");
+
+    app.ensure_alphai_data();
+    assert!(
+        cmds.try_recv().is_err(),
+        "a second pass fetched again while the first was in flight"
+    );
+
+    earnings_fetch(
+        &mut app,
+        "NVDA",
+        earnings_data("NVDA", "2026-11-17", FULL_METRICS),
+    );
+    app.ensure_alphai_data();
+    assert!(
+        cmds.try_recv().is_err(),
+        "a fresh read refetched inside its TTL"
+    );
+}
+
+/// Walking the watchlist costs one request per round trip, not one per
+/// frame: only one earnings fetch may be in flight at a time.
+#[test]
+fn earnings_arrows_do_not_burst_requests() {
+    let (mut app, mut cmds) = empty_app_with_cmds(vec!["NVDA".into(), "AVGO".into()]);
+    app.view_idx = ui::view_index(ui::ViewId::Earnings);
+    app.ensure_alphai_data();
+    press(&mut app, KeyCode::Right);
+    app.ensure_alphai_data();
+    press(&mut app, KeyCode::Left);
+    app.ensure_alphai_data();
+    let fetches = std::iter::from_fn(|| cmds.try_recv().ok())
+        .filter(|c| matches!(c, alphai::Cmd::FetchEarnings { .. }))
+        .count();
+    assert_eq!(fetches, 1, "arrow keys queued a request per frame");
+}
+
+/// r refreshes what is on screen and nothing else.
+#[test]
+fn earnings_refresh_touches_only_the_visible_surface() {
+    let (mut app, _cmds) = earnings_app(FULL_METRICS, "2026-11-17");
+    app.feeds.insert(
+        "NVDA".into(),
+        FeedBundle::new(vec![article("Kept", "NVDA", 8, "positive")], None, None),
+    );
+    app.calendar = Some((Vec::new(), Instant::now()));
+    press(&mut app, KeyCode::Char('r'));
+    assert!(
+        !app.earnings.contains_key("NVDA"),
+        "r left the stale read in place"
+    );
+    assert!(
+        app.feeds.contains_key("NVDA"),
+        "r dropped a feed it was not showing"
+    );
+    assert!(
+        app.calendar.is_none(),
+        "r left an empty calendar with no way to retry it"
+    );
+
+    // A calendar that holds events is not worth a second request: the
+    // schedule moves about once a month.
+    earnings_fetch(
+        &mut app,
+        "NVDA",
+        earnings_data("NVDA", "2026-11-17", FULL_METRICS),
+    );
+    app.apply_alphai(alphai::Event::Calendar {
+        events: vec![alphai::CalendarEvent::default()],
+    });
+    press(&mut app, KeyCode::Char('r'));
+    assert!(
+        app.calendar.is_some(),
+        "r spent a request on a fresh calendar"
+    );
+}
+
+/// The body is a document: up/down scroll it, left/right walk the watchlist.
+#[test]
+fn earnings_arrows_switch_ticker_and_jk_scroll() {
+    let (mut app, _cmds) = earnings_app(FULL_METRICS, "2026-11-17");
+    render_sized(&mut app, 110, 20);
+    press(&mut app, KeyCode::Char('j'));
+    assert_eq!(
+        app.earnings_scroll, 1,
+        "j moved the watchlist instead of the page"
+    );
+    assert_eq!(app.selected, 0);
+    press(&mut app, KeyCode::Right);
+    assert_eq!(app.selected, 1, "left/right walk the watchlist");
+    assert_eq!(app.earnings_scroll, 0, "the new ticker starts at the top");
+    render_sized(&mut app, 110, 20);
+}
+
+/// The card shows a read only when one is already cached, and never fetches
+/// on its own: scrolling a feed of filings has to stay free.
+#[test]
+fn earnings_card_renders_from_cache_and_never_fetches() {
+    let (mut app, mut cmds) = empty_app_with_cmds(vec!["NVDA".into()]);
+    app.view_idx = ui::view_index(ui::ViewId::News);
+    let mut row = article("NVDA CORP: Results of Operations", "NVDA", 9, "positive");
+    row.original.uid = "earn1".into();
+    row.original.source_domain = "sec.gov".into();
+    row.original.source = "SEC EDGAR 8-K".into();
+    head_fetch(&mut app, "NVDA", vec![row], Some(7));
+
+    // Nothing cached yet: a pointer to the view, and no request.
+    let screen = render_sized(&mut app, 110, 32);
+    assert!(screen.contains("Earnings read"), "screen:\n{screen}");
+    assert!(screen.contains("press 6"), "screen:\n{screen}");
+    while let Ok(cmd) = cmds.try_recv() {
+        assert!(
+            !matches!(cmd, alphai::Cmd::FetchEarnings { .. }),
+            "the card fetched a read by itself"
+        );
+    }
+
+    earnings_fetch(
+        &mut app,
+        "NVDA",
+        earnings_data("NVDA", "2026-11-17", FULL_METRICS),
+    );
+    let screen = render_sized(&mut app, 110, 32);
+    assert!(screen.contains("Q2 FY27"), "screen:\n{screen}");
+    assert!(screen.contains("Revenue"), "screen:\n{screen}");
+    while let Ok(cmd) = cmds.try_recv() {
+        assert!(
+            !matches!(cmd, alphai::Cmd::FetchEarnings { .. }),
+            "rendering the card fetched"
+        );
+    }
+}
+
+/// In a feed full of coverage of one quarter, the filing itself is the row
+/// that carries a read, and the category cell says so.
+#[test]
+fn news_row_marks_the_filing_itself() {
+    let (mut app, _cmds) = empty_app_with_cmds(vec!["NVDA".into()]);
+    app.view_idx = ui::view_index(ui::ViewId::News);
+    let mut filing = article(
+        "Results of Operations and Financial Condition",
+        "NVDA",
+        9,
+        "positive",
+    );
+    filing.original.source_domain = "sec.gov".into();
+    filing.original.source = "SEC EDGAR 8-K".into();
+    let coverage = article("Nvidia beats again, says the street", "NVDA", 8, "positive");
+    head_fetch(&mut app, "NVDA", vec![filing, coverage], Some(7));
+    let screen = render_sized(&mut app, 110, 32);
+    assert!(screen.contains("8-K"), "screen:\n{screen}");
+    assert!(
+        screen.contains("earnings"),
+        "coverage keeps the category cell"
+    );
+}
+
+/// The figure columns follow the data: a filing that states no prior
+/// periods prints none, and the name column never starves.
+#[test]
+fn earnings_metric_columns_follow_the_data() {
+    let full: alphai::TickerEarnings = earnings_data("NVDA", "2026-11-17", FULL_METRICS);
+    let metrics = &full.latest().unwrap().report().key_metrics;
+    let wide = ui::earnings::metric_columns(metrics, 108);
+    assert!(
+        wide.cells.iter().all(|w| *w > 0),
+        "every column has data: {wide:?}"
+    );
+    let narrow = ui::earnings::metric_columns(metrics, 78);
+    assert!(
+        narrow.cells.iter().all(|w| *w > 0),
+        "80 columns still fits the full table: {narrow:?}"
+    );
+    assert!(narrow.name >= 18, "the name column starved: {narrow:?}");
+
+    // A 6-K with nothing to compare against: only the value column survives.
+    let bare: alphai::TickerEarnings = earnings_data(
+        "TSM",
+        "",
+        r#"{"name": "Second quarter consolidated revenue", "value": "NT$1,270.38 billion",
+            "basis": "other", "prior_year": null, "prior_quarter": null,
+            "yoy_change": null, "qoq_change": null}"#,
+    );
+    let cols = ui::earnings::metric_columns(&bare.latest().unwrap().report().key_metrics, 108);
+    assert!(cols.cells[0] > 0, "the value column never drops");
+    assert!(
+        cols.cells[1..].iter().all(|w| *w == 0),
+        "empty columns still took space: {cols:?}"
+    );
+
+    // A wide terminal must not push the figures half a screen away from the
+    // name they belong to: the table is as wide as its content.
+    let longest = metrics
+        .iter()
+        .map(|m| m.name.chars().count())
+        .max()
+        .unwrap();
+    let roomy = ui::earnings::metric_columns(metrics, 250);
+    assert_eq!(roomy.name, longest, "the name column stretched: {roomy:?}");
+
+    // Squeezed hard, the prior periods go first and the value stays.
+    let cols = ui::earnings::metric_columns(metrics, 40);
+    assert_eq!(cols.cells[1], 0, "prior Q outlived the squeeze: {cols:?}");
+    assert_eq!(cols.cells[2], 0, "prior Y outlived the squeeze: {cols:?}");
+    assert!(cols.cells[0] > 0, "the value column dropped: {cols:?}");
+}

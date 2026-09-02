@@ -9,7 +9,7 @@ use ratatui::style::{Style, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Clear, Paragraph, Wrap};
 
-use crate::alphai::Article;
+use crate::alphai::{self, Article, EarningsRead, KeyMetric};
 use crate::app::App;
 use crate::theme::Theme;
 use crate::ui::{centered, news};
@@ -36,7 +36,8 @@ pub fn render(f: &mut Frame, app: &mut App) {
         .panel()
         .title(app.theme.heading(" Article "))
         .border_style(Style::new().fg(app.theme.accent));
-    let lines = card_lines(a, app.selected_symbol(), &app.theme);
+    let earnings = app.find_earnings_by_uid(&a.original.uid);
+    let lines = card_lines(a, app.selected_symbol(), earnings, &app.theme);
     let mut scroll = app.article_overlay.scroll;
     render_card(f, area, block, lines, &mut scroll);
     app.article_overlay.scroll = scroll;
@@ -49,6 +50,7 @@ pub fn render_pane(
     area: Rect,
     article: Option<&Article>,
     symbol: &str,
+    earnings: Option<&EarningsRead>,
     scroll: &mut u16,
     theme: &Theme,
 ) {
@@ -61,7 +63,7 @@ pub fn render_pane(
         f.render_widget(block, area);
         return;
     };
-    let lines = card_lines(a, symbol, theme);
+    let lines = card_lines(a, symbol, earnings, theme);
     render_card(f, area, block, lines, scroll);
 }
 
@@ -91,7 +93,12 @@ fn render_card(
 
 /// The card body: title, meta, summary, then every enrichment section that
 /// exists for this article (all of them optional on the wire).
-fn card_lines(a: &Article, symbol: &str, theme: &Theme) -> Vec<Line<'static>> {
+fn card_lines(
+    a: &Article,
+    symbol: &str,
+    earnings: Option<&EarningsRead>,
+    theme: &Theme,
+) -> Vec<Line<'static>> {
     let mut lines = vec![
         Line::from(a.original.title.clone()).bold(),
         Line::from(news::meta_line(a, symbol).join(" · ")).dim(),
@@ -99,6 +106,54 @@ fn card_lines(a: &Article, symbol: &str, theme: &Theme) -> Vec<Line<'static>> {
     if !a.original.summary.is_empty() {
         lines.push(Line::from(""));
         lines.push(Line::from(a.original.summary.clone()));
+    }
+
+    // Earnings filings: the read, when one is already cached. The card
+    // never fetches, so scrolling the feed costs nothing; the full read is
+    // one keypress away in the Earnings view.
+    if let Some(read) = earnings {
+        lines.push(Line::from(""));
+        let r = read.report();
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!(
+                    "Earnings read · {}",
+                    alphai::short_fiscal_period(&r.fiscal_period)
+                ),
+                Style::new().fg(theme.accent),
+            ),
+            verdict_span(&r.verdict, theme),
+        ]));
+        if !r.verdict_reason.is_empty() {
+            lines.push(Line::from(format!("  {}", r.verdict_reason)));
+        }
+        for m in card_metrics(&r.key_metrics) {
+            let mut row = format!("  {} {}", m.name, alphai::short_metric(&m.value));
+            for (change, label) in [(&m.qoq_change, "q/q"), (&m.yoy_change, "y/y")] {
+                if let Some(c) = change.as_deref().filter(|c| !c.trim().is_empty()) {
+                    row.push_str(&format!(" · {} {label}", alphai::signed_change(c)));
+                }
+            }
+            lines.push(Line::from(row));
+        }
+        if let Some(revenue) = r
+            .guidance
+            .as_ref()
+            .and_then(|g| g.revenue.as_deref().map(|v| (g.period.clone(), v)))
+        {
+            lines.push(Line::from(format!(
+                "  Outlook {}: revenue {}",
+                revenue.0,
+                alphai::short_metric(revenue.1)
+            )));
+        }
+        lines.push(Line::from("  press 6 for the full read").dim());
+    } else if alphai::is_earnings_filing(a) {
+        lines.push(Line::from(""));
+        lines.push(Line::from(vec![
+            Span::styled("Earnings read", Style::new().fg(theme.accent)),
+            Span::raw(" · press 6").dim(),
+        ]));
     }
 
     // Insider rows: the structured Form 4 event, straight from the filing.
@@ -256,6 +311,63 @@ fn section(title: &str, theme: &Theme) -> Line<'static> {
         title.to_string(),
         Style::new().fg(theme.accent),
     ))
+}
+
+/// The metrics a card has room for, most reported first. Prefix matching,
+/// not `contains`: "Cost of revenue" must not answer for revenue, nor
+/// "Basic earnings per share" for the diluted one. Filings that name their
+/// lines differently (a bank's net interest income, a REIT's FFO) fall back
+/// to whatever the filing itself compared against a prior period.
+fn card_metrics(metrics: &[KeyMetric]) -> Vec<&KeyMetric> {
+    const PRIORITY: [&str; 8] = [
+        "revenue",
+        "total net sales",
+        "net sales",
+        "gross margin",
+        "operating income",
+        "net income",
+        "diluted earnings per share",
+        "free cash flow",
+    ];
+    const CAP: usize = 5;
+
+    let bare = |m: &KeyMetric| {
+        let name = m.name.to_lowercase();
+        name.strip_prefix("non-gaap ").unwrap_or(&name).to_string()
+    };
+    let mut picked: Vec<usize> = Vec::new();
+    for want in PRIORITY {
+        if picked.len() == CAP {
+            break;
+        }
+        if let Some(i) = metrics
+            .iter()
+            .enumerate()
+            .position(|(i, m)| !picked.contains(&i) && bare(m).starts_with(want))
+        {
+            picked.push(i);
+        }
+    }
+    for (i, m) in metrics.iter().enumerate() {
+        if picked.len() == CAP {
+            break;
+        }
+        if !picked.contains(&i) && (m.yoy_change.is_some() || m.qoq_change.is_some()) {
+            picked.push(i);
+        }
+    }
+    picked.into_iter().filter_map(|i| metrics.get(i)).collect()
+}
+
+/// The verdict word, in the site's colors. The metric changes stay
+/// uncolored: whether a rise is good depends on the metric.
+fn verdict_span(verdict: &str, theme: &Theme) -> Span<'static> {
+    let style = match verdict {
+        "strong" | "solid" => Style::new().fg(theme.pos),
+        "weak" => Style::new().fg(theme.neg),
+        _ => Style::new().dim(),
+    };
+    Span::styled(format!(" {verdict}"), style)
 }
 
 fn sentiment_span(sentiment: Option<&str>, theme: &Theme) -> Span<'static> {

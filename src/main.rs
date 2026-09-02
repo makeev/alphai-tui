@@ -55,6 +55,11 @@ struct Args {
     #[arg(long)]
     once: bool,
 
+    /// Print the latest AlphaAI earnings read for one ticker and exit
+    /// (no TUI); needs an API key. One request.
+    #[arg(long, value_name = "TICKER")]
+    earnings: Option<String>,
+
     /// Use an alternate config file (the settings screen saves back to it)
     #[arg(long, value_name = "PATH")]
     config: Option<PathBuf>,
@@ -100,6 +105,9 @@ fn main() -> Result<()> {
     let rt = tokio::runtime::Runtime::new()?;
     if args.once {
         return print_once(&rt, source, &symbols, range, interval);
+    }
+    if let Some(ticker) = args.earnings.as_deref() {
+        return print_earnings(&rt, cfg.alphai_key(), ticker);
     }
 
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
@@ -147,6 +155,199 @@ fn main() -> Result<()> {
     let result = app.run(&mut terminal);
     ratatui::restore();
     result
+}
+
+/// `--earnings TICKER`: the newest earnings read in plain text, for a pipe
+/// or a tmux pane. One request, and the figures print exactly as the filing
+/// wrote them.
+fn print_earnings(rt: &tokio::runtime::Runtime, key: Option<String>, ticker: &str) -> Result<()> {
+    let Some(key) = key else {
+        println!(
+            "no AlphaAI API key. Get a free one at https://alphai.io (Account -> API keys),\n             then set ALPHAI_API_KEY or press s in the app to save it."
+        );
+        return Ok(());
+    };
+    let ticker = ticker.to_uppercase();
+    let client = alphai::Client::new(key)?;
+    let data = match rt.block_on(client.earnings(&ticker)) {
+        Ok(data) => data,
+        // Not an error: the API owns no listing for this string.
+        Err(e) if alphai::is_unknown_symbol(&format!("{e:#}")) => {
+            println!("no earnings coverage for {ticker}: reads come from SEC filings.");
+            return Ok(());
+        }
+        Err(e) => return Err(e),
+    };
+    let next = data
+        .next_report_date
+        .as_deref()
+        .map_or_else(|| "not confirmed yet".to_string(), str::to_string);
+    let Some(read) = data.reports.first() else {
+        println!(
+            "no earnings read for {} yet · next report {next}",
+            data.ticker
+        );
+        return Ok(());
+    };
+    let r = read.report();
+
+    println!("{}", read.title);
+    let filed = read
+        .filed()
+        .map(|t| t.format("%Y-%m-%d %H:%M UTC").to_string())
+        .unwrap_or_default();
+    println!(
+        "{} filed {filed} · {} · period end {}",
+        read.form(),
+        r.fiscal_period,
+        r.period_end.as_deref().unwrap_or("not stated")
+    );
+    println!("verdict  {} · {}", r.verdict, r.verdict_reason);
+    println!("headline {}", r.headline);
+    println!(
+        "numbers verified against the filing: {}",
+        if r.numbers_verified_from_document {
+            "yes"
+        } else {
+            "no"
+        }
+    );
+    if let Some(url) = read.alphai_url() {
+        println!("url      {url}");
+    }
+    println!("uid      {}", read.uid);
+
+    if !r.key_metrics.is_empty() {
+        println!("\nkey metrics (value | prior Q | prior Y | q/q | y/y):");
+        // Figures print exactly as the filing wrote them, so the columns are
+        // sized to the data rather than the data trimmed to the columns.
+        let cell = |v: &Option<String>| v.clone().unwrap_or_default();
+        let rows: Vec<[String; 7]> = r
+            .key_metrics
+            .iter()
+            .map(|m| {
+                [
+                    m.name.clone(),
+                    m.basis.clone(),
+                    m.value.clone(),
+                    cell(&m.prior_quarter),
+                    cell(&m.prior_year),
+                    cell(&m.qoq_change),
+                    cell(&m.yoy_change),
+                ]
+            })
+            .collect();
+        let mut w = [0usize; 7];
+        for row in &rows {
+            for (i, cell) in row.iter().enumerate() {
+                w[i] = w[i].max(cell.chars().count());
+            }
+        }
+        for row in &rows {
+            let line = format!(
+                "  {:<n$} {:<b$}  {:>v$} | {:>pq$} | {:>py$} | {:>q$} | {:>y$}",
+                row[0],
+                row[1],
+                row[2],
+                row[3],
+                row[4],
+                row[5],
+                row[6],
+                n = w[0],
+                b = w[1],
+                v = w[2],
+                pq = w[3],
+                py = w[4],
+                q = w[5],
+                y = w[6],
+            );
+            println!("{}", line.trim_end());
+        }
+    }
+    if !r.segments.is_empty() {
+        println!("\nsegments:");
+        for s in &r.segments {
+            println!(
+                "  {:<28} {:>18} | {:>9} q/q | {:>9} y/y",
+                s.name,
+                s.revenue,
+                s.qoq_change.clone().unwrap_or_default(),
+                s.yoy_change.clone().unwrap_or_default(),
+            );
+            if !s.driver.is_empty() {
+                println!("    {}", s.driver);
+            }
+        }
+    }
+    if let Some(g) = &r.guidance {
+        println!("\nguidance ({}):", g.period);
+        for (label, value) in [
+            ("revenue", &g.revenue),
+            ("gross margin", &g.gross_margin),
+            ("operating expenses", &g.operating_expenses),
+            ("tax rate", &g.tax_rate),
+        ] {
+            if let Some(v) = value {
+                println!("  {label:<20} {v}");
+            }
+        }
+        for other in &g.other {
+            println!("  {:<20} {other}", "other");
+        }
+    }
+    if !r.vs_prior_guidance.is_empty() {
+        println!("\nversus prior guidance:");
+        for c in &r.vs_prior_guidance {
+            println!(
+                "  {:<28} {} against {} ({})",
+                c.metric, c.actual, c.prior_guidance, c.verdict
+            );
+        }
+    }
+    for (title, items) in [
+        ("drivers", &r.drivers),
+        ("concerns", &r.concerns),
+        ("what to watch", &r.what_to_watch),
+        ("capital returns", &r.capital_returns),
+        ("balance sheet and cash flow", &r.balance_sheet_cash_flow),
+        ("not in the filing", &r.missing_items),
+    ] {
+        if items.is_empty() {
+            continue;
+        }
+        println!("\n{title}:");
+        for item in items {
+            println!("  - {item}");
+        }
+    }
+    for q in &r.quotes {
+        println!(
+            "\n{}{}:",
+            q.speaker,
+            q.role
+                .as_deref()
+                .map(|role| format!(", {role}"))
+                .unwrap_or_default()
+        );
+        println!("  {}", q.text);
+    }
+    if !r.narrative().is_empty() {
+        println!("\nanalysis:");
+        for para in r.narrative().split("\n\n") {
+            if !para.trim().is_empty() {
+                println!("  {}", para.trim());
+                println!();
+            }
+        }
+    }
+    println!("next report: {next}");
+    if data.reports.len() > 1 {
+        println!(
+            "{} older reads available in the app",
+            data.reports.len() - 1
+        );
+    }
+    Ok(())
 }
 
 fn parse_enum<T: ValueEnum>(value: Option<&str>) -> Option<T> {

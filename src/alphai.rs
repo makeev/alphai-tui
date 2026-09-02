@@ -56,6 +56,13 @@ pub fn is_archive_gate(error: &str) -> bool {
     error.contains("archive limit")
 }
 
+/// Whether a fetch failed because the API owns no such symbol (a 404 with
+/// `unknown_symbol`). Terminal like the archive gate: no retry helps, so the
+/// view says so instead of offering `r`. Crypto and typos land here.
+pub fn is_unknown_symbol(error: &str) -> bool {
+    error.contains("API 404")
+}
+
 pub struct Client {
     http: reqwest::Client,
     base: String,
@@ -218,6 +225,26 @@ impl Client {
         )
         .await
     }
+
+    /// Every published earnings read for one ticker, newest first, plus the
+    /// date of its next report. One request covers the whole surface: the
+    /// reads carry their full analysis, so nothing needs a second fetch.
+    /// A ticker with no read answers 200 with an empty list; one no listing
+    /// owns answers 404 (see `is_unknown_symbol`).
+    pub async fn earnings(&self, ticker: &str) -> Result<TickerEarnings> {
+        self.get_json(&format!("/api/symbols/{ticker}/earnings/"), &[])
+            .await
+    }
+
+    /// The official schedule of US macro releases in `[from, to)`, dates as
+    /// `YYYY-MM-DD`. Market-wide and unpaginated: one request covers every
+    /// series in the window.
+    pub async fn calendar(&self, from: &str, to: &str) -> Result<Vec<CalendarEvent>> {
+        let page: CalendarEvents = self
+            .get_json("/api/calendar/", &[("from_date", from), ("to_date", to)])
+            .await?;
+        Ok(page.events)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -308,6 +335,10 @@ pub enum Cmd {
         min_relevance: Option<u8>,
         sort: Sort,
     },
+    /// Fetch one ticker's earnings reads and its next report date.
+    FetchEarnings { symbol: String },
+    /// Fetch the macro calendar window `[from, to)`, dates as `YYYY-MM-DD`.
+    FetchCalendar { from: String, to: String },
 }
 
 pub enum Event {
@@ -344,6 +375,16 @@ pub enum Event {
     /// past the plan's archive horizon (403). Neither is worth showing: drop
     /// the poll position and the next poll starts a fresh one.
     PollReprime { key: String },
+    /// One ticker's earnings reads. Boxed: a single read runs to ~16 KB and
+    /// this rides the same channel as every price tick.
+    Earnings {
+        /// `earn:SYM`, the key the app tracks inflight and errors under.
+        key: String,
+        data: Box<TickerEarnings>,
+    },
+    /// The macro calendar window. Its failure is silent by design (the strip
+    /// simply does not render), so there is no error twin.
+    Calendar { events: Vec<CalendarEvent> },
     /// `key` matches the cache key of the fetch that failed.
     Error { key: String, error: String },
 }
@@ -365,6 +406,19 @@ pub fn news_key(symbol: Option<&str>) -> String {
 pub fn insider_key(symbol: &str) -> String {
     format!("ins:{symbol}")
 }
+
+/// Cache key for a ticker's earnings reads (kept distinct from feed keys).
+pub fn earnings_key(symbol: &str) -> String {
+    format!("earn:{symbol}")
+}
+
+/// Cache key for the macro calendar. It is the one payload here that is not
+/// scoped to a ticker: one window covers the whole market.
+pub const CALENDAR_KEY: &str = "~calendar";
+
+/// How far ahead the calendar window reaches. Long enough to always hold the
+/// next CPI and FOMC, short enough to stay one small response.
+pub const CALENDAR_DAYS: i64 = 45;
 
 /// Which paginated feed a page fetch targets, each with its score filter.
 enum Feed<'a> {
@@ -600,6 +654,53 @@ pub async fn run(
                     Err(e) => error_event(key, e, mode, cursor.as_deref()),
                 };
                 if tx.send(SourceEvent::Alphai(event)).is_err() {
+                    return;
+                }
+            }
+            Cmd::FetchEarnings { symbol } => {
+                let key = earnings_key(&symbol);
+                let Some(client) = &client else {
+                    send_error(&tx, key, "no AlphaAI API key configured");
+                    continue;
+                };
+                let event = match client.earnings(&symbol).await {
+                    Ok(data) => Event::Earnings {
+                        key,
+                        data: Box::new(data),
+                    },
+                    // A string no listing owns (crypto, a typo) is a state,
+                    // not a failure: reporting it as an error would offer a
+                    // retry that can never succeed.
+                    Err(e) if is_unknown_symbol(&format!("{e:#}")) => Event::Earnings {
+                        key,
+                        data: Box::new(TickerEarnings {
+                            ticker: symbol,
+                            unknown: true,
+                            ..Default::default()
+                        }),
+                    },
+                    Err(e) => Event::Error {
+                        key,
+                        error: format!("{e:#}"),
+                    },
+                };
+                if tx.send(SourceEvent::Alphai(event)).is_err() {
+                    return;
+                }
+            }
+            Cmd::FetchCalendar { from, to } => {
+                // The calendar garnishes the earnings view, so its failure is
+                // silent: an empty window renders no strip, and the answer
+                // still lands so the app stops waiting on it and does not
+                // retry until the cache ages out (nothing here auto-retries).
+                let events = match &client {
+                    Some(c) => c.calendar(&from, &to).await.unwrap_or_default(),
+                    None => Vec::new(),
+                };
+                if tx
+                    .send(SourceEvent::Alphai(Event::Calendar { events }))
+                    .is_err()
+                {
                     return;
                 }
             }
@@ -877,21 +978,35 @@ impl Article {
         self.sources_count.filter(|&n| n > 1)
     }
 
-    /// The article's page on alphai.io: `/news/article/{MM-DD}/{uid}/{slug}`.
-    /// None when the feed item has no uid or the title slugifies to nothing;
-    /// callers fall back to the original source URL.
+    /// The article's page on alphai.io.
     pub fn alphai_url(&self) -> Option<String> {
-        let uid = self.original.uid.trim();
-        if uid.is_empty() {
-            return None;
-        }
-        let date = self.published()?.format("%m-%d");
-        let slug = slugify(&self.original.title);
-        if slug.is_empty() {
-            return None;
-        }
-        Some(format!("{SITE_URL}/news/article/{date}/{uid}/{slug}"))
+        article_url_for(&self.original.uid, &self.original.title, self.published())
     }
+}
+
+/// The article page for one uid: `/news/article/{MM-DD}/{uid}/{slug}`. None
+/// when there is no uid, no timestamp, or the title slugifies to nothing;
+/// callers fall back to the original source URL. Free-standing so an
+/// earnings read can build its link without a feed row.
+pub fn article_url_for(uid: &str, title: &str, published: Option<DateTime<Utc>>) -> Option<String> {
+    let uid = uid.trim();
+    if uid.is_empty() {
+        return None;
+    }
+    let date = published?.format("%m-%d");
+    let slug = slugify(title);
+    if slug.is_empty() {
+        return None;
+    }
+    Some(format!("{SITE_URL}/news/article/{date}/{uid}/{slug}"))
+}
+
+/// Whether a feed row is the earnings filing itself rather than coverage of
+/// it. Only the filing carries a read: it comes from SEC EDGAR (an 8-K item
+/// 2.02, or a foreign private issuer's 6-K) and lands in the earnings
+/// category, while reprints of the same quarter come from news outlets.
+pub fn is_earnings_filing(a: &Article) -> bool {
+    a.original.source_domain == "sec.gov" && a.enrichment.category.as_deref() == Some("earnings")
 }
 
 /// Mirror of the site's slugify: keep ASCII word chars, turn whitespace and
@@ -1033,6 +1148,274 @@ pub struct TradeEvent {
     pub news_uid: Option<String>,
 }
 
+// ---------------------------------------------------------------------------
+// Earnings reads: AlphaAI's structured analysis of an earnings filing, and
+// the macro calendar. Neither paginates.
+
+/// One ticker's earnings reads plus the date of its next report, from
+/// `GET /api/symbols/{ticker}/earnings/` — a single request per ticker.
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct TickerEarnings {
+    #[serde(default)]
+    pub ticker: String,
+    /// Newest first, capped at 20 by the server. An empty list is a normal
+    /// answer, not an error: no read has been published for this ticker.
+    #[serde(default)]
+    pub reports: Vec<EarningsRead>,
+    /// The company-confirmed date of its next report (America/New_York), or
+    /// None when none is confirmed. Never an estimate, so None means "not
+    /// confirmed yet", not "does not report".
+    #[serde(default)]
+    pub next_report_date: Option<String>,
+    /// Set by the fetcher when the API owns no such symbol (404), never on
+    /// the wire. Terminal: the view says so instead of offering a retry.
+    #[serde(skip)]
+    pub unknown: bool,
+}
+
+impl TickerEarnings {
+    /// The newest read, the one the view opens on.
+    pub fn latest(&self) -> Option<&EarningsRead> {
+        self.reports.first()
+    }
+}
+
+/// One published read in a ticker's history.
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct EarningsRead {
+    /// Article uid: the same read is served inline by `/api/news/{uid}/`, and
+    /// it joins a read to the filing's row in the news feed.
+    #[serde(default)]
+    pub uid: String,
+    /// The share class the filing was actually made under, which is not
+    /// always the one asked for: a GOOGL request carries reads filed under
+    /// GOOG.
+    #[serde(default)]
+    pub ticker: String,
+    #[serde(default)]
+    pub fiscal_period: String,
+    #[serde(default)]
+    pub time_published: String,
+    #[serde(default)]
+    pub title: String,
+    /// `sec_form8k` for a US filer's item 2.02, `sec_form6k` for a foreign
+    /// private issuer's earnings release.
+    #[serde(default)]
+    pub source_type: String,
+    /// The read itself. Reached through `report()` so no call site has to
+    /// read `read.analysis.analysis`.
+    #[serde(default)]
+    pub analysis: EarningsReport,
+}
+
+impl EarningsRead {
+    pub fn report(&self) -> &EarningsReport {
+        &self.analysis
+    }
+
+    pub fn filed(&self) -> Option<DateTime<Utc>> {
+        DateTime::parse_from_rfc3339(&self.time_published)
+            .ok()
+            .map(|t| t.with_timezone(&Utc))
+    }
+
+    /// The filing form, for the feed cell and the view header.
+    pub fn form(&self) -> &'static str {
+        if self.source_type == "sec_form6k" {
+            "6-K"
+        } else {
+            "8-K"
+        }
+    }
+
+    /// The read's own article page on alphai.io.
+    pub fn alphai_url(&self) -> Option<String> {
+        article_url_for(&self.uid, &self.title, self.filed())
+    }
+}
+
+/// AlphaAI's structured read of one earnings release. Every figure is a
+/// string copied verbatim from the filing (the server checks each one
+/// against the filing text before publishing), so the client shortens units
+/// but never recomputes a number: see `short_metric`.
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct EarningsReport {
+    #[serde(default)]
+    pub company: String,
+    #[serde(default)]
+    pub ticker: String,
+    /// Free text as the filing words it: "Second Quarter Fiscal 2027",
+    /// "fiscal 2026 third quarter", "six months ended June 30, 2026".
+    #[serde(default)]
+    pub fiscal_period: String,
+    #[serde(default)]
+    pub period_end: Option<String>,
+    #[serde(default)]
+    pub headline: String,
+    /// strong / solid / mixed / weak. Kept a string: an unknown value must
+    /// render, not break the view.
+    #[serde(default)]
+    pub verdict: String,
+    #[serde(default)]
+    pub verdict_reason: String,
+    #[serde(default)]
+    pub key_metrics: Vec<KeyMetric>,
+    #[serde(default)]
+    pub segments: Vec<Segment>,
+    #[serde(default)]
+    pub guidance: Option<Guidance>,
+    #[serde(default)]
+    pub vs_prior_guidance: Vec<GuidanceCheck>,
+    #[serde(default)]
+    pub capital_returns: Vec<String>,
+    #[serde(default)]
+    pub balance_sheet_cash_flow: Vec<String>,
+    #[serde(default)]
+    pub drivers: Vec<String>,
+    #[serde(default)]
+    pub concerns: Vec<String>,
+    #[serde(default)]
+    pub what_to_watch: Vec<String>,
+    #[serde(default)]
+    pub quotes: Vec<SpeakerQuote>,
+    /// Several paragraphs, separated by blank lines.
+    #[serde(default)]
+    pub analysis: String,
+    /// What the filing did NOT state, named rather than guessed.
+    #[serde(default)]
+    pub missing_items: Vec<String>,
+    #[serde(default)]
+    pub numbers_verified_from_document: bool,
+}
+
+impl EarningsReport {
+    /// The multi-paragraph narrative, by a name that is not `analysis`.
+    pub fn narrative(&self) -> &str {
+        &self.analysis
+    }
+}
+
+/// One line of the filing's own numbers. Comparisons are None when the
+/// filing did not state them (the guard nulls anything it cannot verify).
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct KeyMetric {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub value: String,
+    /// GAAP / non-GAAP / other.
+    #[serde(default)]
+    pub basis: String,
+    #[serde(default)]
+    pub prior_year: Option<String>,
+    #[serde(default)]
+    pub prior_quarter: Option<String>,
+    #[serde(default)]
+    pub yoy_change: Option<String>,
+    #[serde(default)]
+    pub qoq_change: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct Segment {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub revenue: String,
+    #[serde(default)]
+    pub yoy_change: Option<String>,
+    #[serde(default)]
+    pub qoq_change: Option<String>,
+    #[serde(default)]
+    pub driver: String,
+}
+
+/// The company's own outlook, when the release gave one.
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct Guidance {
+    #[serde(default)]
+    pub period: String,
+    #[serde(default)]
+    pub revenue: Option<String>,
+    #[serde(default)]
+    pub gross_margin: Option<String>,
+    #[serde(default)]
+    pub operating_expenses: Option<String>,
+    #[serde(default)]
+    pub tax_rate: Option<String>,
+    #[serde(default)]
+    pub other: Vec<String>,
+}
+
+/// A reported figure against the company's own prior outlook.
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct GuidanceCheck {
+    #[serde(default)]
+    pub metric: String,
+    #[serde(default)]
+    pub prior_guidance: String,
+    #[serde(default)]
+    pub actual: String,
+    /// above / in line / below / n/a.
+    #[serde(default)]
+    pub verdict: String,
+}
+
+/// Management, verbatim. Named for the price `Quote` in `crate::domain`.
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct SpeakerQuote {
+    #[serde(default)]
+    pub speaker: String,
+    #[serde(default)]
+    pub role: Option<String>,
+    #[serde(default)]
+    pub text: String,
+}
+
+/// One scheduled US macro release, from `GET /api/calendar/`.
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct CalendarEvent {
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub scheduled_at: String,
+    /// upcoming / elapsed. Says only that the moment passed, never that the
+    /// agency published.
+    #[serde(default)]
+    pub phase: String,
+    /// scheduled / postponed / cancelled. Read this before `phase`.
+    #[serde(default)]
+    pub schedule_status: String,
+    /// official (printed on the agency's schedule) / inferred (derived from
+    /// the documented cadence). Shown, not hidden.
+    #[serde(default)]
+    pub schedule_basis: String,
+    /// high / medium / low.
+    #[serde(default)]
+    pub importance: String,
+    /// FOMC decisions only: the press conference.
+    #[serde(default)]
+    pub press_conference_at: Option<String>,
+    /// FOMC decisions only: the meeting carries a Summary of Economic
+    /// Projections (the dot plot).
+    #[serde(default)]
+    pub has_sep: bool,
+}
+
+impl CalendarEvent {
+    pub fn scheduled(&self) -> Option<DateTime<Utc>> {
+        DateTime::parse_from_rfc3339(&self.scheduled_at)
+            .ok()
+            .map(|t| t.with_timezone(&Utc))
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct CalendarEvents {
+    #[serde(default)]
+    pub events: Vec<CalendarEvent>,
+}
+
 /// "25000.0000" (API decimal string) -> "25,000"; fractional shares round.
 /// Unparsable input passes through untouched, like `fmt_usd`.
 pub fn fmt_shares(decimal: &str) -> String {
@@ -1048,6 +1431,101 @@ pub fn fmt_shares(decimal: &str) -> String {
         out.push(c);
     }
     if v < 0.0 { format!("-{out}") } else { out }
+}
+
+/// Shorten a filing figure for a narrow column: units only, never the
+/// number itself. "$96,221 million" becomes "$96,221M" and never "$96.2B" —
+/// a rounded figure is a new number, and every figure here is quoted from
+/// the filing precisely so it is not one.
+pub fn short_metric(value: &str) -> String {
+    let mut trimmed = value.trim();
+    // Balance-sheet lines carry the date they were measured on; the column
+    // header already says which period the column is.
+    if let Some(i) = trimmed.find(" as of ") {
+        trimmed = trimmed[..i].trim_end();
+    }
+    let mut out = trimmed.to_string();
+    for (long, short) in [
+        (" billion", "B"),
+        (" million", "M"),
+        (" percentage points", "pt"),
+        (" percentage point", "pt"),
+        (" basis points", "bp"),
+        (" pts", "pt"),
+        (" pt", "pt"),
+        (" percent", "%"),
+        (" per diluted share", ""),
+        (" per share", ""),
+    ] {
+        out = out.replace(long, short);
+    }
+    out
+}
+
+/// Phrases a filing appends to a change that the column header already
+/// states. Dropping them shortens the cell without touching the figure.
+const CHANGE_TAILS: [&str; 6] = [
+    " year over year",
+    " from a year ago",
+    " from the year-ago quarter",
+    " sequentially",
+    " quarter over quarter",
+    " from the prior quarter",
+];
+
+/// A change as the filing states it, with a leading `+` when it carries no
+/// sign of its own ("18%" -> "+18%"). Only the sign is added: a filing that
+/// wrote a decline wrote the minus itself.
+pub fn signed_change(change: &str) -> String {
+    let mut out = short_metric(change);
+    let lower = out.to_lowercase();
+    for tail in CHANGE_TAILS {
+        if let Some(cut) = lower.find(tail) {
+            out.truncate(cut);
+            break;
+        }
+    }
+    // "up 16%" and "down 5%" are the filing's own words for a sign, so they
+    // become one. The figure itself is never touched.
+    let t = out.trim();
+    for (word, sign) in [("up ", "+"), ("down ", "-")] {
+        if let Some(rest) = t.strip_prefix(word) {
+            return format!("{sign}{rest}");
+        }
+    }
+    if t.starts_with(|c: char| c.is_ascii_digit()) {
+        return format!("+{t}");
+    }
+    t.to_string()
+}
+
+/// "Second Quarter Fiscal 2027" -> "Q2 FY27", for headers too narrow for the
+/// filing's own wording. Anything that does not name a quarter and a year is
+/// returned untouched: the wording is free text and inventing a period is
+/// worse than a long one.
+pub fn short_fiscal_period(period: &str) -> String {
+    let lower = period.to_lowercase();
+    let quarter = [
+        ("first quarter", 1),
+        ("second quarter", 2),
+        ("third quarter", 3),
+        ("fourth quarter", 4),
+        ("q1", 1),
+        ("q2", 2),
+        ("q3", 3),
+        ("q4", 4),
+    ]
+    .into_iter()
+    .find(|(word, _)| lower.contains(word))
+    .map(|(_, n)| n);
+    let year = lower
+        .split(|c: char| !c.is_ascii_digit())
+        .find(|t| t.len() == 4 && (t.starts_with('1') || t.starts_with('2')))
+        .and_then(|t| t.parse::<u32>().ok());
+    match (quarter, year) {
+        (Some(q), Some(y)) => format!("Q{q} FY{:02}", y % 100),
+        _ => period.to_string(),
+    }
 }
 
 /// "1234567.89" (API decimal string) -> "$1.2M"; sign kept in front.
@@ -1449,7 +1927,7 @@ mod tests {
         assert_eq!(fmt_usd("garbage"), "garbage");
     }
 
-    /// Live end-to-end check against the real API (10 requests).
+    /// Live end-to-end check against the real API (13 requests).
     /// Run: ALPHAI_API_KEY=ak_live_… cargo test live_api -- --ignored
     #[tokio::test]
     #[ignore = "live API call; needs ALPHAI_API_KEY"]
@@ -1513,6 +1991,38 @@ mod tests {
         let trending = client.trending().await.unwrap();
         assert!(!trending.is_empty(), "empty trending feed");
 
+        // The earnings surface: a ticker with a read, a ticker without one
+        // (an empty list is a normal 200), and a string no listing owns.
+        let earnings = client.earnings("NVDA").await.unwrap();
+        let read = earnings.latest().expect("no earnings read for NVDA");
+        assert!(
+            !read.report().key_metrics.is_empty(),
+            "a published read always carries metrics"
+        );
+        assert!(read.report().numbers_verified_from_document);
+        let bare = client.earnings("KO").await.unwrap();
+        assert!(
+            bare.latest().is_none() || !bare.reports.is_empty(),
+            "the empty history must parse either way"
+        );
+        let missing = client.earnings("ZZZQQ").await.unwrap_err();
+        assert!(
+            is_unknown_symbol(&format!("{missing:#}")),
+            "an unknown ticker stopped answering 404: {missing:#}"
+        );
+
+        // The macro calendar: one window, one request, always populated.
+        let today = Utc::now().date_naive();
+        let events = client
+            .calendar(
+                &today.to_string(),
+                &(today + chrono::Duration::days(CALENDAR_DAYS)).to_string(),
+            )
+            .await
+            .unwrap();
+        assert!(!events.is_empty(), "empty calendar window");
+        assert!(events.iter().all(|e| e.scheduled().is_some()));
+
         // Delta mode, the whole of the app's refresh path. The priming page
         // carries rows and a position; replaying that position returns only
         // what has arrived since, which is usually nothing, and still hands
@@ -1566,6 +2076,209 @@ mod tests {
             insider_delta.next_cursor.is_some(),
             "insider feed refused a delta position"
         );
+    }
+
+    /// Trimmed to four metrics; the shape is the live payload's.
+    const EARNINGS_SAMPLE: &str = r#"{
+      "ticker": "NVDA",
+      "next_report_date": "2026-11-17",
+      "reports": [{
+        "uid": "352613cc3f6089cc",
+        "time_published": "2026-08-26T20:21:19Z",
+        "title": "NVIDIA CORP (NVDA): Results of Operations and Financial Condition",
+        "source_type": "sec_form8k",
+        "ticker": "NVDA",
+        "fiscal_period": "Second Quarter Fiscal 2027",
+        "analysis": {
+          "company": "NVIDIA CORP",
+          "ticker": "NVDA",
+          "fiscal_period": "Second Quarter Fiscal 2027",
+          "period_end": "July 26, 2026",
+          "headline": "NVIDIA Announces Financial Results for Second Quarter Fiscal 2027",
+          "verdict": "strong",
+          "verdict_reason": "Revenue grew 18% sequentially and 106% year over year.",
+          "key_metrics": [
+            {"name": "Revenue", "value": "$96,221 million", "basis": "GAAP",
+             "prior_year": "$46,743 million", "prior_quarter": "$81,615 million",
+             "yoy_change": "106%", "qoq_change": "18%"},
+            {"name": "Cost of revenue", "value": "$24,079 million", "basis": "GAAP",
+             "prior_year": "$12,890 million", "prior_quarter": "$20,458 million",
+             "yoy_change": null, "qoq_change": null},
+            {"name": "Basic earnings per share", "value": "$2.47 per share", "basis": "GAAP",
+             "prior_year": "$1.08 per share", "prior_quarter": null,
+             "yoy_change": null, "qoq_change": null},
+            {"name": "Non-GAAP diluted earnings per share", "value": "$2.22 per diluted share",
+             "basis": "non-GAAP", "prior_year": "$1.01 per diluted share",
+             "prior_quarter": "$1.87 per diluted share",
+             "yoy_change": "120%", "qoq_change": "19%"}
+          ],
+          "segments": [{"name": "Data Center", "revenue": "$89.0 billion",
+                        "yoy_change": "117%", "qoq_change": "18%",
+                        "driver": "Vera Rubin ramping into full production."}],
+          "guidance": {"period": "Third quarter fiscal 2027",
+                       "revenue": "$108.0 billion, plus or minus 2%",
+                       "gross_margin": "74.0%, plus or minus 50 basis points",
+                       "operating_expenses": null, "tax_rate": null, "other": []},
+          "vs_prior_guidance": [],
+          "capital_returns": ["Returned $26.0 billion to shareholders."],
+          "balance_sheet_cash_flow": [],
+          "drivers": [],
+          "concerns": ["No Data Center compute revenue from China is assumed."],
+          "what_to_watch": ["Vera Rubin ramp."],
+          "quotes": [{"speaker": "Jensen Huang", "role": "CEO", "text": "Demand is extraordinary."}],
+          "analysis": "First paragraph.\n\nSecond paragraph.",
+          "missing_items": ["Segment operating income."],
+          "numbers_verified_from_document": true
+        }
+      }]
+    }"#;
+
+    #[test]
+    fn parses_ticker_earnings() {
+        let data: TickerEarnings = serde_json::from_str(EARNINGS_SAMPLE).unwrap();
+        assert_eq!(data.ticker, "NVDA");
+        assert_eq!(data.next_report_date.as_deref(), Some("2026-11-17"));
+        assert!(!data.unknown, "the wire never sets the terminal-state flag");
+        let read = data.latest().unwrap();
+        assert_eq!(read.form(), "8-K");
+        assert_eq!(read.report().key_metrics.len(), 4);
+        assert_eq!(
+            read.report().guidance.as_ref().unwrap().period,
+            "Third quarter fiscal 2027"
+        );
+        assert_eq!(read.report().narrative().lines().count(), 3);
+        assert!(
+            read.alphai_url()
+                .unwrap()
+                .contains("/news/article/08-26/352613cc3f6089cc/")
+        );
+    }
+
+    /// A foreign private issuer's 6-K: no segments, no guidance, no prior
+    /// periods, figures in the filing's own currency. The renderer has to
+    /// live on this shape as happily as on the full one.
+    #[test]
+    fn parses_a_foreign_issuer_read() {
+        let data: TickerEarnings = serde_json::from_str(
+            r#"{"ticker": "TSM", "next_report_date": null, "reports": [{
+                 "uid": "8aec41a2fdb476c0",
+                 "time_published": "2026-08-11T11:45:48Z",
+                 "title": "TSMC 6-K",
+                 "source_type": "sec_form6k",
+                 "ticker": "TSM",
+                 "fiscal_period": "six months ended June 30, 2026",
+                 "analysis": {
+                   "company": "Taiwan Semiconductor Manufacturing Company Limited",
+                   "fiscal_period": "six months ended June 30, 2026",
+                   "verdict": "solid",
+                   "key_metrics": [{"name": "Second quarter consolidated revenue",
+                                    "value": "NT$1,270.38 billion", "basis": "other",
+                                    "prior_year": null, "prior_quarter": null,
+                                    "yoy_change": null, "qoq_change": null}],
+                   "guidance": null,
+                   "analysis": "Board approved the report."
+                 }}]}"#,
+        )
+        .unwrap();
+        let read = data.latest().unwrap();
+        assert_eq!(read.form(), "6-K");
+        assert!(read.report().guidance.is_none());
+        assert!(read.report().segments.is_empty());
+        assert_eq!(data.next_report_date, None);
+    }
+
+    /// The most common answer of all: covered, but nothing published yet.
+    #[test]
+    fn parses_an_empty_earnings_history() {
+        let data: TickerEarnings = serde_json::from_str(
+            r#"{"ticker":"AVGO","reports":[],"next_report_date":"2026-09-02"}"#,
+        )
+        .unwrap();
+        assert!(data.latest().is_none());
+        assert_eq!(data.next_report_date.as_deref(), Some("2026-09-02"));
+    }
+
+    #[test]
+    fn parses_calendar_events() {
+        let page: CalendarEvents = serde_json::from_str(
+            r#"{"events":[{"title":"CPI (Consumer Price Index)","scheduled_at":"2026-09-11T12:30:00Z",
+                 "phase":"upcoming","schedule_status":"scheduled","schedule_basis":"official",
+                 "importance":"high","press_conference_at":null,"has_sep":false}]}"#,
+        )
+        .unwrap();
+        assert_eq!(page.events.len(), 1);
+        assert!(page.events[0].scheduled().is_some());
+    }
+
+    /// Units shorten, figures never change. A rounded number is a new
+    /// number, and the whole point of the layer is that every figure is the
+    /// filing's own.
+    #[test]
+    fn short_metric_shortens_units_without_rounding() {
+        assert_eq!(short_metric("$96,221 million"), "$96,221M");
+        assert_eq!(short_metric("NT$1,270.38 billion"), "NT$1,270.38B");
+        assert_eq!(short_metric("$2.46 per diluted share"), "$2.46");
+        assert_eq!(
+            short_metric("$10,605 million as of January 25, 2026"),
+            "$10,605M"
+        );
+        assert_eq!(short_metric("50.1 percent"), "50.1%");
+        assert_eq!(short_metric("—"), "—");
+        assert_ne!(short_metric("$96,221 million"), "$96.2B");
+    }
+
+    #[test]
+    fn signed_change_adds_only_a_sign() {
+        assert_eq!(signed_change("18%"), "+18%");
+        assert_eq!(signed_change("2.6 pts"), "+2.6pt");
+        assert_eq!(signed_change("-5%"), "-5%");
+        assert_eq!(signed_change("up 16 percent year over year"), "+16%");
+        assert_eq!(signed_change("down 5 percent sequentially"), "-5%");
+        assert_eq!(signed_change("—"), "—");
+    }
+
+    #[test]
+    fn fiscal_periods_shorten_when_they_name_a_quarter() {
+        assert_eq!(short_fiscal_period("Second Quarter Fiscal 2027"), "Q2 FY27");
+        assert_eq!(short_fiscal_period("fiscal 2026 third quarter"), "Q3 FY26");
+        // Nothing to shorten: a half-year period keeps the filing's wording
+        // rather than being forced into a quarter it does not name.
+        assert_eq!(
+            short_fiscal_period("six months ended June 30, 2026"),
+            "six months ended June 30, 2026"
+        );
+    }
+
+    #[test]
+    fn unknown_symbol_is_recognised() {
+        assert!(is_unknown_symbol(
+            "AlphaAI API 404 Not Found: Unknown symbol 'ZZZQQ'."
+        ));
+        assert!(!is_unknown_symbol(
+            "AlphaAI API 400 Bad Request: bad cursor"
+        ));
+    }
+
+    /// The feed cannot say whether a row has a read, so the client tells the
+    /// filing apart from coverage of it by where the row came from.
+    #[test]
+    fn earnings_filings_are_told_from_coverage() {
+        let filing: Article = serde_json::from_str(
+            r#"{"original":{"source_domain":"sec.gov","source":"SEC EDGAR 8-K"},
+                "enrichment":{"category":"earnings"}}"#,
+        )
+        .unwrap();
+        let coverage: Article = serde_json::from_str(
+            r#"{"original":{"source_domain":"reuters.com"},"enrichment":{"category":"earnings"}}"#,
+        )
+        .unwrap();
+        let form4: Article = serde_json::from_str(
+            r#"{"original":{"source_domain":"sec.gov"},"enrichment":{"category":"insider"}}"#,
+        )
+        .unwrap();
+        assert!(is_earnings_filing(&filing));
+        assert!(!is_earnings_filing(&coverage));
+        assert!(!is_earnings_filing(&form4));
     }
 
     /// 21 and above is a Pro-only page size: raising `PAGE_SIZE` past 20

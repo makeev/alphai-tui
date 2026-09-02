@@ -146,6 +146,14 @@ impl InsiderChartWindow {
     }
 }
 
+/// One ticker's earnings reads with the moment they were fetched. Cached far
+/// longer than a feed (a read changes once a quarter), so the timestamp lives
+/// beside the data rather than in a feed bundle.
+pub struct EarningsSlot {
+    pub data: alphai::TickerEarnings,
+    pub fetched: Instant,
+}
+
 /// The default combos the t and T keys cycle through (`[chart] presets`
 /// overrides them); wraps at the ends. A startup combo not in the table
 /// (e.g. -r 3mo) jumps to the first preset on t and to the last on T.
@@ -242,6 +250,16 @@ pub struct App {
     pub insider_min_score: u8,
     /// Window of the Insider view's chart panel (g cycles off/3m/12m).
     pub insider_chart: InsiderChartWindow,
+    /// Earnings reads by symbol, each with the moment it was fetched. Its
+    /// own map rather than a feed bundle: the payload has no pagination, no
+    /// sort and no score filter, and it outlives a feed's TTL by an order of
+    /// magnitude (a read changes once a quarter).
+    pub earnings: HashMap<String, EarningsSlot>,
+    /// The macro calendar window and when it landed. One market-wide payload
+    /// for every ticker, so it is not keyed by symbol.
+    pub calendar: Option<(Vec<alphai::CalendarEvent>, Instant)>,
+    /// Scroll of the Earnings view's body; reset when the ticker changes.
+    pub earnings_scroll: u16,
     /// How long a fetched AlphaAI bundle stays fresh. Seeded from
     /// `[ui] alphai_ttl_secs` (default `alphai::CACHE_TTL`), file-only.
     pub alphai_ttl: Duration,
@@ -301,6 +319,9 @@ impl App {
             news_min_score: init.ui.news_min_score,
             insider_min_score: init.ui.insider_min_score,
             insider_chart: init.ui.insider_chart,
+            earnings: HashMap::new(),
+            calendar: None,
+            earnings_scroll: 0,
             alphai_ttl: init.ui.alphai_ttl,
             card_scroll: 0,
             news_table_state: TableState::default(),
@@ -423,6 +444,9 @@ impl App {
         }
         let news_view = ui::VIEWS[self.view_idx].navigates_articles();
         let chart_view = ui::VIEWS[self.view_idx].has_chart_panel();
+        let earnings_view = ui::VIEWS[self.view_idx].shows_earnings();
+        // ←→ walk the watchlist wherever the view is scoped to one ticker.
+        let lr_ticker = news_view || earnings_view;
         let news_feed = ui::VIEWS[self.view_idx].feed_shown() == Some(FeedKind::News);
         let any_feed = ui::VIEWS[self.view_idx].feed_shown().is_some();
         let Some(action) = self.keymap.resolve(&key) else {
@@ -457,17 +481,34 @@ impl App {
                     self.request_more_articles();
                 }
             }
-            Action::Left if news_view => {
+            Action::Left if lr_ticker => {
                 self.selected = self.selected.saturating_sub(1);
                 self.news_selected = 0;
                 self.card_scroll = 0;
+                self.earnings_scroll = 0;
             }
-            Action::Right if news_view => {
+            Action::Right if lr_ticker => {
                 self.selected = (self.selected + 1).min(self.symbols.len() - 1);
                 self.news_selected = 0;
                 self.card_scroll = 0;
+                self.earnings_scroll = 0;
+            }
+            // The earnings body is a document: up/down scroll it, and these
+            // arms must stay above the unguarded ones at the end of the
+            // match, which move the watchlist selection instead.
+            Action::Up if earnings_view => {
+                self.earnings_scroll = self.earnings_scroll.saturating_sub(1)
+            }
+            Action::Down if earnings_view => {
+                self.earnings_scroll = self.earnings_scroll.saturating_add(1)
             }
             // Card pane scrolling (the list keeps up/down).
+            Action::PageUp if earnings_view => {
+                self.earnings_scroll = self.earnings_scroll.saturating_sub(10)
+            }
+            Action::PageDown if earnings_view => {
+                self.earnings_scroll = self.earnings_scroll.saturating_add(10)
+            }
             Action::PageUp if self.view_id() == ui::ViewId::News => {
                 self.card_scroll = self.card_scroll.saturating_sub(10)
             }
@@ -484,6 +525,14 @@ impl App {
                     .and_then(|list| list.get(self.news_selected))
                 {
                     open_url(&self.article_url(a));
+                }
+            }
+            // The read's own page on alphai.io, which also links the filing.
+            // The payload carries no source URL of its own, so this ignores
+            // the "open the original source" setting.
+            Action::Open if earnings_view => {
+                if let Some(url) = ui::earnings::open_url(self) {
+                    open_url(&url);
                 }
             }
             Action::Card
@@ -623,6 +672,7 @@ impl App {
             self.view_idx = idx;
             self.news_selected = 0;
             self.card_scroll = 0;
+            self.earnings_scroll = 0;
         }
     }
 

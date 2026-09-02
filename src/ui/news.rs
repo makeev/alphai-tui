@@ -5,7 +5,7 @@ use ratatui::style::{Modifier, Style, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Cell, Paragraph, Row, Table, Wrap};
 
-use crate::alphai::{Article, fmt_usd};
+use crate::alphai::{self, Article, fmt_usd};
 use crate::app::{App, FeedKind, NewsScope};
 use crate::keymap::Action;
 use crate::theme::Theme;
@@ -134,14 +134,21 @@ impl View for NewsView {
         f.render_stateful_widget(table, list_area, &mut app.news_table_state);
 
         if let Some(card_area) = card_area {
+            // The read comes from the cache the Earnings view fills; the
+            // card itself never fetches, so moving down the list is free.
+            let selected = bundle.articles.get(app.news_selected);
+            let uid = selected.map(|a| a.original.uid.clone()).unwrap_or_default();
+            let mut scroll = app.card_scroll;
             crate::ui::article::render_pane(
                 f,
                 card_area,
-                bundle.articles.get(app.news_selected),
+                selected,
                 &symbol,
-                &mut app.card_scroll,
+                app.find_earnings_by_uid(&uid),
+                &mut scroll,
                 &theme,
             );
+            app.card_scroll = scroll;
         }
     }
 }
@@ -299,7 +306,7 @@ fn article_row(a: &Article, ctx: &RowCtx, unseen: bool) -> Row<'static> {
         cells.push(Cell::from(tickers.join(",")).bold());
         cells.push(sources_cell(a.sources_badge()));
     }
-    cells.push(Cell::from(short_category(a)).dim());
+    cells.push(category_cell(a, theme));
     cells.push(title_cell(
         a.original.title.clone(),
         Style::new(),
@@ -408,6 +415,19 @@ fn head_line(app: &App, sentiment: Option<&crate::alphai::SentimentSummary>) -> 
 /// Renders the no-key / error / loading placeholder when there is nothing to
 /// list yet. Returns true when the caller should stop.
 pub fn render_gate(f: &mut Frame, area: Rect, block: &Block, app: &App, key: &str) -> bool {
+    render_gate_with(f, area, block, app, key, !app.feeds.contains_key(key))
+}
+
+/// The same three states for a surface that is not a feed: `missing` says
+/// whether its payload has landed yet.
+pub fn render_gate_with(
+    f: &mut Frame,
+    area: Rect,
+    block: &Block,
+    app: &App,
+    key: &str,
+    missing: bool,
+) -> bool {
     if !app.alphai_enabled {
         let lines = vec![
             Line::from(""),
@@ -438,7 +458,6 @@ pub fn render_gate(f: &mut Frame, area: Rect, block: &Block, app: &App, key: &st
         );
         return true;
     }
-    let missing = !app.feeds.contains_key(key);
     if missing {
         f.render_widget(
             Paragraph::new(Line::from("loading…").dim()).block(block.clone()),
@@ -593,6 +612,23 @@ fn sources_cell(count: Option<i64>) -> Cell<'static> {
         Some(n) => Cell::from(format!("×{n}")).dim(),
         None => Cell::from("   "),
     }
+}
+
+/// The category cell, except on the earnings filing itself: there it names
+/// the form (8-K, or a foreign private issuer's 6-K) in the accent color.
+/// Coverage of the same quarter is also categorised "earnings", but only the
+/// filing carries a structured read, and in a busy feed that is the row a
+/// reader is looking for.
+fn category_cell(a: &Article, theme: &Theme) -> Cell<'static> {
+    if alphai::is_earnings_filing(a) {
+        let form = if a.original.source.contains("6-K") {
+            "6-K"
+        } else {
+            "8-K"
+        };
+        return Cell::from(form).style(Style::new().fg(theme.accent));
+    }
+    Cell::from(short_category(a)).dim()
 }
 
 fn short_category(a: &Article) -> &'static str {

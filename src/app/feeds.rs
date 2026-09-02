@@ -24,7 +24,7 @@ use chrono::{DateTime, Utc};
 use crate::alphai::{self, Article, FeedMode, FeedPayload, InsiderTrades, SentimentSummary, Sort};
 use crate::ui;
 
-use super::{App, NewsScope};
+use super::{App, EarningsSlot, NewsScope};
 
 /// How many TTLs a polling feed's head page may live for. Merges keep the
 /// rows current, so the head fetch is only renewing the side payload and
@@ -32,6 +32,19 @@ use super::{App, NewsScope};
 /// One request per TTL per visible feed is the budget either way: a tick that
 /// refetches the head does not also poll.
 const SIDE_REFRESH_FACTOR: u32 = 4;
+
+/// How many TTLs an earnings read stays fresh. A read is published once a
+/// quarter and never changes after that, so this is the longest-lived
+/// payload here: an hour at the default 300s TTL. Expressed as a factor so
+/// the one budget knob a user has (`[ui] alphai_ttl_secs`) still moves it.
+/// The evening of a report is covered without a shorter TTL: the filing
+/// reaches the news feed within minutes, and `r` refetches on demand.
+const EARNINGS_TTL_FACTOR: u32 = 12;
+
+/// How many TTLs the macro calendar stays fresh: six hours at the default.
+/// Agency schedules move about once a month, and the window reaches 45 days
+/// ahead, so one fetch covers a working day.
+const CALENDAR_TTL_FACTOR: u32 = 72;
 
 /// The AlphaAI feeds a view can display (`View::feed_shown`). Trending is
 /// not a kind: it is a news scope, a different cache key of the news feed.
@@ -229,6 +242,20 @@ impl App {
         self.feeds.get(&key).map(|b| b.articles.as_slice())
     }
 
+    /// The cached read for one article uid, from any ticker in the cache.
+    /// The card needs it in the market and trending scopes too, where the
+    /// selected watchlist symbol has nothing to do with the article on
+    /// screen, so this scans the whole cache rather than one slot.
+    pub(crate) fn find_earnings_by_uid(&self, uid: &str) -> Option<&alphai::EarningsRead> {
+        if uid.is_empty() {
+            return None;
+        }
+        self.earnings
+            .values()
+            .flat_map(|slot| slot.data.reports.iter())
+            .find(|read| read.uid == uid)
+    }
+
     pub(crate) fn apply_alphai(&mut self, event: alphai::Event) {
         match event {
             alphai::Event::Feed {
@@ -345,6 +372,28 @@ impl App {
                     b.polled = Instant::now();
                 }
             }
+            alphai::Event::Earnings { key, data } => {
+                self.inflight.remove(&key);
+                self.alphai_errors.remove(&key);
+                // Cache under the symbol that was asked for: the payload
+                // names the share class the filing was made under, which is
+                // not always the one on screen (GOOGL carries GOOG's reads).
+                let symbol = key.strip_prefix("earn:").unwrap_or(&key).to_string();
+                self.earnings.insert(
+                    symbol,
+                    EarningsSlot {
+                        data: *data,
+                        fetched: Instant::now(),
+                    },
+                );
+            }
+            // An empty window is also what a failed fetch looks like: the
+            // strip renders nothing either way, and caching it keeps the
+            // next frame from asking again (nothing here auto-retries).
+            alphai::Event::Calendar { events } => {
+                self.inflight.remove(alphai::CALENDAR_KEY);
+                self.calendar = Some((events, Instant::now()));
+            }
             alphai::Event::Error { key, error } => {
                 self.inflight.remove(&key);
                 self.alphai_errors.insert(key, error);
@@ -358,7 +407,9 @@ impl App {
     /// clears the error and retries) — the free tier is 100 requests/day.
     pub(crate) fn ensure_alphai_data(&mut self) {
         // The overlay gate also keeps a TTL refetch from swapping the article
-        // out from under the reader mid-scroll.
+        // out from under the reader mid-scroll. These preconditions hold for
+        // every surface, so they live here and the branches below only carry
+        // what is specific to their own payload.
         if !self.alphai_enabled
             || self.settings.open
             || self.article_overlay.open
@@ -367,6 +418,12 @@ impl App {
         {
             return;
         }
+        self.ensure_feed_data();
+        self.ensure_earnings_data();
+    }
+
+    /// The feed behind the visible view: head fetch, delta poll, or nothing.
+    fn ensure_feed_data(&mut self) {
         // The view declares which feed it shows (`View::feed_shown`); the
         // guards below are the single copy for every feed kind.
         let Some((key, kind)) = self.active_feed() else {
@@ -423,6 +480,44 @@ impl App {
         }
     }
 
+    /// The earnings surface: one request per ticker, and one for the macro
+    /// calendar window, only while the view that shows them is up. Neither
+    /// paginates and neither ever retries by itself.
+    fn ensure_earnings_data(&mut self) {
+        if !ui::VIEWS[self.view_idx].shows_earnings() {
+            return;
+        }
+        let ttl = self.alphai_ttl;
+        let symbol = self.selected_symbol().to_string();
+        let key = alphai::earnings_key(&symbol);
+        // One earnings request at a time, whichever ticker: walking the
+        // watchlist with the arrow keys would otherwise spend a request per
+        // frame instead of one per round trip.
+        let busy = self.inflight.iter().any(|k| k.starts_with("earn:"));
+        let stale = match self.earnings.get(&symbol) {
+            None => true,
+            Some(slot) => slot.fetched.elapsed() > ttl * EARNINGS_TTL_FACTOR,
+        };
+        if stale && !busy && !self.alphai_errors.contains_key(&key) {
+            self.inflight.insert(key);
+            let _ = self.alphai_tx.send(alphai::Cmd::FetchEarnings { symbol });
+        }
+        // The calendar is market-wide, so it is fetched once for every
+        // ticker; a failure caches an empty window rather than an error.
+        let due = match &self.calendar {
+            None => true,
+            Some((_, at)) => at.elapsed() > ttl * CALENDAR_TTL_FACTOR,
+        };
+        if due && !self.inflight.contains(alphai::CALENDAR_KEY) {
+            let today = Utc::now().date_naive();
+            self.inflight.insert(alphai::CALENDAR_KEY.to_string());
+            let _ = self.alphai_tx.send(alphai::Cmd::FetchCalendar {
+                from: today.to_string(),
+                to: (today + chrono::Duration::days(alphai::CALENDAR_DAYS)).to_string(),
+            });
+        }
+    }
+
     /// j at the last row: ask for the feed's next page (explicitly
     /// user-driven, one request per keypress at most; the shared `inflight`
     /// key also blocks a concurrent TTL refetch of the same feed).
@@ -472,9 +567,22 @@ impl App {
     /// `feed_seen` stays: the refetch marks what is actually new.
     pub(super) fn manual_refresh(&mut self) {
         self.refresh.notify_one();
+        // Whichever surface is on screen, and only that one: a view showing
+        // both must not spend two requests on one keypress.
         if let Some((key, _)) = self.active_feed() {
             self.feeds.remove(&key);
             self.alphai_errors.remove(&key);
+        } else if ui::VIEWS[self.view_idx].shows_earnings() {
+            let symbol = self.selected_symbol().to_string();
+            self.earnings.remove(&symbol);
+            self.alphai_errors.remove(&alphai::earnings_key(&symbol));
+            // The calendar is dropped only when it holds nothing, which is
+            // also what a failed fetch leaves behind: that keeps `r` a
+            // manual retry for it without spending a second request on a
+            // schedule that moves about once a month.
+            if self.calendar.as_ref().is_some_and(|(e, _)| e.is_empty()) {
+                self.calendar = None;
+            }
         }
     }
 

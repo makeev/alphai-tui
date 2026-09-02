@@ -95,6 +95,28 @@ Built in Rust with [ratatui](https://ratatui.rs).
 
   ![alphai-tui insider view: the Form 4 trades chart, a log-scale scatter of sales over weekly dollar bars, above the filing stream with the 12-month rollup on top](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/insider.png)
 
+- **Earnings**: AlphaAI's structured read of the selected ticker's own
+  earnings filing, the way a company reports it: the verdict and why, the
+  metric table with prior quarter, prior year and both changes, segments,
+  the outlook, concerns, what to watch and several paragraphs of analysis.
+  Every figure in it was checked against the filing text before it was
+  published, and it prints exactly as the filing wrote it, units shortened
+  and nothing rounded into a new number. Both American and foreign filings
+  are covered (an 8-K item 2.02, or a foreign private issuer's 6-K, which
+  reports half years and its own currency). The metric table is banded row
+  by row and led by dots from each name across to its figures, and it stays
+  as wide as its own content however wide the terminal is. `←` `→` walk the
+  watchlist, `↑` `↓` scroll, and older quarters continue below the newest
+  read.
+  When a company has not reported since AlphaAI began reading filings, the
+  view says so and gives the date of its next report when the company has
+  confirmed one. The bottom line carries the next couple of US macro
+  releases (CPI, the jobs report, an FOMC decision and the rest), which is
+  the other half of what moves a price you are about to read about.
+  Filings show up in the News feed too: the row for the filing itself is
+  marked `8-K` or `6-K` rather than `earnings`, which tells it apart from
+  the coverage around it, and its article card carries a short form of the
+  read once the Earnings view has loaded it.
 - In-app settings (`s`): pick the price source, paste API keys once, set
   the poll interval (applies immediately) and choose where Enter opens
   news articles. Everything is saved to a config file, so after the first
@@ -192,6 +214,7 @@ alphai-tui -s finnhub NVDA  # explicit source for one run
 | `-i, --interval` | `5m` | Candle size: `1m 2m 5m 15m 30m 60m 1d` |
 | `--theme` | `default` | Color preset, e.g. `catppuccin-mocha` (also a key and a settings row) |
 | `--once` | | Print quotes to stdout and exit |
+| `--earnings TICKER` | | Print the latest earnings read to stdout and exit (needs an AlphaAI key; one request) |
 | `--config` | | Use an alternate config file (Save writes back to it) |
 
 `-r` and `-i` set the startup window; the `t` key cycles the preset
@@ -206,14 +229,17 @@ defaults. API keys can also come from env vars, which win over the config:
 
 | Key | Where | Action |
 |-----|-------|--------|
-| `Tab` / `1`..`5` | everywhere | switch view |
+| `Tab` / `1`..`6` | everywhere | switch view |
 | `↑` `↓` / `j` `k` | table, chart, split | select ticker |
 | `↑` `↓` / `j` `k` | news, insider | scroll articles |
-| `←` `→` / `h` `l` | news, insider | switch ticker |
+| `↑` `↓` / `j` `k` | earnings | scroll the read |
+| `←` `→` / `h` `l` | news, insider, earnings | switch ticker |
 | `Enter` / `o` | news, insider | open article in browser |
+| `Enter` / `o` | earnings | open the read on alphai.io |
 | `v` | news, insider | fullscreen article card; scroll with `↑` `↓`, `Esc` closes |
 | `x` | news | flip the list/card layout: side-by-side or stacked |
 | `PgUp` `PgDn` | news | scroll the article card pane |
+| `PgUp` `PgDn` | earnings | page through the read |
 | `↓` / `j` on the last row | news, insider | load the next page of the feed |
 | `f` | news, split | cycle news scope: selected ticker, whole market, trending |
 | `+` / `-` | news, insider, split | raise / lower the visible feed's score filter (news: relevance, starts at 7; insider: trade size, starts at 4) |
@@ -325,6 +351,14 @@ get a sourced brief without leaving the terminal.
   The Insider view's rollup and trades chart arrive as one bundle
   alongside the feed's first page and live in the same cache, so the
   chart costs no extra requests and the `g` window switch is free.
+  The Earnings view costs one request per ticker, made only while that
+  view is on screen and cached for an hour, because a read is published
+  once a quarter and never changes afterwards. That single response
+  carries the whole history of reads for the ticker and its next
+  confirmed report date, which is also what fills the read shown in the
+  News card, so opening the card still costs nothing. The macro calendar
+  behind the bottom line of that view is one request for the whole market,
+  cached for six hours; if it fails there is simply no line.
   Feeds page 20 articles at a time, the most every plan allows (50 on Pro
   keys, detected automatically). Paging back past your plan's
   archive horizon (30 days on Free, 90 on Basic) shows an upgrade hint
@@ -362,7 +396,7 @@ alpaca_key_id = ""
 alpaca_secret = ""
 
 [ui]
-default_view = "split"    # split | news | table | chart | insider
+default_view = "split"    # split | news | table | chart | insider | earnings
 news_layout = "side"      # side | stacked
 news_scope = "ticker"     # ticker | market | trending
 borders = "rounded"       # panel frames: rounded | plain
@@ -512,6 +546,7 @@ src/
     news.rs      article list + sentiment rollup + detail pane
     insider.rs   Form 4 rollup + filing list
     insider_chart.rs  log-scale trades scatter + weekly dollar bars
+    earnings.rs  structured earnings read + the schedule line
     article.rs   modal full-article card (AI analysis, context)
     settings.rs  modal settings overlay
 ```
