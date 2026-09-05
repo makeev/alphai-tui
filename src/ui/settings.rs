@@ -15,7 +15,11 @@ pub fn render(f: &mut Frame, app: &App) {
     // Height scales with the registry (rows plus the fixed chrome: borders,
     // blank lines, message, help and config-path footer), so a new source's
     // key rows never clip.
-    let height = rows.len() as u16 + 10 + if s.first_run { 5 } else { 0 };
+    // The budget note under Poll every is conditional, so it has to be
+    // known before the overlay is sized or it would clip the footer.
+    let budget = rate_note(app, s);
+    let height =
+        rows.len() as u16 + 10 + u16::from(budget.is_some()) + if s.first_run { 5 } else { 0 };
     let area = centered(f.area(), 74, height);
     f.render_widget(Clear, area);
 
@@ -105,6 +109,16 @@ pub fn render(f: &mut Frame, app: &App) {
             Span::raw(" "),
             Span::raw(hint).dim(),
         ]));
+        // The interval only means something against the watchlist length:
+        // spell out the budget it lands on when it overruns the plan.
+        if let SettingsRow::PollEvery = row
+            && let Some(note) = &budget
+        {
+            lines.push(Line::from(Span::styled(
+                format!("    {note}"),
+                Style::new().fg(app.theme.warn),
+            )));
+        }
     }
 
     lines.push(Line::from(""));
@@ -132,6 +146,15 @@ pub fn render(f: &mut Frame, app: &App) {
             .block(block),
         area,
     );
+}
+
+/// The request budget the settings on screen would land on: the source
+/// picker and the interval buffer rather than the running poller, so the
+/// warning appears before Save applies the change.
+fn rate_note(app: &App, s: &crate::app::SettingsState) -> Option<String> {
+    let info = registry::find(&s.source_choice)?;
+    let every = s.every_input.trim().parse::<u64>().ok()?;
+    registry::rate_warning(info, app.symbols.len(), every.max(2))
 }
 
 /// While editing show the raw buffer with a cursor mark; otherwise mask.

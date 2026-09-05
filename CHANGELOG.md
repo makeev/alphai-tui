@@ -5,6 +5,29 @@ the crates.io releases; from 0.7.0 on each one is also a git tag and a
 GitHub release with prebuilt binaries. The Homebrew tap, the AUR and the
 apt repository joined later, and carry every version since.
 
+## 0.16.0 - 2026-09-05
+
+- New quote rail: one line under the tabs, in every view, with the selected
+  ticker's price and change, where that price sits between the session low
+  and high, the state of the US market and the rest of the watchlist as
+  percentages. Until now only the Split, Table and Chart views showed a
+  price at all, so in News, Insider and Earnings the ticker was a name in a
+  frame title, moving between tickers was a blind jump, and the pulse that
+  marks a fresh price was invisible. The line drops its parts one at a time
+  as the terminal narrows and keeps the symbol and the price to the last;
+  `[ui] quote_rail = false` turns it off, and a terminal under 12 rows
+  keeps the row for the view.
+- The rail says what the US market is doing (pre, live, post or closed) and
+  how long until the next bell, holidays and Good Friday included, so a
+  price that has not moved in hours reads as a closed market rather than as
+  a broken feed. Crypto is marked as trading around the clock instead.
+- A source whose prices are delayed (Yahoo, or Alpaca on
+  `ALPACA_FEED=delayed_sip`) now says so on the rail.
+- The app checks the poll budget: a watchlist and interval that together
+  exceed the data plan's requests a minute warn on startup and under the
+  interval in the settings screen, naming an interval that fits. Going over
+  the ceiling turned tickers into `error` rows with nothing explaining why.
+
 ## 0.15.0 - 2026-09-02
 
 - New Earnings view (`6`): AlphaAI's structured read of the selected

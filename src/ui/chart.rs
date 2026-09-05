@@ -191,13 +191,13 @@ fn time_at(candles: &[Candle], x: f64) -> i64 {
 
 /// Style of the last-price value while its update pulse is active: the tick
 /// direction's color, inverted so it visibly blinks.
-fn flash_style(up: bool, theme: &Theme) -> Style {
+pub(crate) fn flash_style(up: bool, theme: &Theme) -> Style {
     Style::new()
         .fg(if up { theme.up } else { theme.down })
         .add_modifier(Modifier::REVERSED | Modifier::BOLD)
 }
 
-fn dir_color(q: &Quote, theme: &Theme) -> Color {
+pub(crate) fn dir_color(q: &Quote, theme: &Theme) -> Color {
     match q.change() {
         Some(c) if c < 0.0 => theme.down,
         Some(_) => theme.up,

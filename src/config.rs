@@ -102,6 +102,8 @@ pub struct UiConfig {
     /// warning in `resolve`, not fail deserializing the whole file.
     pub news_min_score: Option<i64>,
     pub insider_min_score: Option<i64>,
+    /// Whether the quote rail under the header is drawn (default true).
+    pub quote_rail: Option<bool>,
     /// Startup window of the Insider view's chart panel: "3m" (default),
     /// "12m" or "off"; the g key cycles it live.
     pub insider_chart: Option<String>,
@@ -206,6 +208,8 @@ pub const ALPHAI_TTL_RANGE: RangeInclusive<i64> = 30..=86_400;
 #[derive(Clone, Debug, PartialEq)]
 pub struct UiDefaults {
     pub view_idx: usize,
+    /// The quote rail under the header; file-only, like the border style.
+    pub quote_rail: bool,
     pub news_layout: NewsLayout,
     pub news_scope: NewsScope,
     pub news_min_score: u8,
@@ -218,6 +222,7 @@ impl Default for UiDefaults {
     fn default() -> Self {
         Self {
             view_idx: ui::view_index(ui::ViewId::Split),
+            quote_rail: true,
             news_layout: NewsLayout::default(),
             news_scope: NewsScope::default(),
             news_min_score: DEFAULT_NEWS_MIN_SCORE,
@@ -394,6 +399,9 @@ fn resolve_ui(raw: Option<&UiConfig>, warnings: &mut Vec<String>) -> UiDefaults 
                 ));
             }
         }
+    }
+    if let Some(on) = raw.quote_rail {
+        out.quote_rail = on;
     }
     if let Some(layout) = &raw.news_layout {
         match layout.to_lowercase().as_str() {
@@ -593,6 +601,7 @@ mod tests {
                 insider_min_score: Some(5),
                 insider_chart: Some("12m".into()),
                 alphai_ttl_secs: Some(120),
+                quote_rail: Some(false),
             }),
             chart: Some(ChartConfig {
                 style: Some("line".into()),
@@ -907,6 +916,15 @@ mod tests {
         assert_eq!(warnings.len(), 1, "{warnings:?}");
         assert!(warnings[0].contains("insider_chart"), "{warnings:?}");
         assert_eq!(resolved.ui.insider_chart, InsiderChartWindow::M3);
+    }
+
+    #[test]
+    fn ui_quote_rail_defaults_on_and_switches_off() {
+        assert!(UiDefaults::default().quote_rail);
+        let cfg: Config = toml::from_str("[ui]\nquote_rail = false").unwrap();
+        let (resolved, warnings) = resolve(&cfg, None);
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert!(!resolved.ui.quote_rail);
     }
 
     #[test]

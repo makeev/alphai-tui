@@ -5,6 +5,7 @@ pub mod help;
 pub mod insider;
 pub mod insider_chart;
 pub mod news;
+pub mod rail;
 pub mod settings;
 pub mod split;
 pub mod table;
@@ -134,14 +135,23 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     // Before rows are built, so the hovered row renders without its unseen
     // marker on this very frame.
     app.mark_selected_seen();
-    let [header, body, footer] = Layout::vertical([
+    // The quote rail takes a row from the body in every view, so the
+    // selected price is on screen even where the view itself has no room
+    // for one (News, Insider, Earnings). Off via `[ui] quote_rail`, and
+    // dropped on a terminal too short to spare the row.
+    let rail_h = u16::from(app.show_rail && f.area().height >= rail::MIN_HEIGHT);
+    let [header, rail_area, body, footer] = Layout::vertical([
         Constraint::Length(1),
+        Constraint::Length(rail_h),
         Constraint::Min(0),
         Constraint::Length(1),
     ])
     .areas(f.area());
 
     f.render_widget(header_line(app, header.width), header);
+    if rail_h > 0 {
+        rail::render(f, rail_area, app);
+    }
     VIEWS[app.view_idx].render(f, body, app);
     f.render_widget(footer_line(app), footer);
     if app.article_overlay.open {

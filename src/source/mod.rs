@@ -25,6 +25,14 @@ pub trait DataSource: Send + Sync {
 
     /// Latest quote plus recent candles for one symbol.
     async fn fetch(&self, symbol: &str, range: Range, interval: Interval) -> Result<TickerData>;
+
+    /// How stale this source's prices are, for the quote rail's badge.
+    /// None means real time. It is a method rather than a registry field
+    /// because a source can be configured either way at runtime (an Alpaca
+    /// key on `ALPACA_FEED=delayed_sip`, say), and only the source knows.
+    fn delay_note(&self) -> Option<&'static str> {
+        None
+    }
 }
 
 /// Build a source by name (registry id or alias). Credentials resolve

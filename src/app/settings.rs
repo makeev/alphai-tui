@@ -266,6 +266,7 @@ impl App {
             match make_source(&self.settings.source_choice, &cfg) {
                 Ok(src) => {
                     self.source_name = src.name();
+                    self.source_delay = src.delay_note();
                     *self.source.write().unwrap() = src;
                     self.data.clear();
                     self.errors.clear();

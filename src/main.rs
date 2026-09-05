@@ -4,6 +4,7 @@ mod config;
 mod domain;
 mod indicators;
 mod keymap;
+mod market;
 mod poller;
 mod source;
 mod theme;
@@ -93,6 +94,14 @@ fn main() -> Result<()> {
         .unwrap_or_else(|| source::registry::SOURCES[0].id.to_string());
     let source = source::make_source(&source_name, &cfg)?;
     let every = args.every.or(cfg.every).unwrap_or(15);
+    // A poll cycle spends `reqs_per_symbol` per ticker: a watchlist long
+    // enough to outrun the plan's ceiling turns tickers into error rows,
+    // which reads as a broken key rather than as a budget.
+    if let Some(info) = source::registry::find(&source_name)
+        && let Some(msg) = source::registry::rate_warning(info, symbols.len(), every.max(2))
+    {
+        eprintln!("warning: {msg}");
+    }
     let range = args
         .range
         .or_else(|| parse_enum::<Range>(cfg.range.as_deref()))

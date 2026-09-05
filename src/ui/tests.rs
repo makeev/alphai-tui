@@ -243,6 +243,9 @@ fn right_margin_frees_columns_and_hosts_the_price_tag() {
     app.show_rsi = false;
     // Volume bars share the candles' glyphs; this is about the price plot.
     app.show_volume = false;
+    // The tag is counted by occurrences of the price on screen, and the
+    // rail prints it too.
+    app.show_rail = false;
     let max_body_x = |screen: &str| {
         screen
             .lines()
@@ -2270,6 +2273,9 @@ fn theme_accent_recolors_the_header() {
 fn narrow_watchlist_drops_columns_instead_of_truncating() {
     let mut app = fake_app();
     app.view_idx = ui::view_index(ui::ViewId::Table);
+    // The assertions read the whole screen; the quote rail carries the
+    // same numbers and would answer for the table's own columns.
+    app.show_rail = false;
     let wide = render_sized(&mut app, 100, 12);
     assert!(wide.contains("Lo–Hi"), "screen:\n{wide}");
     assert!(wide.contains("214.50"), "screen:\n{wide}");
@@ -3179,4 +3185,169 @@ fn earnings_metric_columns_follow_the_data() {
     assert_eq!(cols.cells[1], 0, "prior Q outlived the squeeze: {cols:?}");
     assert_eq!(cols.cells[2], 0, "prior Y outlived the squeeze: {cols:?}");
     assert!(cols.cells[0] > 0, "the value column dropped: {cols:?}");
+}
+
+/// A fixed moment inside the regular session: the rail's countdown changes
+/// its own width, so the ladder is only measurable at a known instant.
+fn market_open_moment() -> chrono::DateTime<chrono::Utc> {
+    // Thursday 10 September 2026, 09:45 in New York.
+    chrono::NaiveDate::from_ymd_opt(2026, 9, 10)
+        .unwrap()
+        .and_hms_opt(13, 45, 0)
+        .unwrap()
+        .and_utc()
+}
+
+/// The rail exists for the views with no price of their own (News,
+/// Insider, Earnings), so it has to survive every view, not just the ones
+/// built around a quote.
+#[test]
+fn quote_rail_shows_the_selected_quote_in_every_view() {
+    let mut app = fake_app();
+    for id in [
+        ui::ViewId::Split,
+        ui::ViewId::News,
+        ui::ViewId::Table,
+        ui::ViewId::Chart,
+        ui::ViewId::Insider,
+        ui::ViewId::Earnings,
+    ] {
+        app.view_idx = ui::view_index(id);
+        let screen = render_sized(&mut app, 120, 30);
+        let rail = screen.lines().nth(1).unwrap_or_default();
+        assert!(
+            rail.contains("AAPL") && rail.contains("214.50"),
+            "{id:?} lost the quote rail:\n{screen}"
+        );
+    }
+}
+
+/// Zones go in priority order and a zone that does not fit is skipped, not
+/// truncated: the symbol and price survive to the narrowest terminal, and
+/// a cheap zone still lands when an expensive one in front of it cannot.
+#[test]
+fn quote_rail_drops_zones_as_the_terminal_narrows() {
+    let app = fake_app();
+    let now = market_open_moment();
+    let at = |w: u16| ui::rail::text(&ui::rail::line(&app, w, now));
+
+    let wide = at(120);
+    for part in [
+        "AAPL",
+        "214.50",
+        "+14.50",
+        "+7.25%",
+        "● live",
+        "delayed 15m",
+        "199.60",
+        "214.80",
+        "MSFT",
+    ] {
+        assert!(wide.contains(part), "120 columns lost {part}: {wide}");
+    }
+
+    // The peers go first, then the sparkline, then the range labels (the
+    // bare track keeps the position), then the track itself.
+    let no_peers = at(105);
+    assert!(!no_peers.contains("MSFT"), "{no_peers}");
+    assert!(
+        no_peers.contains("▇"),
+        "sparkline dropped too early: {no_peers}"
+    );
+    assert!(!at(95).contains("▇"), "{}", at(95));
+    let track_only = at(88);
+    assert!(!track_only.contains("199.60"), "{track_only}");
+    assert!(track_only.contains("├"), "{track_only}");
+    assert!(!at(70).contains("├"), "{}", at(70));
+    assert!(!at(60).contains("delayed"), "{}", at(60));
+    assert!(at(60).contains("closes in"), "{}", at(60));
+    // The badge outlives its countdown; the percentage outlives the badge.
+    assert!(!at(45).contains("closes in"), "{}", at(45));
+    assert!(at(45).contains("● live"), "{}", at(45));
+    assert!(!at(25).contains("+14.50"), "{}", at(25));
+    assert!(at(25).contains("+7.25%"), "{}", at(25));
+    assert!(at(21).contains("+7.25%"), "{}", at(21));
+    // Nothing left to drop: the symbol and its price are never cut.
+    assert_eq!(at(12).trim(), "AAPL 214.50");
+    assert!(at(12).chars().count() <= 12, "{}", at(12));
+}
+
+/// Crypto has no opening bell, and a source that is real time says nothing
+/// about a delay.
+#[test]
+fn quote_rail_badges_crypto_and_realtime_sources() {
+    let mut app = empty_app(vec!["BTC-USD".into()]);
+    app.source_delay = None;
+    app.data.insert(
+        "BTC-USD".into(),
+        TickerData {
+            quote: Quote {
+                symbol: "BTC-USD".into(),
+                price: 64_000.0,
+                prev_close: Some(63_000.0),
+                currency: Some("USD".into()),
+            },
+            candles: vec![Candle {
+                ts: 1_700_000_000,
+                open: 63_500.0,
+                high: 64_200.0,
+                low: 63_100.0,
+                close: 64_000.0,
+                volume: None,
+            }],
+        },
+    );
+    let rail = ui::rail::text(&ui::rail::line(&app, 120, market_open_moment()));
+    assert!(rail.contains("24/7"), "{rail}");
+    assert!(!rail.contains("live"), "{rail}");
+    assert!(!rail.contains("delayed"), "{rail}");
+}
+
+/// A ticker still loading, and one the source rejected, both have to read
+/// as themselves rather than as a blank rail.
+#[test]
+fn quote_rail_says_when_a_ticker_has_no_price() {
+    let mut app = empty_app(vec!["AAPL".into()]);
+    let now = market_open_moment();
+    assert!(ui::rail::text(&ui::rail::line(&app, 80, now)).contains('…'));
+    app.errors.insert("AAPL".into(), "429 rate limited".into());
+    assert!(ui::rail::text(&ui::rail::line(&app, 80, now)).contains("error"));
+}
+
+/// Moving the watchlist selection moves the rail: that is what makes ← →
+/// between tickers something other than a blind jump.
+#[test]
+fn quote_rail_follows_the_selection() {
+    let mut app = fake_app();
+    app.view_idx = ui::view_index(ui::ViewId::Table);
+    assert!(
+        render_sized(&mut app, 100, 20)
+            .lines()
+            .nth(1)
+            .unwrap()
+            .contains("AAPL")
+    );
+    press(&mut app, KeyCode::Down);
+    let screen = render_sized(&mut app, 100, 20);
+    let rail = screen.lines().nth(1).unwrap();
+    assert!(rail.contains("MSFT") && rail.contains("414.50"), "{screen}");
+}
+
+/// The row is worth more to a list than to a quote on a terminal this
+/// short, and `[ui] quote_rail = false` gives it back on any terminal.
+#[test]
+fn quote_rail_yields_its_row_when_it_should() {
+    let mut app = fake_app();
+    app.view_idx = ui::view_index(ui::ViewId::Table);
+    let short = render_sized(&mut app, 100, ui::rail::MIN_HEIGHT - 1);
+    assert!(
+        short.lines().nth(1).unwrap().starts_with("╭"),
+        "the rail kept its row on a short terminal:\n{short}"
+    );
+    app.show_rail = false;
+    let off = render_sized(&mut app, 100, 20);
+    assert!(
+        off.lines().nth(1).unwrap().starts_with("╭"),
+        "the rail ignored [ui] quote_rail = false:\n{off}"
+    );
 }

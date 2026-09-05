@@ -27,6 +27,12 @@ pub struct SourceInfo {
     /// Build the source. `keys` holds resolved values in `key_fields`
     /// order; `make_source` checks presence before calling.
     pub make: fn(keys: &[String]) -> Result<Arc<dyn DataSource>>,
+    /// HTTP requests one poll cycle spends per symbol.
+    pub reqs_per_symbol: u32,
+    /// Requests a minute the free plan allows, when the provider documents
+    /// one. `rate_warning` compares the watchlist against it; None means
+    /// there is no published ceiling to check.
+    pub rate_limit_per_min: Option<u32>,
 }
 
 /// Registry of price sources. Entry 0 is the keyless default: the fallback
@@ -40,6 +46,8 @@ pub static SOURCES: &[SourceInfo] = &[
         hint: "no key needed, ~15 min delayed",
         key_fields: &[],
         make: |_| Ok(Arc::new(yahoo::Yahoo::new()?)),
+        reqs_per_symbol: 1,
+        rate_limit_per_min: None,
     },
     SourceInfo {
         id: "finnhub",
@@ -51,6 +59,8 @@ pub static SOURCES: &[SourceInfo] = &[
             label: "Finnhub key",
         }],
         make: |keys| Ok(Arc::new(finnhub::Finnhub::new(keys[0].clone())?)),
+        reqs_per_symbol: 1,
+        rate_limit_per_min: Some(60),
     },
     SourceInfo {
         id: "alpaca",
@@ -74,8 +84,32 @@ pub static SOURCES: &[SourceInfo] = &[
                 keys[1].clone(),
             )?))
         },
+        // Snapshot plus bars, against the Basic plan's ceiling.
+        reqs_per_symbol: 2,
+        rate_limit_per_min: Some(200),
     },
 ];
+
+/// Whether the watchlist and the poll interval together outrun the
+/// source's per-minute ceiling, as a message naming the interval that
+/// would fit. A poll cycle spends `reqs_per_symbol` per ticker, so a long
+/// watchlist on a short interval quietly turns every ticker into an error
+/// row; the check runs at startup and in the settings screen, where the
+/// interval is edited.
+pub fn rate_warning(info: &SourceInfo, symbols: usize, every_secs: u64) -> Option<String> {
+    let limit = info.rate_limit_per_min?;
+    let every_secs = every_secs.max(1);
+    let per_min = symbols as u64 * info.reqs_per_symbol as u64 * 60 / every_secs;
+    if per_min <= limit as u64 {
+        return None;
+    }
+    // The shortest interval that fits, rounded up.
+    let fits = (symbols as u64 * info.reqs_per_symbol as u64 * 60).div_ceil(limit as u64);
+    Some(format!(
+        "{} symbols every {}s is {} requests a minute on {}, over the {} its plan allows: poll every {}s or trim the watchlist",
+        symbols, every_secs, per_min, info.id, limit, fits
+    ))
+}
 
 /// Look up a source by id or alias, case-insensitively.
 pub fn find(name: &str) -> Option<&'static SourceInfo> {
@@ -198,6 +232,26 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// The guard only speaks up when the watchlist and interval actually
+    /// overrun the plan, and it names an interval that does not.
+    #[test]
+    fn rate_warning_fires_only_over_the_ceiling() {
+        let alpaca = find("alpaca").unwrap();
+        // Five symbols at two requests each, every 2s: 300 a minute.
+        let msg = rate_warning(alpaca, 5, 2).expect("300 req/min is over 200");
+        assert!(msg.contains("300"), "{msg}");
+        assert!(msg.contains("alpaca"), "{msg}");
+        assert!(msg.contains("poll every 3s"), "{msg}");
+        // The interval it suggests has to clear the limit.
+        assert!(rate_warning(alpaca, 5, 3).is_none());
+        assert!(rate_warning(alpaca, 5, 15).is_none());
+        // Finnhub spends one request per symbol against a lower ceiling.
+        assert!(rate_warning(find("finnhub").unwrap(), 5, 2).is_some());
+        assert!(rate_warning(find("finnhub").unwrap(), 2, 2).is_none());
+        // A source with no published ceiling has nothing to warn about.
+        assert!(rate_warning(find("yahoo").unwrap(), 100, 2).is_none());
     }
 
     #[test]

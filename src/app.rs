@@ -213,6 +213,10 @@ pub struct App {
     pub selected: usize,
     pub view_idx: usize,
     pub source_name: &'static str,
+    /// How stale the active source's prices are (`DataSource::delay_note`),
+    /// re-read whenever the settings screen swaps the source. The quote
+    /// rail badges it so a delayed price is never read as a live one.
+    pub source_delay: Option<&'static str>,
     pub range: Range,
     pub interval: Interval,
     pub last_update: Option<DateTime<Local>>,
@@ -250,6 +254,8 @@ pub struct App {
     pub insider_min_score: u8,
     /// Window of the Insider view's chart panel (g cycles off/3m/12m).
     pub insider_chart: InsiderChartWindow,
+    /// Whether the quote rail is drawn (`[ui] quote_rail`).
+    pub show_rail: bool,
     /// Earnings reads by symbol, each with the moment it was fetched. Its
     /// own map rather than a feed bundle: the payload has no pagination, no
     /// sort and no score filter, and it outlives a feed's TTL by an order of
@@ -291,6 +297,7 @@ pub struct App {
 
 impl App {
     pub fn new(init: AppInit) -> Self {
+        let source_delay = init.source.read().unwrap().delay_note();
         let mut app = Self {
             symbols: init.symbols,
             data: HashMap::new(),
@@ -299,6 +306,7 @@ impl App {
             selected: 0,
             view_idx: init.ui.view_idx,
             source_name: init.source_name,
+            source_delay,
             range: init.range,
             interval: init.interval,
             last_update: None,
@@ -319,6 +327,7 @@ impl App {
             news_min_score: init.ui.news_min_score,
             insider_min_score: init.ui.insider_min_score,
             insider_chart: init.ui.insider_chart,
+            show_rail: init.ui.quote_rail,
             earnings: HashMap::new(),
             calendar: None,
             earnings_scroll: 0,

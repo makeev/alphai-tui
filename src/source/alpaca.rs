@@ -123,6 +123,12 @@ impl DataSource for Alpaca {
         "alpaca"
     }
 
+    /// Only the delayed SIP feed is behind: IEX is real time (on IEX
+    /// volume alone) and full SIP is real time on a paid plan.
+    fn delay_note(&self) -> Option<&'static str> {
+        (self.feed == "delayed_sip").then_some("delayed 15m")
+    }
+
     async fn fetch(&self, symbol: &str, range: Range, interval: Interval) -> Result<TickerData> {
         let timeframe = timeframe(interval);
         let start = (Utc::now() - chrono::Duration::seconds(range.secs()))

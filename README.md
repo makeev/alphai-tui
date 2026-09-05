@@ -12,6 +12,18 @@ Built in Rust with [ratatui](https://ratatui.rs).
 
 ## What you get
 
+- **The quote rail**: one line under the tabs, present in every view, with
+  the selected ticker's price, its change on the day, where that price sits
+  between the session low and high, what the US market is doing right now
+  (pre, live, post or closed, and how long until the next bell) and the
+  rest of the watchlist as percentages. The News, Insider and Earnings
+  views are no longer a ticker name with no price attached, and moving
+  between tickers with the arrow keys is not a blind jump. Parts drop one
+  at a time as the terminal narrows, the symbol and the price surviving to
+  the last; `[ui] quote_rail = false` turns the line off, and a terminal
+  under 12 rows gives the row back to the view. A delayed source (Yahoo, or
+  `ALPACA_FEED=delayed_sip`) says so on the rail instead of passing a
+  15 minute old price off as live.
 - **Split** (the default view): watchlist and chart side by side in the top
   half, the news feed in the bottom half (hidden on very small terminals).
 - **News**: enriched articles for the selected ticker, the whole market or
@@ -305,7 +317,9 @@ get a sourced brief without leaving the terminal.
   build up from quotes collected during the session and reset on restart.
   Range/interval switching with `t` does not apply to that synthetic
   history, and candles degrade to flat marks.
-  Free tier is 60 req/min: keep `tickers x (60 / --every)` under 60.
+  Free tier is 60 req/min, one request per ticker per poll; the app warns
+  on startup and in the settings screen when the watchlist and the poll
+  interval together go over that.
   Crypto needs exchange-prefixed symbols (`BINANCE:BTCUSDT`).
 - `alpaca`: needs a key id and secret (free at
   [alpaca.markets](https://alpaca.markets)). Realtime quotes from the IEX
@@ -323,10 +337,12 @@ get a sourced brief without leaving the terminal.
 
   Free plan notes: the IEX feed is realtime but thin (roughly 2 to 3 percent
   of market volume, so charts of illiquid names can be sparse), and the API
-  allows 200 requests/min. The app makes 2 requests per ticker per poll:
-  keep `tickers x 2 x (60 / --every)` under 200. `ALPACA_FEED=sip` needs a
-  paid data plan; `ALPACA_FEED=delayed_sip` gives the full market with a
-  15 minute delay.
+  allows 200 requests/min. The app makes 2 requests per ticker per poll and
+  warns, on startup and under the interval in the settings screen, when the
+  watchlist and the interval together go over the ceiling, naming an
+  interval that fits (going over turns tickers into `error` rows).
+  `ALPACA_FEED=sip` needs a paid data plan; `ALPACA_FEED=delayed_sip` gives
+  the full market with a 15 minute delay.
 
 **News, sentiment, insider**
 
@@ -397,6 +413,7 @@ alpaca_secret = ""
 
 [ui]
 default_view = "split"    # split | news | table | chart | insider | earnings
+quote_rail = true         # the price line under the tabs
 news_layout = "side"      # side | stacked
 news_scope = "ticker"     # ticker | market | trending
 borders = "rounded"       # panel frames: rounded | plain

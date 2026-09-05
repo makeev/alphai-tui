@@ -202,7 +202,7 @@ fn right(text: impl Into<String>) -> Text<'static> {
 }
 
 /// Downsample a series into a fixed-width string of block characters.
-fn spark_line(values: &[f64], width: usize) -> String {
+pub(crate) fn spark_line(values: &[f64], width: usize) -> String {
     const BARS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
     if values.is_empty() || width == 0 {
         return String::new();

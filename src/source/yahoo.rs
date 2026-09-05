@@ -31,6 +31,11 @@ impl DataSource for Yahoo {
         "yahoo"
     }
 
+    /// The public chart feed runs on the exchanges' free delayed data.
+    fn delay_note(&self) -> Option<&'static str> {
+        Some("delayed 15m")
+    }
+
     async fn fetch(&self, symbol: &str, range: Range, interval: Interval) -> Result<TickerData> {
         let url = format!("https://query1.finance.yahoo.com/v8/finance/chart/{symbol}");
         let body: ChartResponse = http::get_json(
