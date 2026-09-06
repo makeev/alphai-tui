@@ -256,6 +256,10 @@ pub struct App {
     pub insider_chart: InsiderChartWindow,
     /// Whether the quote rail is drawn (`[ui] quote_rail`).
     pub show_rail: bool,
+    /// Bare mode (`z`, `--bare`, `[ui] bare`): the header and footer give
+    /// their rows to the view. For a tmux pane, which carries its own
+    /// status bar and needs the rows more than it needs the app's chrome.
+    pub bare: bool,
     /// Earnings reads by symbol, each with the moment it was fetched. Its
     /// own map rather than a feed bundle: the payload has no pagination, no
     /// sort and no score filter, and it outlives a feed's TTL by an order of
@@ -328,6 +332,7 @@ impl App {
             insider_min_score: init.ui.insider_min_score,
             insider_chart: init.ui.insider_chart,
             show_rail: init.ui.quote_rail,
+            bare: init.ui.bare,
             earnings: HashMap::new(),
             calendar: None,
             earnings_scroll: 0,
@@ -579,6 +584,7 @@ impl App {
             }
             Action::NextPreset => self.cycle_range(1),
             Action::PrevPreset => self.cycle_range(-1),
+            Action::ToggleBare => self.bare = !self.bare,
             Action::NextTheme => self.cycle_theme(1),
             Action::PrevTheme => self.cycle_theme(-1),
             Action::Up => self.selected = self.selected.saturating_sub(1),

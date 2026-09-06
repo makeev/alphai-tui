@@ -769,7 +769,7 @@ fn footer_and_dispatch_follow_a_remap() {
     let mut app = fake_app();
     let mut warnings = Vec::new();
     app.keymap = crate::keymap::Keymap::from_config(
-        [("open", vec!["z"]), ("card", vec!["n"])],
+        [("open", vec!["w"]), ("card", vec!["n"])],
         &mut warnings,
     );
     assert!(warnings.is_empty(), "{warnings:?}");
@@ -783,7 +783,7 @@ fn footer_and_dispatch_follow_a_remap() {
         ),
     );
     let screen = render(&mut app);
-    assert!(screen.contains("z open"), "screen:\n{screen}");
+    assert!(screen.contains("w open"), "screen:\n{screen}");
     assert!(!screen.contains("⏎ open"), "screen:\n{screen}");
     // The new key drives the action, the old one is gone.
     press(&mut app, KeyCode::Char('v'));
@@ -3350,4 +3350,41 @@ fn quote_rail_yields_its_row_when_it_should() {
         off.lines().nth(1).unwrap().starts_with("╭"),
         "the rail ignored [ui] quote_rail = false:\n{off}"
     );
+}
+
+/// Bare mode is two rows of chrome handed to the view: nothing else moves,
+/// and the rail stays because it is the only thing naming the ticker once
+/// the header is gone.
+#[test]
+fn bare_mode_gives_the_chrome_rows_to_the_view() {
+    let mut app = fake_app();
+    app.view_idx = ui::view_index(ui::ViewId::Table);
+    let full = render_sized(&mut app, 100, 20);
+    assert!(full.lines().next().unwrap().contains("alphai-tui"));
+    assert!(full.lines().last().unwrap().contains("quit"));
+
+    app.bare = true;
+    let bare = render_sized(&mut app, 100, 20);
+    let first = bare.lines().next().unwrap();
+    let last = bare.lines().last().unwrap();
+    assert!(!first.contains("alphai-tui"), "header survived:\n{bare}");
+    assert!(first.contains("AAPL"), "the rail went with it:\n{bare}");
+    assert!(!last.contains("quit"), "footer survived:\n{bare}");
+    // The panel now reaches the last row: both rows went to the view.
+    assert!(last.starts_with("╰"), "the view did not grow:\n{bare}");
+    let rows = |screen: &str| screen.lines().filter(|l| l.contains("│")).count();
+    assert_eq!(rows(&bare), rows(&full) + 2, "{bare}");
+}
+
+/// The key toggles it both ways, from either starting state.
+#[test]
+fn z_toggles_bare_mode() {
+    let mut app = fake_app();
+    assert!(!app.bare);
+    press(&mut app, KeyCode::Char('z'));
+    assert!(app.bare);
+    assert!(!render_sized(&mut app, 100, 20).contains("alphai-tui"));
+    press(&mut app, KeyCode::Char('z'));
+    assert!(!app.bare);
+    assert!(render_sized(&mut app, 100, 20).contains("alphai-tui"));
 }

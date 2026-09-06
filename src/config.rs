@@ -104,6 +104,8 @@ pub struct UiConfig {
     pub insider_min_score: Option<i64>,
     /// Whether the quote rail under the header is drawn (default true).
     pub quote_rail: Option<bool>,
+    /// Start in bare mode: no header, no footer (default false).
+    pub bare: Option<bool>,
     /// Startup window of the Insider view's chart panel: "3m" (default),
     /// "12m" or "off"; the g key cycles it live.
     pub insider_chart: Option<String>,
@@ -210,6 +212,8 @@ pub struct UiDefaults {
     pub view_idx: usize,
     /// The quote rail under the header; file-only, like the border style.
     pub quote_rail: bool,
+    /// Start without the header and footer; `--bare` also turns it on.
+    pub bare: bool,
     pub news_layout: NewsLayout,
     pub news_scope: NewsScope,
     pub news_min_score: u8,
@@ -223,6 +227,7 @@ impl Default for UiDefaults {
         Self {
             view_idx: ui::view_index(ui::ViewId::Split),
             quote_rail: true,
+            bare: false,
             news_layout: NewsLayout::default(),
             news_scope: NewsScope::default(),
             news_min_score: DEFAULT_NEWS_MIN_SCORE,
@@ -402,6 +407,9 @@ fn resolve_ui(raw: Option<&UiConfig>, warnings: &mut Vec<String>) -> UiDefaults 
     }
     if let Some(on) = raw.quote_rail {
         out.quote_rail = on;
+    }
+    if let Some(on) = raw.bare {
+        out.bare = on;
     }
     if let Some(layout) = &raw.news_layout {
         match layout.to_lowercase().as_str() {
@@ -602,6 +610,7 @@ mod tests {
                 insider_chart: Some("12m".into()),
                 alphai_ttl_secs: Some(120),
                 quote_rail: Some(false),
+                bare: Some(true),
             }),
             chart: Some(ChartConfig {
                 style: Some("line".into()),
@@ -618,7 +627,7 @@ mod tests {
                 ("quit".to_string(), KeysSpec::One("ctrl-q".into())),
                 (
                     "open".to_string(),
-                    KeysSpec::Many(vec!["enter".into(), "z".into()]),
+                    KeysSpec::Many(vec!["enter".into(), "w".into()]),
                 ),
             ])),
         };
@@ -760,7 +769,7 @@ mod tests {
 
         // A bare string and a list both parse; the keymap follows.
         let cfg: Config =
-            toml::from_str("[keybindings]\nrefresh = \"f5\"\nopen = [\"enter\", \"z\"]").unwrap();
+            toml::from_str("[keybindings]\nrefresh = \"f5\"\nopen = [\"enter\", \"w\"]").unwrap();
         let (resolved, warnings) = resolve(&cfg, None);
         assert!(warnings.is_empty(), "{warnings:?}");
         assert_eq!(
@@ -768,7 +777,7 @@ mod tests {
             Some(Action::Refresh)
         );
         assert_eq!(
-            resolved.keymap.resolve(&KeyEvent::from(KeyCode::Char('z'))),
+            resolved.keymap.resolve(&KeyEvent::from(KeyCode::Char('w'))),
             Some(Action::Open)
         );
         assert_eq!(
@@ -925,6 +934,15 @@ mod tests {
         let (resolved, warnings) = resolve(&cfg, None);
         assert!(warnings.is_empty(), "{warnings:?}");
         assert!(!resolved.ui.quote_rail);
+    }
+
+    #[test]
+    fn ui_bare_defaults_off_and_switches_on() {
+        assert!(!UiDefaults::default().bare);
+        let cfg: Config = toml::from_str("[ui]\nbare = true").unwrap();
+        let (resolved, warnings) = resolve(&cfg, None);
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert!(resolved.ui.bare);
     }
 
     #[test]

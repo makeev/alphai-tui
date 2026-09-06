@@ -5,6 +5,17 @@ the crates.io releases; from 0.7.0 on each one is also a git tag and a
 GitHub release with prebuilt binaries. The Homebrew tap, the AUR and the
 apt repository joined later, and carry every version since.
 
+## 0.17.0 - 2026-09-06
+
+- Bare mode: `z` hides the header and the footer and gives both rows to the
+  view, `--bare` starts that way and `[ui] bare = true` makes it the
+  default. A tmux pane carries its own status bar and its own idea of which
+  window it is, so the app's chrome is two rows it can put to better use.
+  The quote rail stays, so a bare pane still names its ticker and its price,
+  and the frame titles still name the view.
+- The `[keybindings]` example in the README moves off `z`, which now has a
+  default binding of its own.
+
 ## 0.16.0 - 2026-09-05
 
 - New quote rail: one line under the tabs, in every view, with the selected

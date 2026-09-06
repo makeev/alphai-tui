@@ -140,20 +140,28 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     // for one (News, Insider, Earnings). Off via `[ui] quote_rail`, and
     // dropped on a terminal too short to spare the row.
     let rail_h = u16::from(app.show_rail && f.area().height >= rail::MIN_HEIGHT);
+    // Bare mode (z) hands the header's and footer's rows to the view: in a
+    // tmux pane the window name and the key hints are chrome the pane can
+    // spare, while the rail keeps the ticker and its price on screen.
+    let chrome_h = u16::from(!app.bare);
     let [header, rail_area, body, footer] = Layout::vertical([
-        Constraint::Length(1),
+        Constraint::Length(chrome_h),
         Constraint::Length(rail_h),
         Constraint::Min(0),
-        Constraint::Length(1),
+        Constraint::Length(chrome_h),
     ])
     .areas(f.area());
 
-    f.render_widget(header_line(app, header.width), header);
+    if chrome_h > 0 {
+        f.render_widget(header_line(app, header.width), header);
+    }
     if rail_h > 0 {
         rail::render(f, rail_area, app);
     }
     VIEWS[app.view_idx].render(f, body, app);
-    f.render_widget(footer_line(app), footer);
+    if chrome_h > 0 {
+        f.render_widget(footer_line(app), footer);
+    }
     if app.article_overlay.open {
         article::render(f, app);
     }

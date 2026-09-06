@@ -52,6 +52,11 @@ struct Args {
     #[arg(long, value_name = "NAME", help = theme::cli_theme_help())]
     theme: Option<String>,
 
+    /// Start without the header and footer, for a tmux pane that carries
+    /// its own status bar (z toggles it live)
+    #[arg(long)]
+    bare: bool,
+
     /// Print quotes once to stdout and exit (no TUI); handy for scripts
     #[arg(long)]
     once: bool,
@@ -139,6 +144,11 @@ fn main() -> Result<()> {
     let (alphai_tx, alphai_rx) = tokio::sync::mpsc::unbounded_channel();
     rt.spawn(alphai::run(alphai_key.clone(), alphai_rx, tx));
 
+    // CLI over config, like every other startup value; the z key moves it
+    // either way afterwards.
+    let mut ui = resolved.ui;
+    ui.bare |= args.bare;
+
     let mut terminal = ratatui::init();
     let mut app = App::new(AppInit {
         symbols,
@@ -156,7 +166,7 @@ fn main() -> Result<()> {
         theme: resolved.theme,
         theme_name: resolved.theme_name,
         chart: resolved.chart,
-        ui: resolved.ui,
+        ui,
         keymap: resolved.keymap,
         alphai_enabled: alphai_key.is_some(),
         first_run: !cfg_existed,

@@ -225,6 +225,7 @@ alphai-tui -s finnhub NVDA  # explicit source for one run
 | `-r, --range` | `1d` | History window: `1d 5d 1mo 3mo 6mo 1y 2y` |
 | `-i, --interval` | `5m` | Candle size: `1m 2m 5m 15m 30m 60m 1d` |
 | `--theme` | `default` | Color preset, e.g. `catppuccin-mocha` (also a key and a settings row) |
+| `--bare` | off | Start without the header and footer, for a tmux pane (`z` toggles it live) |
 | `--once` | | Print quotes to stdout and exit |
 | `--earnings TICKER` | | Print the latest earnings read to stdout and exit (needs an AlphaAI key; one request) |
 | `--config` | | Use an alternate config file (Save writes back to it) |
@@ -263,6 +264,7 @@ defaults. API keys can also come from env vars, which win over the config:
 | `b` | chart, split | toggle the volume panel |
 | `t` / `T` | everywhere | cycle candle interval presets forward / back (each interval with a matching history window; the list is configurable as `[chart] presets`) |
 | `r` | everywhere | refresh prices and the visible news view |
+| `z` | everywhere | bare mode: hide the header and footer, giving both rows to the view |
 | `p` / `P` | everywhere | next / previous color preset (session-only until Save) |
 | `s` | everywhere | settings |
 | `?` | everywhere | help overlay: every action with its current keys |
@@ -276,12 +278,17 @@ custom trading workspace: run one instance per pane and switch each pane
 to the view you want with `1`..`5`.
 
 ```sh
-tmux new-session -d -s market 'alphai-tui CRWV'
-tmux split-window  -h 'alphai-tui AAPL'      # news pane on the right
-tmux split-window -v -t market:0.0 'alphai-tui NVDA'
-tmux split-window -v -t market:0.1 'alphai-tui NBIS'
+tmux new-session -d -s market 'alphai-tui --bare CRWV'
+tmux split-window  -h 'alphai-tui --bare AAPL'      # news pane on the right
+tmux split-window -v -t market:0.0 'alphai-tui --bare NVDA'
+tmux split-window -v -t market:0.1 'alphai-tui --bare NBIS'
 tmux attach -t market
 ```
+
+`--bare` drops the header and the key hints, which a pane with tmux's own
+status bar has little use for, and hands both rows to the view; `z` toggles
+it in a running instance and `[ui] bare = true` makes it the default. The
+quote rail stays, so a bare pane still names its ticker and its price.
 
 Press `4` in the chart panes and `2` in the news pane, and you get a wall
 of charts next to a live scored feed:
@@ -414,6 +421,7 @@ alpaca_secret = ""
 [ui]
 default_view = "split"    # split | news | table | chart | insider | earnings
 quote_rail = true         # the price line under the tabs
+bare = false              # start with no header and no footer (--bare, z)
 news_layout = "side"      # side | stacked
 news_scope = "ticker"     # ticker | market | trending
 borders = "rounded"       # panel frames: rounded | plain
@@ -501,7 +509,7 @@ value is one key or a list of keys:
 ```toml
 [keybindings]
 quit = "ctrl-q"
-open = ["enter", "z"]
+open = ["enter", "w"]
 next_preset = "]"
 prev_preset = "["
 ```

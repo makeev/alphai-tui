@@ -44,11 +44,12 @@ pub enum Action {
     PrevPreset,
     NextTheme,
     PrevTheme,
+    ToggleBare,
 }
 
 /// Every action with its snake_case config name, the single source of truth
 /// for `[keybindings]` parsing and for the coverage test.
-pub const ACTIONS: [(Action, &str); 28] = [
+pub const ACTIONS: [(Action, &str); 29] = [
     (Action::Quit, "quit"),
     (Action::NextView, "next_view"),
     (Action::PrevView, "prev_view"),
@@ -77,6 +78,7 @@ pub const ACTIONS: [(Action, &str); 28] = [
     (Action::PrevPreset, "prev_preset"),
     (Action::NextTheme, "next_theme"),
     (Action::PrevTheme, "prev_theme"),
+    (Action::ToggleBare, "toggle_bare"),
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -149,6 +151,8 @@ fn default_keys(action: Action) -> Vec<KeyCombo> {
         // p for palette, in the t/T shape; session-only until Save.
         Action::NextTheme => vec![ch('p')],
         Action::PrevTheme => vec![ch('P')],
+        // z for the zoomed-in look, next to tmux's own prefix-z.
+        Action::ToggleBare => vec![ch('z')],
     }
 }
 
@@ -462,7 +466,7 @@ mod tests {
             map.resolve(&KeyEvent::from(KeyCode::BackTab)),
             Some(Action::PrevView)
         );
-        assert_eq!(map.resolve(&KeyEvent::from(KeyCode::Char('z'))), None);
+        assert_eq!(map.resolve(&KeyEvent::from(KeyCode::Char('w'))), None);
         // Ctrl-modified chars are distinct from plain ones.
         let ctrl_r = KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL);
         assert_eq!(map.resolve(&ctrl_r), None);
@@ -527,10 +531,10 @@ mod tests {
     #[test]
     fn from_config_replaces_listed_actions_only() {
         let mut warnings = Vec::new();
-        let map = Keymap::from_config([("open", vec!["z", "enter"])], &mut warnings);
+        let map = Keymap::from_config([("open", vec!["w", "enter"])], &mut warnings);
         assert!(warnings.is_empty(), "{warnings:?}");
         assert_eq!(
-            map.resolve(&KeyEvent::from(KeyCode::Char('z'))),
+            map.resolve(&KeyEvent::from(KeyCode::Char('w'))),
             Some(Action::Open)
         );
         assert_eq!(
@@ -545,16 +549,16 @@ mod tests {
             Some(Action::Quit)
         );
         // The footer follows the remap through the same labels() path.
-        assert_eq!(map.labels(&[Action::Open]), "z");
+        assert_eq!(map.labels(&[Action::Open]), "w");
     }
 
     #[test]
     fn from_config_warns_and_keeps_defaults_on_bad_entries() {
         // Unknown action: ignored with a warning.
         let mut warnings = Vec::new();
-        let map = Keymap::from_config([("opne", vec!["z"])], &mut warnings);
+        let map = Keymap::from_config([("opne", vec!["w"])], &mut warnings);
         assert_eq!(warnings.len(), 1, "{warnings:?}");
-        assert_eq!(map.resolve(&KeyEvent::from(KeyCode::Char('z'))), None);
+        assert_eq!(map.resolve(&KeyEvent::from(KeyCode::Char('w'))), None);
 
         // Every key bad or reserved: per-key warnings plus the default kept.
         let mut warnings = Vec::new();
