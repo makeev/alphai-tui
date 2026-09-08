@@ -62,7 +62,17 @@ fn press(app: &mut App, code: KeyCode) {
 /// A cell only candlesticks produce: the upper half block is not part of the
 /// table sparkline glyph ramp, and the line chart is pure Braille.
 fn has_candles(screen: &str) -> bool {
-    screen.contains('▀') || screen.contains('▄') || screen.contains('█')
+    let body = panels(screen);
+    body.contains('▀') || body.contains('▄') || body.contains('█')
+}
+
+/// The screen from the first framed panel down, dropping the header and the
+/// quote rail. Both draw glyphs of their own: the rail ends in a sparkline
+/// whose full bar is `█`, and which zones it has room for depends on the
+/// market session, so a whole-screen scan for candle bodies read the rail on a
+/// weekday and not on a weekend.
+fn panels(screen: &str) -> &str {
+    screen.find('╭').map_or(screen, |at| &screen[at..])
 }
 
 fn fake_app() -> App {
@@ -606,7 +616,11 @@ fn volume_bars_share_the_candle_columns() {
             })
             .max()
     };
-    let candles = max_body_x(&lines[..vol_top]).expect("candles");
+    let chart_top = lines
+        .iter()
+        .position(|l| l.starts_with('╭'))
+        .expect("chart panel");
+    let candles = max_body_x(&lines[chart_top..vol_top]).expect("candles");
     let bars = max_body_x(&lines[vol_top + 1..rsi_top]).expect("bars");
     assert_eq!(
         candles, bars,
