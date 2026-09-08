@@ -1920,8 +1920,8 @@ fn delta_merge_prepends_arrivals_and_dedupes() {
     );
 }
 
-/// The priming poll back-fills what the published head page could not show,
-/// so it is a baseline. Every later poll carries genuine arrivals and marks.
+/// The priming poll only parks the polling position, so it is a baseline.
+/// Every later poll carries genuine arrivals and marks.
 #[test]
 fn delta_prime_is_a_baseline_and_later_polls_mark() {
     let mut app = empty_app(vec!["AAPL".into()]);
@@ -1938,6 +1938,73 @@ fn delta_prime_is_a_baseline_and_later_polls_mark() {
         "the priming page marked a row as new"
     );
     delta_page(&mut app, "AAPL", vec![uid_article("ccc", "Just in")], "d2");
+    assert!(
+        app.is_unseen("AAPL", &app.feeds["AAPL"].articles[0]),
+        "an arrival is not marked as new"
+    );
+}
+
+/// The priming page is the newest rows BY ARRIVAL, so its bottom edge sits at
+/// a different row than the published page's, and the rows below that edge are
+/// old news the head page cut off, not arrivals. They must not be merged: a
+/// twelve-day-old article was landing on top of a feed whose newest row was an
+/// hour old. Rows above the floor still merge, because an article that reached
+/// the feed between the head fetch and the first poll is a real arrival.
+#[test]
+fn delta_prime_drops_rows_below_the_window() {
+    let mut app = empty_app(vec!["AAPL".into()]);
+    app.view_idx = ui::view_index(ui::ViewId::News);
+    head_fetch(
+        &mut app,
+        "AAPL",
+        vec![
+            timed_article("aaa", "Newest shown", "2026-09-08T13:41:00Z"),
+            timed_article("bbb", "Oldest shown", "2026-08-27T16:33:00Z"),
+        ],
+        Some(7),
+    );
+    delta_page(
+        &mut app,
+        "AAPL",
+        vec![
+            timed_article("ccc", "Slow to reach the feed", "2026-08-27T13:39:00Z"),
+            timed_article("aaa", "Newest shown", "2026-09-08T13:41:00Z"),
+            timed_article(
+                "ddd",
+                "Arrived since the head fetch",
+                "2026-09-08T14:00:00Z",
+            ),
+        ],
+        "d1",
+    );
+    let titles: Vec<&str> = app.feeds["AAPL"]
+        .articles
+        .iter()
+        .map(|a| a.original.title.as_str())
+        .collect();
+    assert_eq!(
+        titles,
+        [
+            "Arrived since the head fetch",
+            "Newest shown",
+            "Oldest shown"
+        ],
+        "the priming page merged a row from below the window"
+    );
+
+    // A later poll knows its rows arrived while the reader watched, so an old
+    // publication date is not a reason to hide one: that is what polling by
+    // arrival is for.
+    delta_page(
+        &mut app,
+        "AAPL",
+        vec![timed_article("eee", "Late but new", "2026-08-20T10:00:00Z")],
+        "d2",
+    );
+    assert_eq!(
+        app.feeds["AAPL"].articles[0].original.title, "Late but new",
+        "a real arrival below the window was dropped"
+    );
     assert!(
         app.is_unseen("AAPL", &app.feeds["AAPL"].articles[0]),
         "an arrival is not marked as new"

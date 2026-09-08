@@ -295,15 +295,16 @@ impl App {
                     // pages, the side payload and the row under the cursor all
                     // survive, and the poll position advances.
                     Some(b) if mode == FeedMode::Merge => {
-                        // The priming poll carries no position yet, so its
-                        // page is "what the published head page could not
-                        // show", not "what arrived while you watched": it
-                        // merges as baseline, unmarked. Every later poll marks.
+                        // The priming poll carries no position yet: nothing
+                        // has arrived since a feed opened seconds ago, so its
+                        // page is only there to park the position. It merges
+                        // as baseline, unmarked, and under the window floor
+                        // (see `merge_arrivals`). Every later poll marks.
                         let prime = b.delta_cursor.is_none();
                         b.delta_cursor = next_cursor;
                         b.page_error = None;
                         b.polled = Instant::now();
-                        let fresh = merge_arrivals(&mut b.articles, articles);
+                        let fresh = merge_arrivals(&mut b.articles, articles, prime);
                         if active.as_deref() == Some(key.as_str()) {
                             self.news_selected += fresh.len();
                         }
@@ -645,15 +646,39 @@ fn uids(articles: &[Article]) -> impl Iterator<Item = String> + '_ {
 /// reaches the feed about half an hour after it was published, and a Form 4
 /// days after its trade. The unseen marker is what explains the order to the
 /// reader.
-fn merge_arrivals(articles: &mut Vec<Article>, page: Vec<Article>) -> Vec<String> {
+///
+/// `prime` is the one page that is not arrivals at all, and it takes a floor:
+/// rows published before the oldest row the feed shows are dropped. The two
+/// orderings cut their pages at different rows, so the newest 20 by arrival
+/// and the newest 20 by publication routinely differ at the bottom edge, and
+/// the difference is old news the published page cut off, not something that
+/// just happened. Merged, it landed at the very top of the feed: a ticker feed
+/// whose 20 rows span two weeks put a twelve-day-old article above an article
+/// an hour old, unmarked, because the priming page is the baseline. A row
+/// under the floor is not lost, it is just below the window: paging down
+/// serves it in its published place. Later polls keep every arrival, floor or
+/// not, because those demonstrably arrived while the reader was watching, and
+/// that is the whole point of polling by arrival.
+fn merge_arrivals(articles: &mut Vec<Article>, page: Vec<Article>, prime: bool) -> Vec<String> {
     let seen: HashSet<String> = articles
         .iter()
         .map(|a| a.original.uid.clone())
         .filter(|uid| !uid.is_empty())
         .collect();
+    // The bottom of the window the reader is looking at. A bundle that shows
+    // nothing (or nothing with a readable timestamp) has no floor to apply.
+    let floor = prime
+        .then(|| articles.iter().filter_map(|a| a.published()).min())
+        .flatten();
     let mut fresh: Vec<Article> = page
         .into_iter()
         .filter(|a| !a.original.uid.is_empty() && !seen.contains(&a.original.uid))
+        .filter(|a| match (floor, a.published()) {
+            // An unreadable timestamp cannot be judged against the floor;
+            // keep it, the block sort already pins it to the bottom.
+            (Some(floor), Some(published)) => published >= floor,
+            _ => true,
+        })
         .collect();
     // Descending publication, with an unparsable timestamp pinned to the
     // bottom of the block instead of jumping it; equal timestamps keep the

@@ -5,6 +5,20 @@ the crates.io releases; from 0.7.0 on each one is also a git tag and a
 GitHub release with prebuilt binaries. The Homebrew tap, the AUR and the
 apt repository joined later, and carry every version since.
 
+## 0.17.1 - 2026-09-08
+
+- The first refresh of a feed no longer lifts an old article to the top of it.
+  That first check asks the server for the newest rows by arrival, and a page
+  cut that way ends at a different article than the page ordered by
+  publication, so the two disagree at the bottom edge. What sits below that
+  edge is old news the first page cut off, and it was landing above everything
+  else: a ticker feed whose twenty rows spanned two weeks showed a twelve day
+  old article above one published an hour ago. Those rows now stay out, and
+  paging down still reaches them in their own place. Later refreshes are
+  unchanged, so an article that reaches the feed behind its own publish time
+  still goes to the top carrying the new row marker, which is the reason to
+  refresh by arrival at all.
+
 ## 0.17.0 - 2026-09-06
 
 - Bare mode: `z` hides the header and the footer and gives both rows to the
