@@ -180,8 +180,11 @@ fn extended_zone(quote: &Quote, now: DateTime<Utc>, theme: &Theme) -> Vec<Vec<Sp
     ) else {
         return Vec::new();
     };
-    // Named for the session the print came from, not the one running now:
-    // read overnight, an evening print is still the after-hours one.
+    // The print's own timestamp does not reach the quote, so the label is
+    // inferred from the session running now. That lands right at every
+    // hour worth labelling: only the pre-market window produces pre-market
+    // prints, and every other moment a late print exists in (the post
+    // session, and overnight after it) wants "AH".
     let label = if market::clock_at(now).session == Session::Pre {
         "PRE"
     } else {
