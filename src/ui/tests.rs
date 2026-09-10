@@ -226,6 +226,30 @@ fn table_view_shows_quotes() {
     assert!(screen.contains("▶"), "selection marker missing:\n{screen}");
 }
 
+/// The extended column earns its width only while there is a late print
+/// to put in it, so it has to appear and disappear with the data rather
+/// than sit empty through the session.
+#[test]
+fn table_shows_the_extended_column_only_when_a_row_has_one() {
+    let mut app = fake_app();
+    app.view_idx = ui::view_index(ui::ViewId::Table);
+    assert!(
+        !render(&mut app).contains("Ext"),
+        "no row has a late print yet"
+    );
+
+    if let Some(data) = app.data.get_mut("AAPL") {
+        // 214.50 in the session, 216.65 after the bell: +1.00%.
+        data.quote.extended = Some(216.65);
+    }
+    let screen = render(&mut app);
+    assert!(screen.contains("Ext"), "screen:\n{screen}");
+    assert!(screen.contains("+1.00%"), "screen:\n{screen}");
+    // MSFT has no late print, and an empty cell says that better than a
+    // dash, which would read as missing data.
+    assert!(!screen.contains("—"), "screen:\n{screen}");
+}
+
 #[test]
 fn chart_view_shows_selected_symbol() {
     let mut app = fake_app();
