@@ -8,7 +8,7 @@ use reqwest::header::{HeaderMap, HeaderValue};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 
-use crate::domain::{Candle, Interval, Quote, Range, TickerData};
+use crate::domain::{Candle, Interval, Quote, Range, Sessions, TickerData};
 use crate::market;
 use crate::source::{DataSource, candle_from_ohlc, http, sort_ascending};
 
@@ -130,7 +130,16 @@ impl DataSource for Alpaca {
         (self.feed == "delayed_sip").then_some("delayed 15m")
     }
 
-    async fn fetch(&self, symbol: &str, range: Range, interval: Interval) -> Result<TickerData> {
+    /// `sessions` is ignored: the free IEX feed carries no pre or post
+    /// market bars to include (measured 2026-09-09: zero bars between the
+    /// closing bell and midnight), so there is nothing to ask for.
+    async fn fetch(
+        &self,
+        symbol: &str,
+        range: Range,
+        interval: Interval,
+        _sessions: Sessions,
+    ) -> Result<TickerData> {
         let timeframe = timeframe(interval);
         let start = (Utc::now() - chrono::Duration::seconds(range.secs()))
             .to_rfc3339_opts(SecondsFormat::Secs, true);
@@ -214,8 +223,11 @@ fn quote_from_snapshot(symbol: &str, snap: &Snapshot, whole_market_volume: bool)
         // Both endpoint families quote in USD; the API reports no currency.
         currency: Some("USD".into()),
         extended: extended_now.then_some(latest).flatten(),
-        // The snapshot carries neither a 52 week range nor a company name.
+        // The snapshot carries no 52 week range.
         fifty_two_week: None,
+        // The daily bar IS the regular session on this feed, which has no
+        // extended-hours prints to widen it.
+        day_range: snap.daily_bar.as_ref().and_then(|b| b.l.zip(b.h)),
         volume: whole_market_volume
             .then(|| snap.daily_bar.as_ref().and_then(|b| b.v))
             .flatten(),
@@ -542,7 +554,7 @@ mod tests {
         let client = Alpaca::new(id, secret).unwrap();
         for symbol in ["AAPL", "BTC-USD"] {
             let data = client
-                .fetch(symbol, Range::D5, Interval::M15)
+                .fetch(symbol, Range::D5, Interval::M15, Sessions::Regular)
                 .await
                 .unwrap();
             assert!(data.quote.price > 0.0, "{symbol}: no price");

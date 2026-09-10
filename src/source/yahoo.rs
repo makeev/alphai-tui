@@ -2,7 +2,7 @@ use anyhow::{Result, anyhow, bail};
 use async_trait::async_trait;
 use serde::Deserialize;
 
-use crate::domain::{Candle, Interval, Quote, Range, TickerData};
+use crate::domain::{Candle, Interval, Quote, Range, Sessions, TickerData};
 use crate::source::{DataSource, candle_from_ohlc, http};
 
 /// Yahoo blocks obvious non-browser agents, so this client masquerades as
@@ -36,13 +36,28 @@ impl DataSource for Yahoo {
         Some("delayed 15m")
     }
 
-    async fn fetch(&self, symbol: &str, range: Range, interval: Interval) -> Result<TickerData> {
+    async fn fetch(
+        &self,
+        symbol: &str,
+        range: Range,
+        interval: Interval,
+        sessions: Sessions,
+    ) -> Result<TickerData> {
         let url = format!("https://query1.finance.yahoo.com/v8/finance/chart/{symbol}");
+        // The extended sessions roughly triple a 1d/5m series (measured
+        // 2026-09-10: 193 candles against 79), which is why they are asked
+        // for rather than always taken. The quote fields are unaffected:
+        // `fulldayPrice` and the rest arrive either way.
+        let pre_post = matches!(sessions, Sessions::Extended);
         let body: ChartResponse = http::get_json(
             &self.client,
             "yahoo",
             &url,
-            &[("range", range.as_str()), ("interval", interval.as_str())],
+            &[
+                ("range", range.as_str()),
+                ("interval", interval.as_str()),
+                ("includePrePost", if pre_post { "true" } else { "false" }),
+            ],
             |status, body| match http::body_message(body) {
                 Some(msg) => format!("yahoo API {status}: {msg}"),
                 None => format!("yahoo API {status}"),
@@ -108,6 +123,10 @@ impl DataSource for Yahoo {
                     .fifty_two_week_low
                     .zip(result.meta.fifty_two_week_high),
                 volume: result.meta.regular_market_volume,
+                day_range: result
+                    .meta
+                    .regular_market_day_low
+                    .zip(result.meta.regular_market_day_high),
             },
             candles,
         })
@@ -185,6 +204,8 @@ struct Meta {
     fifty_two_week_high: Option<f64>,
     fifty_two_week_low: Option<f64>,
     regular_market_volume: Option<f64>,
+    regular_market_day_high: Option<f64>,
+    regular_market_day_low: Option<f64>,
 }
 
 #[derive(Deserialize)]
@@ -259,6 +280,9 @@ mod tests {
             currency: meta.currency.clone(),
             extended: meta.regular_market_price.and(meta.fullday_price),
             fifty_two_week: meta.fifty_two_week_low.zip(meta.fifty_two_week_high),
+            day_range: meta
+                .regular_market_day_low
+                .zip(meta.regular_market_day_high),
             volume: meta.regular_market_volume,
         };
         assert!((quote.change_pct().unwrap() - -0.278_29).abs() < 1e-4);
@@ -279,6 +303,7 @@ mod tests {
             currency: None,
             extended: meta.regular_market_price.and(meta.fullday_price),
             fifty_two_week: None,
+            day_range: None,
             volume: None,
         };
         assert_eq!(quote.extended_price(), None);

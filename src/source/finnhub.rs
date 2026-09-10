@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use reqwest::StatusCode;
 use serde::Deserialize;
 
-use crate::domain::{Candle, Interval, Quote, Range, TickerData};
+use crate::domain::{Candle, Interval, Quote, Range, Sessions, TickerData};
 use crate::source::{DataSource, http};
 
 /// Cap on the per-symbol synthetic history (~2.5h at 15s polls).
@@ -38,7 +38,15 @@ impl DataSource for Finnhub {
         "finnhub"
     }
 
-    async fn fetch(&self, symbol: &str, _range: Range, _interval: Interval) -> Result<TickerData> {
+    /// `sessions` is ignored along with the window: this source has no
+    /// candle history at all, only the quotes collected while the app runs.
+    async fn fetch(
+        &self,
+        symbol: &str,
+        _range: Range,
+        _interval: Interval,
+        _sessions: Sessions,
+    ) -> Result<TickerData> {
         let q: FhQuote = http::get_json(
             &self.client,
             "finnhub",
@@ -87,6 +95,7 @@ impl DataSource for Finnhub {
                 // for this source.
                 extended: None,
                 fifty_two_week: None,
+                day_range: None,
                 volume: None,
             },
             candles,

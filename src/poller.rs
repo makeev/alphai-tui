@@ -6,7 +6,7 @@ use tokio::sync::mpsc::UnboundedSender;
 use tokio::task::JoinSet;
 
 use crate::alphai;
-use crate::domain::{Interval, Range, TickerData, fetch_range};
+use crate::domain::{Interval, Range, Sessions, TickerData, fetch_range};
 use crate::source::DataSource;
 
 pub enum SourceEvent {
@@ -26,9 +26,9 @@ pub enum SourceEvent {
 /// The poller re-reads it at the top of every cycle.
 pub type SharedSource = Arc<RwLock<Arc<dyn DataSource>>>;
 
-/// The history window and granularity, swappable at runtime with the [ and ]
-/// keys. Same pattern as `SharedSource`: re-read at the top of every cycle.
-pub type SharedParams = Arc<RwLock<(Range, Interval)>>;
+/// The history window, granularity and which sessions to draw, all
+/// swappable at runtime with the preset and extended-hours keys. Same pattern as `SharedSource`: re-read at the top of every cycle.
+pub type SharedParams = Arc<RwLock<(Range, Interval, Sessions)>>;
 
 /// The poll interval, editable at runtime from the settings screen. Same
 /// pattern as `SharedSource`: re-read before every sleep.
@@ -55,7 +55,7 @@ pub async fn run(
     loop {
         let current = source.read().unwrap().clone();
         let symbols = symbols.read().unwrap().clone();
-        let (range, interval) = *params.read().unwrap();
+        let (range, interval, sessions) = *params.read().unwrap();
         // Fetch wider than the visible range so indicators have their warm-up
         // history; the chart trims rendering back to `range`.
         let range = fetch_range(range, interval, slow_bars);
@@ -64,7 +64,7 @@ pub async fn run(
             let source = current.clone();
             let symbol = symbol.clone();
             set.spawn(async move {
-                let res = source.fetch(&symbol, range, interval).await;
+                let res = source.fetch(&symbol, range, interval, sessions).await;
                 (symbol, res)
             });
         }

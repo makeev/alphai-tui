@@ -55,6 +55,10 @@ static ROWS: &[Row] = &[
     Row::Act(Action::ToggleSma, "toggle the moving average overlays"),
     Row::Act(Action::ToggleRsi, "toggle the RSI panel"),
     Row::Act(Action::ToggleVolume, "toggle the volume panel"),
+    Row::Act(
+        Action::ToggleExtended,
+        "draw pre and post market candles (yahoo)",
+    ),
     Row::Act(Action::MaType, "average the overlays simple or exp"),
     Row::Act(Action::NextPreset, "next range and interval preset"),
     Row::Act(Action::PrevPreset, "previous range and interval preset"),
@@ -82,9 +86,12 @@ pub fn render(f: &mut Frame, app: &mut App) {
         }
     }
 
+    // Wide enough for the longest config name: at 66 the name column had
+    // 13 columns and silently clipped `extended_hours` down to a name that
+    // would not have worked if a reader copied it into their config.
     let area = centered(
         f.area(),
-        66.min(f.area().width.saturating_sub(4)),
+        72.min(f.area().width.saturating_sub(4)),
         (lines.len() as u16 + 2).min(f.area().height.saturating_sub(2)),
     );
     f.render_widget(Clear, area);

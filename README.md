@@ -26,7 +26,10 @@ Built in Rust with [ratatui](https://ratatui.rs).
   15 minute old price off as live. After the closing bell the rail also
   carries the extended-hours print (`AH`, or `PRE` before the open) with
   its move measured against the close, so news breaking outside the session
-  is not read next to a price frozen at 16:00. Where the source reports
+  is not read next to a price frozen at 16:00. `E` puts the pre and post
+  market candles on the chart itself, and the day range on the rail keeps
+  meaning the regular session either way, because the source states that
+  range rather than it being folded out of whatever candles were fetched. Where the source reports
   them, the year's range and the day's volume follow at the end of the
   line, first to go as the terminal narrows.
 - **The watchlist, editable while it runs**: `a` opens a one-line prompt and
@@ -267,6 +270,7 @@ defaults. API keys can also come from env vars, which win over the config:
 | `Enter` / `o` | news, insider | open article in browser |
 | `Enter` / `o` | earnings | open the read on alphai.io |
 | `v` | news, insider | fullscreen article card; scroll with `↑` `↓`, `Esc` closes |
+| `E` | everywhere | draw pre and post market candles too (yahoo only) |
 | `x` | news | flip the list/card layout: side-by-side or stacked |
 | `PgUp` `PgDn` | news | scroll the article card pane |
 | `PgUp` `PgDn` | earnings | page through the read |
@@ -336,8 +340,9 @@ get a sourced brief without leaving the terminal.
 
 - `yahoo`: no API key, quote and candle history in one request, roughly
   15 minutes delayed. Crypto and FX tickers work as `BTC-USD`, `EURUSD=X`.
-  The only source here that reports extended-hours prices, the 52 week
-  range and full market volume, all in the same request as the price.
+  The only source here that reports extended-hours prices and candles, the
+  52 week range and full market volume, all in the same request as the
+  price. `E` and `[chart] extended_hours` apply to this source alone.
 - `finnhub`: needs a key (free at [finnhub.io](https://finnhub.io)).
   Real-time-ish quotes; historical candles are premium-only there, so charts
   build up from quotes collected during the session and reset on restart.
@@ -460,6 +465,7 @@ sma = true                # moving average overlays visible at start
 ma_type = "sma"           # sma | ema, both using the periods below
 rsi = true                # RSI panel visible at start
 volume = true             # volume panel visible at start
+extended_hours = false    # draw pre and post market candles (yahoo only)
 sma_fast = 20             # 2 to 250
 sma_slow = 100            # 2 to 250; also sizes the history warm-up
 rsi_period = 14           # 2 to 100

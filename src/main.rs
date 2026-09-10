@@ -19,7 +19,7 @@ use clap::Parser;
 use clap::ValueEnum;
 
 use crate::app::{App, AppInit};
-use crate::domain::{Interval, Range, fmt_price};
+use crate::domain::{Interval, Range, Sessions, fmt_price};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -127,7 +127,12 @@ fn main() -> Result<()> {
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
     let refresh = Arc::new(tokio::sync::Notify::new());
     let shared: poller::SharedSource = Arc::new(RwLock::new(source.clone()));
-    let params: poller::SharedParams = Arc::new(RwLock::new((range, interval)));
+    let sessions = if resolved.chart.extended_hours {
+        Sessions::Extended
+    } else {
+        Sessions::Regular
+    };
+    let params: poller::SharedParams = Arc::new(RwLock::new((range, interval, sessions)));
     let shared_every: poller::SharedEvery =
         Arc::new(RwLock::new(Duration::from_secs(every.max(2))));
     // The watchlist is shared rather than moved: the add and remove keys
@@ -156,6 +161,7 @@ fn main() -> Result<()> {
     let mut app = App::new(AppInit {
         symbols,
         shared_symbols,
+        sessions,
         source: shared,
         source_name: source.name(),
         range,
@@ -385,7 +391,9 @@ fn print_once(
     interval: Interval,
 ) -> Result<()> {
     for symbol in symbols {
-        match rt.block_on(source.fetch(symbol, range, interval)) {
+        // Regular sessions only: this prints a quote and a candle count
+        // for a script, and the extended candles change neither.
+        match rt.block_on(source.fetch(symbol, range, interval, Sessions::Regular)) {
             Ok(data) => {
                 let q = &data.quote;
                 let change = match (q.change(), q.change_pct()) {

@@ -7,6 +7,15 @@ apt repository joined later, and carry every version since.
 
 ## 0.20.0 - 2026-09-10
 
+- `E` draws the pre and post market candles on the chart, not just the
+  extended price beside it. `[chart] extended_hours = true` starts that
+  way. Yahoo is the only source that can answer it: Alpaca's free IEX feed
+  carries no extended-hours bars at all, and Finnhub has no candle history
+  to extend.
+- The day range on the quote rail now comes from the source's own figure
+  for the regular session rather than being folded out of the candles,
+  which stopped being the same number once the extended ones could be
+  drawn.
 - A Summary view (`7`): the whole watchlist as small charts at once, in a
   grid sized to the terminal. The Table view already lists every ticker,
   but a sparkline squeezed into one row answers up or down and nothing
@@ -15,8 +24,6 @@ apt repository joined later, and carry every version since.
   than stretching to fill a tall terminal, where the session's own jitter
   would read as noise instead of a path. `↑` `↓` move between cards and
   page the grid when the watchlist outgrows the screen.
-
-## 0.19.0 - 2026-09-10
 
 - The watchlist is editable while the app runs. `a` opens a prompt, the
   typed ticker joins the list and is polled from the next tick; `d` removes
@@ -28,8 +35,6 @@ apt repository joined later, and carry every version since.
 - The last ticker cannot be removed. Every view is scoped to a selected
   ticker, so an empty watchlist needs empty states before it can be
   reached.
-
-## 0.18.0 - 2026-09-10
 
 - Extended-hours prices. After the closing bell the quote rail carries the
   late print as its own zone, labelled `AH` (or `PRE` before the open), with

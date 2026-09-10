@@ -127,6 +127,29 @@ pub fn fetch_range(display: Range, interval: Interval, slow_bars: usize) -> Rang
         .unwrap_or(Range::Y2)
 }
 
+/// Which trading sessions a fetch should bring back candles for.
+///
+/// An enum rather than a bool so the call sites say which they mean.
+/// Only yahoo can answer `Extended`: alpaca's free IEX feed carries no
+/// pre or post market prints at all (measured 2026-09-09: zero bars in
+/// the post session), and finnhub builds its candles from quotes taken
+/// while the app runs.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Sessions {
+    #[default]
+    Regular,
+    Extended,
+}
+
+impl Sessions {
+    pub fn toggled(self) -> Self {
+        match self {
+            Sessions::Regular => Sessions::Extended,
+            Sessions::Extended => Sessions::Regular,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Quote {
     pub symbol: String,
@@ -141,6 +164,10 @@ pub struct Quote {
     pub extended: Option<f64>,
     /// 52 week range as (low, high).
     pub fifty_two_week: Option<(f64, f64)>,
+    /// The regular session's own (low, high), when the source states it.
+    /// Derived from candles otherwise, which stops being the same number
+    /// once extended-hours candles are drawn.
+    pub day_range: Option<(f64, f64)>,
     /// Regular session volume, in shares.
     pub volume: Option<f64>,
 }

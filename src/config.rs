@@ -123,6 +123,8 @@ pub struct ChartConfig {
     pub ma_type: Option<String>,
     pub rsi: Option<bool>,
     pub volume: Option<bool>,
+    /// Draw pre and post market candles too (yahoo only).
+    pub extended_hours: Option<bool>,
     pub sma_fast: Option<usize>,
     pub sma_slow: Option<usize>,
     pub rsi_period: Option<usize>,
@@ -158,6 +160,9 @@ pub struct ChartDefaults {
     pub ma_type: MaType,
     pub rsi: bool,
     pub volume: bool,
+    /// Start with the extended sessions drawn. Only yahoo can answer it;
+    /// the other sources have no pre or post market candles to draw.
+    pub extended_hours: bool,
     pub sma_fast: usize,
     pub sma_slow: usize,
     pub rsi_period: usize,
@@ -174,6 +179,7 @@ impl Default for ChartDefaults {
             ma_type: MaType::Sma,
             rsi: true,
             volume: true,
+            extended_hours: false,
             sma_fast: indicators::SMA_FAST,
             sma_slow: indicators::SMA_SLOW,
             rsi_period: indicators::RSI_PERIOD,
@@ -315,6 +321,9 @@ fn resolve_chart(raw: Option<&ChartConfig>, warnings: &mut Vec<String>) -> Chart
     }
     if let Some(v) = raw.volume {
         out.volume = v;
+    }
+    if let Some(v) = raw.extended_hours {
+        out.extended_hours = v;
     }
     out.sma_fast = period(raw.sma_fast, out.sma_fast, "sma_fast", 2..=250, warnings);
     out.sma_slow = period(raw.sma_slow, out.sma_slow, "sma_slow", 2..=250, warnings);

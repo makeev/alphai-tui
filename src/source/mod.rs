@@ -10,7 +10,7 @@ use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 
 use crate::config::Config;
-use crate::domain::{Candle, Interval, Range, TickerData};
+use crate::domain::{Candle, Interval, Range, Sessions, TickerData};
 
 /// A pluggable market-data provider.
 ///
@@ -24,7 +24,13 @@ pub trait DataSource: Send + Sync {
     fn name(&self) -> &'static str;
 
     /// Latest quote plus recent candles for one symbol.
-    async fn fetch(&self, symbol: &str, range: Range, interval: Interval) -> Result<TickerData>;
+    async fn fetch(
+        &self,
+        symbol: &str,
+        range: Range,
+        interval: Interval,
+        sessions: Sessions,
+    ) -> Result<TickerData>;
 
     /// How stale this source's prices are, for the quote rail's badge.
     /// None means real time. It is a method rather than a registry field

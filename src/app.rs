@@ -23,7 +23,7 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
 use crate::alphai::{self, Article};
 use crate::config::{ChartDefaults, Config, UiDefaults};
-use crate::domain::{Interval, Range, TickerData};
+use crate::domain::{Interval, Range, Sessions, TickerData};
 use crate::indicators::MaType;
 use crate::keymap::{Action, Keymap};
 use crate::poller::{SharedEvery, SharedParams, SharedSource, SharedSymbols, SourceEvent};
@@ -197,6 +197,8 @@ pub struct AppInit {
     pub source_name: &'static str,
     pub range: Range,
     pub interval: Interval,
+    /// Whether the chart draws the pre and post market candles too.
+    pub sessions: Sessions,
     pub params: SharedParams,
     pub every: SharedEvery,
     pub rx: UnboundedReceiver<SourceEvent>,
@@ -232,6 +234,8 @@ pub struct App {
     pub source_delay: Option<&'static str>,
     pub range: Range,
     pub interval: Interval,
+    /// Whether the chart draws the pre and post market candles too.
+    pub sessions: Sessions,
     pub last_update: Option<DateTime<Local>>,
     pub table_state: TableState,
     // Chart options: seeded from [chart], then session-only toggles
@@ -306,7 +310,10 @@ pub struct App {
     pub theme_name: &'static str,
     pub keymap: Keymap,
     source: SharedSource,
-    params: SharedParams,
+    /// The fetch window the poller re-reads each cycle. Public like the
+    /// shared watchlist: what the keys push into it is the behaviour worth
+    /// asserting on, not the field they set on `App`.
+    pub params: SharedParams,
     /// The poll interval the poller re-reads before every sleep; the
     /// settings screen edits it live.
     every: SharedEvery,
@@ -332,6 +339,7 @@ impl App {
             source_delay,
             range: init.range,
             interval: init.interval,
+            sessions: init.sessions,
             last_update: None,
             table_state: TableState::default(),
             chart_style: init.chart.style,
@@ -606,6 +614,7 @@ impl App {
             Action::NextPreset => self.cycle_range(1),
             Action::PrevPreset => self.cycle_range(-1),
             Action::ToggleBare => self.bare = !self.bare,
+            Action::ToggleExtended => self.toggle_sessions(),
             Action::NextTheme => self.cycle_theme(1),
             Action::PrevTheme => self.cycle_theme(-1),
             Action::Up => self.selected = self.selected.saturating_sub(1),
@@ -803,7 +812,19 @@ impl App {
         let (range, interval) = next_preset(&self.chart.presets, (self.range, self.interval), dir);
         self.range = range;
         self.interval = interval;
-        *self.params.write().unwrap() = (range, interval);
+        self.push_params();
+    }
+
+    /// E: draw the pre and post market candles, or stop. Same shape as the
+    /// preset cycle, and the same reason for only nudging the price
+    /// poller: nothing about the AlphaAI feeds changes.
+    fn toggle_sessions(&mut self) {
+        self.sessions = self.sessions.toggled();
+        self.push_params();
+    }
+
+    fn push_params(&mut self) {
+        *self.params.write().unwrap() = (self.range, self.interval, self.sessions);
         self.refresh.notify_one();
     }
 }

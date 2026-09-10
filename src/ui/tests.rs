@@ -12,7 +12,7 @@ use crate::app::{
     settings_rows,
 };
 use crate::config::{ChartDefaults, Config, UiDefaults};
-use crate::domain::{Candle, Interval, Quote, Range, TickerData};
+use crate::domain::{Candle, Interval, Quote, Range, Sessions, TickerData};
 use crate::poller::SourceEvent;
 use crate::source::make_source;
 use crate::theme::Theme;
@@ -29,6 +29,7 @@ fn plain_quote(symbol: &str, price: f64, prev_close: Option<f64>, currency: Opti
         currency: currency.map(Into::into),
         extended: None,
         fifty_two_week: None,
+        day_range: None,
         volume: None,
     }
 }
@@ -49,11 +50,12 @@ fn empty_app_with_cmds(
     let app = App::new(AppInit {
         shared_symbols: Arc::new(RwLock::new(symbols.clone())),
         symbols,
+        sessions: Sessions::Regular,
         source: Arc::new(RwLock::new(source)),
         source_name: "yahoo",
         range: Range::D1,
         interval: Interval::M5,
-        params: Arc::new(RwLock::new((Range::D1, Interval::M5))),
+        params: Arc::new(RwLock::new((Range::D1, Interval::M5, Sessions::Regular))),
         every: Arc::new(RwLock::new(std::time::Duration::from_secs(15))),
         rx,
         refresh: Arc::new(Notify::new()),
@@ -387,6 +389,46 @@ fn summary_pages_with_the_cursor() {
     let last = render_sized(&mut app, 40, 8);
     assert!(last.contains("META"), "screen:\n{last}");
     assert!(!last.contains("AAPL"), "screen:\n{last}");
+}
+
+/// The extended candles are a different fetch, not a different render, so
+/// the toggle has to reach the poller's parameters.
+#[test]
+fn e_asks_the_poller_for_the_extended_candles() {
+    let mut app = fake_app();
+    assert_eq!(app.sessions, Sessions::Regular);
+    press(&mut app, KeyCode::Char('E'));
+    assert_eq!(app.sessions, Sessions::Extended);
+    assert_eq!(app.params.read().unwrap().2, Sessions::Extended);
+    press(&mut app, KeyCode::Char('E'));
+    assert_eq!(app.params.read().unwrap().2, Sessions::Regular);
+}
+
+/// Once pre and post market candles are drawn, folding the day's high and
+/// low out of the candles stops meaning "the session". The source states
+/// the session's own range, so the rail uses that.
+#[test]
+fn the_rail_day_range_comes_from_the_source_not_the_candles() {
+    let mut app = fake_app();
+    if let Some(data) = app.data.get_mut("AAPL") {
+        data.quote.day_range = Some((200.0, 220.0));
+        // A candle from an extended session, well outside it.
+        data.candles.push(Candle {
+            ts: data.candles.last().unwrap().ts + 300,
+            open: 214.5,
+            high: 260.0,
+            low: 190.0,
+            close: 214.5,
+            volume: None,
+        });
+    }
+    let rail = ui::rail::text(&ui::rail::line(&app, 130, market_open_moment()));
+    assert!(rail.contains("200.00"), "{rail}");
+    assert!(rail.contains("220.00"), "{rail}");
+    assert!(
+        !rail.contains("260.00"),
+        "the extended high is not the day's"
+    );
 }
 
 #[test]
@@ -981,7 +1023,10 @@ fn help_overlay_lists_every_action() {
     let mut app = fake_app();
     press(&mut app, KeyCode::Char('?'));
     assert!(app.help.open);
-    let screen = render_sized(&mut app, 90, 45);
+    // Taller than any real terminal on purpose: this checks that every
+    // action HAS a row, not that they all fit on one screen. The overlay
+    // scrolls, and the table has been longer than 30 rows for a while.
+    let screen = render_sized(&mut app, 90, 70);
     for (_, name) in crate::keymap::ACTIONS.iter() {
         assert!(screen.contains(name), "action {name} missing:\n{screen}");
     }
@@ -2444,11 +2489,12 @@ fn config_defaults_seed_startup_state() {
     let mut app = App::new(AppInit {
         shared_symbols: Arc::new(RwLock::new(vec!["AAPL".into()])),
         symbols: vec!["AAPL".into()],
+        sessions: Sessions::Regular,
         source: Arc::new(RwLock::new(source)),
         source_name: "yahoo",
         range: Range::D1,
         interval: Interval::M5,
-        params: Arc::new(RwLock::new((Range::D1, Interval::M5))),
+        params: Arc::new(RwLock::new((Range::D1, Interval::M5, Sessions::Regular))),
         every: Arc::new(RwLock::new(std::time::Duration::from_secs(15))),
         rx,
         refresh: Arc::new(Notify::new()),
@@ -2884,11 +2930,12 @@ fn first_run_opens_settings_with_welcome() {
     let mut app = App::new(AppInit {
         shared_symbols: Arc::new(RwLock::new(vec!["AAPL".into()])),
         symbols: vec!["AAPL".into()],
+        sessions: Sessions::Regular,
         source: Arc::new(RwLock::new(source)),
         source_name: "yahoo",
         range: Range::D1,
         interval: Interval::M5,
-        params: Arc::new(RwLock::new((Range::D1, Interval::M5))),
+        params: Arc::new(RwLock::new((Range::D1, Interval::M5, Sessions::Regular))),
         every: Arc::new(RwLock::new(std::time::Duration::from_secs(15))),
         rx,
         refresh: Arc::new(Notify::new()),

@@ -140,7 +140,7 @@ fn optional_zones(app: &App, symbol: &str, now: DateTime<Utc>) -> Vec<Vec<Vec<Sp
             Style::new().fg(theme.warn),
         )]]);
     }
-    zones.push(range_zone(quote.price, &data.candles, color, theme));
+    zones.push(range_zone(quote, &data.candles, color, theme));
     let closes: Vec<f64> = data.candles.iter().map(|c| c.close).collect();
     if !closes.is_empty() {
         zones.push(vec![vec![
@@ -233,14 +233,18 @@ fn session_zone(app: &App, symbol: &str, now: DateTime<Utc>) -> Vec<Vec<Span<'st
 /// Where the price sits between the session's low and high:
 /// `218.13├───●────┤227.42`.
 fn range_zone(
-    price: f64,
+    quote: &Quote,
     candles: &[Candle],
     color: Color,
     theme: &Theme,
 ) -> Vec<Vec<Span<'static>>> {
-    let Some((lo, hi)) = day_range(candles) else {
+    // The source's own figure first: it is the regular session's range by
+    // definition, while the candles are whatever was fetched, which now
+    // includes the extended sessions when those are switched on.
+    let Some((lo, hi)) = quote.day_range.or_else(|| day_range(candles)) else {
         return Vec::new();
     };
+    let price = quote.price;
     let span = hi - lo;
     let pos = if span > 0.0 {
         (((price - lo) / span) * (TRACK - 1) as f64).round() as isize
