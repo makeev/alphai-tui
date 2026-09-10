@@ -4,165 +4,178 @@
 [![crates.io](https://img.shields.io/crates/v/alphai-tui.svg)](https://crates.io/crates/alphai-tui)
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/makeev/alphai-tui/blob/main/LICENSE)
 
-Terminal dashboard for watching stocks: live quotes and charts next to
-AI-scored financial news, sentiment and SEC Form 4 insider activity.
-Built in Rust with [ratatui](https://ratatui.rs).
+A stock dashboard for the terminal that also answers why the price moved.
+Live quotes and candlestick charts on one side; on the other, for the same
+ticker, AI-scored news with a full analysis of each story, the SEC Form 4
+insider filings and a structured read of the last earnings report. One Rust
+binary built on [ratatui](https://ratatui.rs), no browser tab, and no
+account needed for the prices.
 
-![alphai-tui demo: news list with the AI analysis card, market and trending scopes, SEC Form 4 insider stream, candlestick chart with SMA and RSI, split dashboard](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/demo.gif)
+![alphai-tui demo: the split dashboard with the quote rail, the news list next to the full AI analysis card, the market-wide scope, a year of SEC Form 4 insider filings, the earnings read, the summary grid and the candlestick chart with moving averages, volume and RSI](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/demo.gif)
 
-## What you get
+```sh
+brew install makeev/tap/alphai-tui   # also cargo, apt, AUR, or a prebuilt binary
+alphai-tui NVDA AVGO AAPL MSFT META TSLA AMZN GOOGL BTC-USD
+```
 
-- **The quote rail**: one line under the tabs, present in every view, with
-  the selected ticker's price, its change on the day, where that price sits
-  between the session low and high, what the US market is doing right now
-  (pre, live, post or closed, and how long until the next bell) and the
-  rest of the watchlist as percentages. The News, Insider and Earnings
-  views are no longer a ticker name with no price attached, and moving
-  between tickers with the arrow keys is not a blind jump. Parts drop one
-  at a time as the terminal narrows, the symbol and the price surviving to
-  the last; `[ui] quote_rail = false` turns the line off, and a terminal
-  under 12 rows gives the row back to the view. A delayed source (Yahoo, or
-  `ALPACA_FEED=delayed_sip`) says so on the rail instead of passing a
-  15 minute old price off as live. After the closing bell the rail also
-  carries the extended-hours print (`AH`, or `PRE` before the open) with
-  its move measured against the close, so news breaking outside the session
-  is not read next to a price frozen at 16:00. `E` puts the pre and post
-  market candles on the chart itself, and the day range on the rail keeps
-  meaning the regular session either way, because the source states that
-  range rather than it being folded out of whatever candles were fetched. Where the source reports
-  them, the year's range and the day's volume follow at the end of the
-  line, first to go as the terminal narrows.
+Quotes and charts run keyless on Yahoo, or on Finnhub or Alpaca with their
+own free keys. The News, Insider and Earnings views run on a free
+[AlphaAI](https://alphai.io?utm_source=alphai-tui&utm_medium=referral) key
+that you paste once in the settings screen. The first run walks you through
+both, and after that a bare `alphai-tui` reopens your watchlist.
 
-  ![alphai-tui split view an hour before the US open: the quote rail with the pre-market print measured against the close, the time to the bell and the day range, the watchlist with an Ext Δ% column, the candlestick chart and the scored news feed](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/rail.png)
+## The screens
 
-- **The watchlist, editable while it runs**: `a` opens a one-line prompt and
-  the new ticker is polled from the next tick, `d` drops the selected one.
-  Both are session-only, like every other runtime change here; Save in the
-  settings screen writes the watchlist to the config. The last ticker stays,
-  because every view is scoped to a selected one.
-- **Split** (the default view): watchlist and chart side by side in the top
-  half, the news feed in the bottom half (hidden on very small terminals).
-- **News**: enriched articles for the selected ticker, the whole market or
-  the 48-hour trending top 10 (`f` cycles the three scopes), shown as a
-  list next to a full article card with the complete AI analysis: price
-  impact prediction with confidence, relevance and novelty scores,
-  actionability, background context, key entities and a contrarian view.
-  The feed shows articles with a relevance score of 7 and up by default;
-  `+` and `-` move that bar live (1 to 10, filtered server-side, the block
-  title shows the active value) and `[ui] news_min_score` sets the startup
-  default. Articles fresher than 15 minutes light up their age in the
-  accent color, and rows that appeared since you last looked at the feed
-  carry a `●` marker that goes out once the cursor rests on them (insider
-  rows get the same treatment). Arrivals are placed at the top of the list
-  even when the rows below them are newer: an article reaches the feed a
-  while after it was published (a Form 4 days after its trade), so at its
-  publish position it would land below the fold and never be seen. `x`
-  flips the layout between side-by-side and list-over-card, `v` expands the
-  card to full screen, PgUp/PgDn scroll it.
-  On terminals narrower than 90 columns the side layout gives the whole
-  width to the list and `v` remains the way to read the card. Pressing
-  down on the last row loads the next page of the feed; the page size
-  adapts to your plan automatically (20 per page, 50 on Pro keys). Market
-  and trending scopes collapse syndicated reprints to one row per story
-  and show how many outlets carry it (`×7`). Enter opens the article page
-  on alphai.io; a settings toggle switches that to the original source
-  site. A 7-day bullish/bearish rollup tops the ticker scope.
+Seven views, one keystroke apart (`1` to `7`, or Tab). Every one of them is
+scoped to the ticker selected in the watchlist, and one line under the tabs
+carries that ticker's price into all of them.
 
-  ![alphai-tui news view: article list next to the full AI analysis card with price impact, trading value, context and a contrarian view](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/news.png)
+### The quote rail, in every view
 
-- **Table**: watchlist with price, change, day range and unicode sparklines.
-- **Chart**: candlestick chart of the selected ticker at half-block
-  resolution, with a previous-close reference line, 20/100 moving average
-  overlays, a volume panel and an RSI(14) panel. The overlays thread through
-  the candles as thin braille lines and average simple or exponential (`e`,
-  or `[chart] ma_type`); the volume bars sit in their candles' own columns
-  and take their color, so a move and the volume behind it read together.
-  `c` switches to the classic Braille line chart, `m`, `i` and `b` toggle
-  the indicators and panels, `t` cycles interval presets on the fly. A
-  short terminal drops the panels rather than squeezing the price chart,
-  and sources without volume (finnhub) simply have no volume panel.
-  The client quietly fetches extra history beyond the visible window, so
-  the average and RSI lines are fully drawn from the first candle on screen
-  instead of waiting a hundred candles to warm up. Like a trading
-  terminal, the chart keeps a margin right of the newest candle (20% of
-  the plot; `[chart] right_margin_pct` resizes it, 0 turns it off) with a
-  last-price marker line and tag in it. Every time a poll changes the
-  price, the marker and the title price pulse in the tick's color for a
-  moment, and the newest candle folds the live price into its close, so
-  the candle and the marker never disagree and a live market is visible
-  at a glance; the poll interval is `--every` / the `Poll every`
-  settings row.
-- **Insider**: SEC Form 4 activity for the selected ticker. A 12-month
-  rollup (buys vs sells, dollar volumes, share of pre-arranged 10b5-1 plan
-  trades, most active insiders with their event counts) sits above a trades
-  chart and the stream of filing events. The chart mirrors the insider
-  trades page on alphai.io: every event in the window is a triangle placed
-  by date on a log dollar scale (`▲` buy, `▼` sale, a hollow `▽` for shares
-  sold back to the issuer, dimmed when the trade ran under a 10b5-1 plan),
-  with weekly buy/sell dollar bars underneath and month marks along the
-  axis. The mark of the filing selected in the list renders inverted, so
-  the list and the chart always point at each other. `g` cycles the chart
-  window: 3 months, 12 months, off (`[ui] insider_chart` sets the startup
-  value); on low terminals the bars drop first and the whole panel yields
-  before the list would starve. The chart plots every event the API knows
-  in the window, unaffected by the score filter below. Each filing row
-  shows the trade side straight from the
-  filing (a buy/sell glyph; a sale back to the issuer stays neutral instead
-  of reading as a market sale), a `D`/`I` marker for direct or indirect
-  ownership, a `p` flag on pre-arranged 10b5-1 plan trades and the total
-  trade value. The article card breaks the event down further: shares, the
-  value-weighted average price, the SEC transaction code, who traded and
-  their role, and the transaction date; the detail pane below the list adds
-  what the chart data knows about the selected filing: the share of the
-  insider's stake the event moved, how many tranches the filing folded
-  into it, and a late-filing flag. Insider rows are scored from the
-  trade size, so `+` and `-` filter the stream by dollar value
-  (`[ui] insider_min_score` sets the startup default; 7 keeps roughly the
-  $10M+ trades). The stream pages like the news feed: down on the last row
-  loads more.
+![alphai-tui quote rail: symbol and price, the day's change, the pre-market print measured against the close, the session badge with a countdown to the opening bell, the feed delay, the day range with the price marked in it, a sparkline and the day's volume](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/rail.png)
 
-  ![alphai-tui insider view: the Form 4 trades chart, a log-scale scatter of sales over weekly dollar bars, above the filing stream with the 12-month rollup on top](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/insider.png)
+Price, the change on the day, the extended-hours print measured against the
+regular close, what the US market is doing right now (pre, live, post or
+closed) and how long until the next bell, whether the feed is delayed, where
+the price sits between the day's low and high, and, where the source reports
+them, the year's range and the day's volume. The rest of the watchlist
+follows as percentages.
 
-- **Summary**: the whole watchlist as small charts at once, laid out in a
-  grid sized to the terminal. The table's one-row sparkline says up or
-  down; this spends real rows on each ticker, so one glance covers the
-  shape of the session across every name you follow. `↑` `↓` move between
-  cards and page the grid when the watchlist outgrows the screen.
+So the News, Insider and Earnings views are never a ticker name with no
+price attached, and moving between tickers with the arrow keys is not a
+blind jump. Parts drop one at a time as the terminal narrows, the symbol and
+the price surviving to the last; `[ui] quote_rail = false` turns the line
+off, and a terminal under 12 rows gives the row back to the view.
 
-  ![alphai-tui summary view: nine watchlist tickers as small charts in a three by three grid, each card with the price and the day's change](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/summary.png)
+### 1 Split: the default view
 
-- **Earnings**: AlphaAI's structured read of the selected ticker's own
-  earnings filing, the way a company reports it: the verdict and why, the
-  metric table with prior quarter, prior year and both changes, segments,
-  the outlook, concerns, what to watch and several paragraphs of analysis.
-  Every figure in it was checked against the filing text before it was
-  published, and it prints exactly as the filing wrote it, units shortened
-  and nothing rounded into a new number. Both American and foreign filings
-  are covered (an 8-K item 2.02, or a foreign private issuer's 6-K, which
-  reports half years and its own currency). The metric table is banded row
-  by row and led by dots from each name across to its figures, and it stays
-  as wide as its own content however wide the terminal is. `←` `→` walk the
-  watchlist, `↑` `↓` scroll, and older quarters continue below the newest
-  read.
+![alphai-tui split view before the US open: the watchlist with change, extended-hours change and sparklines, a candlestick chart with moving averages, and the scored news feed underneath](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/split.png)
 
-  ![alphai-tui earnings view: NVIDIA's second quarter fiscal 2027 read with the verdict, the summary paragraph and the metric table with prior quarter, prior year and both changes](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/earnings.png)
+The watchlist and the chart in the top half, the news feed in the bottom
+half. One screen that says what you follow, what it is doing and what is
+being said about it. On very small terminals the feed steps aside.
 
-  When a company has not reported since AlphaAI began reading filings, the
-  view says so and gives the date of its next report when the company has
-  confirmed one. The bottom line carries the next couple of US macro
-  releases (CPI, the jobs report, an FOMC decision and the rest), which is
-  the other half of what moves a price you are about to read about.
-  Filings show up in the News feed too: the row for the filing itself is
-  marked `8-K` or `6-K` rather than `earnings`, which tells it apart from
-  the coverage around it, and its article card carries a short form of the
-  read once the Earnings view has loaded it.
-- In-app settings (`s`): pick the price source, paste API keys once, set
-  the poll interval (applies immediately) and choose where Enter opens
-  news articles. Everything is saved to a config file, so after the first
-  run a bare `alphai-tui` is enough.
+`a` adds a ticker without leaving the app (type the symbol, Enter), `d`
+drops the selected one. Both are session-only, like every other runtime
+change here; Save in the settings screen writes the watchlist to the config.
 
-Prices work with no key at all (Yahoo). News, sentiment and insider views
-use the [AlphaAI](https://alphai.io?utm_source=alphai-tui&utm_medium=referral) API and need a free key.
+### 2 News: the story and what it means
+
+![alphai-tui news view: the article list on the left, the full AI analysis card on the right with sentiment, price impact, trading value, context, entities and a contrarian view](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/news.png)
+
+Every article carries a per-ticker analysis: the expected price impact and
+the confidence behind it, relevance and novelty scores, how actionable it
+is, the background context, the entities involved and a contrarian view. A
+seven-day bullish/bearish rollup tops the ticker scope.
+
+The feed shows articles scoring 7 and up by default. `+` and `-` move that
+bar live, the server does the filtering, so nothing you filtered out eats a
+slot on the page. Articles fresher than 15 minutes light up their age, and
+rows that arrived since you last looked carry a `●` that goes out once the
+cursor rests on them. New arrivals are placed at the top of the list even
+when the rows below them are newer: a story reaches the feed a while after
+it was published, and at its publish position it would land below the fold
+and never be seen.
+
+`x` flips the layout between side-by-side and list-over-card, `v` blows the
+card up over the screen, `Enter` opens the article in the browser, and down
+on the last row loads the next page.
+
+![alphai-tui news view in the market-wide scope: filings marked 8-K and 6-K, insider rows, reprints collapsed with an outlet count, and an earnings read available for the selected filing](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/market.png)
+
+`f` cycles the scope: the selected ticker, the whole market, or the 48-hour
+trending top ten. The market-wide feed collapses syndicated reprints into
+one row and says how many outlets carry the story (`×4`), marks an earnings
+filing as `8-K` or `6-K` rather than as coverage of one, and mixes in the
+insider rows.
+
+### 3 Table: the watchlist, full width
+
+The watchlist alone, full width: price, change in dollars and percent, the
+extended-hours change, the day's range and a sparkline of the session. The
+extended column appears only when some row actually has a print outside the
+session, so it costs no width during the trading day.
+
+### 4 Chart: candles, averages, volume, RSI
+
+![alphai-tui chart view: candlesticks with moving average overlays and a last-price marker, a volume panel colored by candle direction and an RSI panel underneath](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/chart.png)
+
+Candlesticks at half-block resolution with a previous-close reference line,
+20 and 100 period moving average overlays threaded through them as thin
+braille lines, a volume panel whose bars sit in their candles' own columns
+and take their color, and an RSI(14) panel. `c` switches to a Braille line
+chart, `m`, `i` and `b` toggle the overlays and the panels, `e` averages
+simple or exponential, `t` cycles interval presets, and `E` draws the pre
+and post market candles too (on Yahoo, the one source here that reports
+them).
+
+The client quietly fetches more history than the window shows, so the
+average and RSI lines are fully drawn from the first candle on screen
+instead of warming up over the next hundred. Like a trading terminal, the
+chart keeps a margin right of the newest candle with a last-price marker in
+it, and every time a poll moves the price the marker pulses in the tick's
+color.
+
+### 5 Insider: what the people inside the company did
+
+![alphai-tui insider view: a year of Broadcom Form 4 events as a log-scale scatter over weekly dollar bars, the filing stream underneath and the selected filing broken down in the detail pane](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/insider.png)
+
+SEC Form 4 activity for the selected ticker: what its own officers and
+directors did with their shares. A 12-month rollup (buys against
+sells, dollar volumes, the share done under pre-arranged 10b5-1 plans, the
+most active insiders) sits above a trades chart and the stream of filings.
+
+Every event in the window is a triangle placed by date on a log dollar
+scale (`▲` buy, `▼` sale, a hollow `▽` for shares sold back to the issuer,
+dimmed when the trade ran under a plan), with weekly buy and sell dollar
+bars underneath. The mark of the filing selected in the list renders
+inverted, so the list and the chart always point at each other, and the
+detail pane adds what share of the insider's stake the event moved, how many
+tranches the filing folded into it and whether it was filed late. `g` cycles
+the window between 3 months, 12 months and off; `+` and `-` filter the
+stream by trade size.
+
+### 6 Earnings: the filing, read
+
+![alphai-tui earnings view: NVIDIA's second quarter fiscal 2027 read with the verdict, the summary and a metric table carrying the prior quarter, the prior year and both changes](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/earnings.png)
+
+AlphaAI's structured read of the ticker's own earnings filing, the way the
+company reported it: the verdict and why, the metric table with the prior
+quarter, the prior year and both changes, segments, the outlook, concerns,
+what to watch and several paragraphs of analysis. Every figure was checked
+against the filing text before it was published, and it prints exactly as
+the filing wrote it, units shortened and nothing rounded into a new number.
+American and foreign filings both (an 8-K item 2.02, or a foreign private
+issuer's 6-K with its half years and its own currency).
+
+`←` `→` walk the watchlist, older quarters continue below the newest read.
+When a company has not reported since AlphaAI began reading filings, the
+view says so and gives the date of its next report if the company has
+confirmed one. The bottom line carries the next couple of US macro releases
+(CPI, the jobs report, an FOMC decision), which is the other half of what
+moves a price you are about to read about.
+
+### 7 Summary: the whole watchlist at once
+
+![alphai-tui summary view: nine watchlist tickers as small charts in a three by three grid, each card with its price and the day's change](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/summary.png)
+
+Every ticker you follow as its own chart, in a grid sized to the terminal.
+The table's one-row sparkline says up or down; this spends real rows on each
+name, so one glance covers the shape of the session across the whole list.
+`↑` `↓` move between cards and page the grid when the watchlist outgrows the
+screen.
+
+### Everywhere: help, settings, themes
+
+![alphai-tui help overlay: the full key table with the config name of every action next to it, drawn over the summary grid](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/help.png)
+
+`?` lists every action with the keys currently bound to it and the name to
+use in the config to rebind it. `s` opens the settings: price source, API
+keys, poll interval (applied immediately), color theme and where Enter opens
+an article. Save writes all of it, plus the watchlist on screen, to the
+config file. `p` and `P` walk the color presets live, `z` hides the header
+and the footer for a tmux pane that carries its own status bar, and `r`
+refreshes prices and the visible feed.
 
 ## How it compares
 
@@ -172,9 +185,9 @@ which is the closest in shape (Rust, ratatui, charts per ticker), and
 [ticker](https://github.com/achannarasappa/ticker), which is the most
 widely used and is built around tracking what you own.
 
-The short version: they answer what the price is doing, this one also
-tries to answer why. Filings and scored news sit next to the chart instead
-of in a browser tab.
+The short version: both are built around the price. This one puts the
+filings and the scored news next to it, and pays for that with no options
+chain and no position tracking.
 
 | | alphai-tui | tickrs | ticker |
 |---|---|---|---|
@@ -269,7 +282,7 @@ cargo run --release -- AAPL MSFT NVDA BTC-USD
 ## Quick start
 
 ```sh
-alphai-tui AAPL MSFT NVDA BTC-USD
+alphai-tui NVDA AVGO AAPL MSFT META TSLA AMZN GOOGL BTC-USD
 ```
 
 The first run opens the settings screen: pick a price source and paste your
@@ -344,13 +357,14 @@ defaults. API keys can also come from env vars, which win over the config:
 alphai-tui is a single self-contained process, so a terminal multiplexer
 (tmux, zellij, screen, or your terminal's own splits) turns it into a
 custom trading workspace: run one instance per pane and switch each pane
-to the view you want with `1`..`5`.
+to the view you want with `1`..`7`.
 
 ```sh
-tmux new-session -d -s market 'alphai-tui --bare CRWV'
-tmux split-window  -h 'alphai-tui --bare AAPL'      # news pane on the right
-tmux split-window -v -t market:0.0 'alphai-tui --bare NVDA'
-tmux split-window -v -t market:0.1 'alphai-tui --bare NBIS'
+tmux new-session -d -s market 'alphai-tui --bare NVDA'
+tmux split-window -h -t market 'alphai-tui --bare AAPL'   # news pane on the right
+tmux select-pane -t market -L
+tmux split-window -v -t market 'alphai-tui --bare AVGO'
+tmux split-window -v -t market 'alphai-tui --bare TSLA'
 tmux attach -t market
 ```
 
@@ -359,10 +373,10 @@ status bar has little use for, and hands both rows to the view; `z` toggles
 it in a running instance and `[ui] bare = true` makes it the default. The
 quote rail stays, so a bare pane still names its ticker and its price.
 
-Press `4` in the chart panes and `2` in the news pane, and you get a wall
-of charts next to a live scored feed:
+Press `4` in the three chart panes and `2` in the tall one, and you get a
+wall of charts next to a live scored feed:
 
-![four alphai-tui instances in tmux panes: three candlestick charts with SMA and RSI next to a full-height AI-scored news view](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/tmux.png)
+![four alphai-tui instances in tmux panes: three bare panes with candlestick charts and their own quote rails, next to a full-height pane showing the scored news feed](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/tmux.png)
 
 Two things the instances share. The config file is one: the last pane to
 save settings wins, so set things up once and let the other panes just

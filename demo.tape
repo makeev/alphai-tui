@@ -1,6 +1,7 @@
 # Records assets/demo.gif for the README. Run `vhs demo.tape` from the
 # repo root with alphai-tui installed and an AlphaAI key configured; one
-# take costs about 6 API requests (news, sentiment, trending, insider).
+# take costs one price request per ticker (the poll interval is parked at
+# 900s: Yahoo rate-limits by IP) and about eight AlphaAI requests.
 #
 # The app wears catppuccin-mocha and the terminal wears the matching
 # theme: the app only paints foreground colors, so the two have to agree.
@@ -13,39 +14,56 @@ Set FontSize 14
 Set Width 1200
 Set Height 700
 Set Padding 12
+Set Framerate 12
 Set TypingSpeed 40ms
 
-Type "alphai-tui --theme catppuccin-mocha --source yahoo AAPL AVGO NVDA BTC-USD"
+Type "alphai-tui --theme catppuccin-mocha --source yahoo --every 900 NVDA AVGO AAPL META BTC-USD"
 Enter
-Sleep 5.5s
+Sleep 6s
 
-# News: scored list next to the full AI analysis card
+# News: the scored list next to the full AI analysis of the story
 Type "2"
 Sleep 4.5s
-Type "j"
+Down
 Sleep 1.5s
-Type "j"
-Sleep 2.5s
-
-# f cycles the scope: market-wide with collapsed reprints, then trending
-Type "f"
-Sleep 4s
-Type "f"
+Down
 Sleep 3s
 
-# Insider: SEC Form 4 rollup above the filing stream (AVGO has the flow)
+# f cycles the scope: market-wide, with reprints collapsed
+Type "f"
+Sleep 4.5s
+Type "f"
+Sleep 3s
+Type "f"
+Sleep 1.5s
+
+# Insider: a year of SEC Form 4 filings for AVGO, chart and stream
 Right
-Sleep 800ms
+Sleep 500ms
 Type "5"
-Sleep 5s
-
-# Chart: candles with SMA overlays and RSI, t cycles range presets
-Type "4"
+Sleep 4s
+Type "g"
 Sleep 3.5s
-Type "t"
+
+# Earnings: the last filing, read line by line
+Type "6"
+Sleep 1s
+Left
+Sleep 5s
+PageDown
 Sleep 3s
 
-# Back to the split view for the closing shot (no quit: the gif ends and
-# loops on the live dashboard, not on an empty shell)
+# Summary: the whole watchlist as charts at once
+Type "7"
+Sleep 4s
+
+# Chart: candles with the moving averages, volume and RSI; t cycles ranges
+Type "4"
+Sleep 3s
+Type "t"
+Sleep 3.5s
+
+# Back to the split view for the closing shot (no quit: the gif loops on
+# the live dashboard, not on an empty shell)
 Type "1"
 Sleep 4s

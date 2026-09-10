@@ -1,6 +1,8 @@
 # Records assets/themes.gif: the p key walking through the color presets
 # live. Run `vhs themes.tape` from the repo root with alphai-tui installed
-# and an AlphaAI key configured; one take costs about three API requests.
+# and an AlphaAI key configured; one take costs one price request per ticker
+# (the poll interval is parked at 900s: Yahoo rate-limits by IP) and a
+# couple of AlphaAI requests.
 
 Output assets/themes.gif
 
@@ -9,9 +11,10 @@ Set FontSize 14
 Set Width 1200
 Set Height 700
 Set Padding 12
+Set Framerate 12
 Set TypingSpeed 40ms
 
-Type "alphai-tui --theme catppuccin-mocha --source yahoo AVGO NVDA AAPL BTC-USD"
+Type "alphai-tui --theme catppuccin-mocha --source yahoo --every 900 NVDA AVGO AAPL META BTC-USD"
 Enter
 Sleep 6s
 
