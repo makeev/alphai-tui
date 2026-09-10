@@ -9,6 +9,7 @@ pub mod prompt;
 pub mod rail;
 pub mod settings;
 pub mod split;
+pub mod summary;
 pub mod table;
 
 use ratatui::Frame;
@@ -30,6 +31,7 @@ pub enum ViewId {
     Chart,
     Insider,
     Earnings,
+    Summary,
 }
 
 /// One footer hint: the keys of `actions` (looked up in the live keymap so
@@ -115,13 +117,17 @@ pub trait View: Sync {
 
 /// Register new display modes here. Order defines the tab cycle and the
 /// 1..9 hotkeys.
-pub static VIEWS: [&dyn View; 6] = [
+pub static VIEWS: [&dyn View; 7] = [
     &split::SplitView,
     &news::NewsView,
     &table::TableView,
     &chart::ChartView,
     &insider::InsiderView,
     &earnings::EarningsView,
+    // Appended rather than slotted next to Table: the array order is the
+    // tab cycle and the 1-9 hotkeys, so inserting one would renumber every
+    // view behind it and break the muscle memory of anyone using them.
+    &summary::SummaryView,
 ];
 
 /// Index of a view in `VIEWS`. Every `ViewId` is registered exactly once

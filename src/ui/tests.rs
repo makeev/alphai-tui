@@ -334,6 +334,61 @@ fn escape_closes_the_prompt_without_adding() {
     assert_eq!(app.symbols, vec!["AAPL", "MSFT"]);
 }
 
+/// The point of the view: every ticker's shape at once, which the table's
+/// one-row sparkline cannot give.
+#[test]
+fn summary_view_charts_every_ticker() {
+    let mut app = fake_app();
+    app.view_idx = ui::view_index(ui::ViewId::Summary);
+    let screen = render(&mut app);
+    assert!(screen.contains("AAPL"), "screen:\n{screen}");
+    assert!(screen.contains("MSFT"), "screen:\n{screen}");
+    assert!(screen.contains("214.50"), "AAPL price in the card title");
+    assert!(screen.contains("414.50"), "MSFT price in the card title");
+    // Braille is what the card plots with; the table's block ramp is not
+    // in this view at all.
+    assert!(
+        screen
+            .chars()
+            .any(|c| ('\u{2800}'..='\u{28FF}').contains(&c)),
+        "no plotted line:\n{screen}"
+    );
+}
+
+#[test]
+fn summary_marks_the_selected_card() {
+    let mut app = fake_app();
+    app.view_idx = ui::view_index(ui::ViewId::Summary);
+    let first = render(&mut app);
+    assert!(first.contains("▶ AAPL"), "screen:\n{first}");
+    assert!(!first.contains("▶ MSFT"), "screen:\n{first}");
+
+    press(&mut app, KeyCode::Down);
+    let second = render(&mut app);
+    assert!(second.contains("▶ MSFT"), "screen:\n{second}");
+    assert!(!second.contains("▶ AAPL"), "screen:\n{second}");
+}
+
+/// More tickers than cards on screen: the page follows the cursor, so ↑↓
+/// keep working as the only navigation without a scroll state of its own.
+#[test]
+fn summary_pages_with_the_cursor() {
+    let mut app = fake_app();
+    app.view_idx = ui::view_index(ui::ViewId::Summary);
+    for extra in ["NVDA", "AMD", "TSLA", "META"] {
+        app.symbols.push(extra.into());
+    }
+    // One card fits: 40 columns is a single column, 8 rows one row of cards.
+    let first = render_sized(&mut app, 40, 8);
+    assert!(first.contains("AAPL"), "screen:\n{first}");
+    assert!(!first.contains("META"), "screen:\n{first}");
+
+    app.selected = app.symbols.len() - 1;
+    let last = render_sized(&mut app, 40, 8);
+    assert!(last.contains("META"), "screen:\n{last}");
+    assert!(!last.contains("AAPL"), "screen:\n{last}");
+}
+
 #[test]
 fn chart_view_shows_selected_symbol() {
     let mut app = fake_app();

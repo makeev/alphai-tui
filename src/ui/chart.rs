@@ -149,7 +149,7 @@ pub fn render_chart(f: &mut Frame, area: Rect, app: &App) {
 /// only the trailing `range` worth, anchored on the newest candle so a
 /// closed market still shows the last session. Indicators keep the full
 /// series and are sliced with the same offset.
-fn visible_from(candles: &[Candle], range: Range) -> usize {
+pub(crate) fn visible_from(candles: &[Candle], range: Range) -> usize {
     let Some(last) = candles.last() else { return 0 };
     let cutoff = last.ts - range.secs();
     let cut = candles.partition_point(|c| c.ts <= cutoff);

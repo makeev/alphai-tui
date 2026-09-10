@@ -5,6 +5,17 @@ the crates.io releases; from 0.7.0 on each one is also a git tag and a
 GitHub release with prebuilt binaries. The Homebrew tap, the AUR and the
 apt repository joined later, and carry every version since.
 
+## 0.20.0 - 2026-09-10
+
+- A Summary view (`7`): the whole watchlist as small charts at once, in a
+  grid sized to the terminal. The Table view already lists every ticker,
+  but a sparkline squeezed into one row answers up or down and nothing
+  else; this spends real rows on each name, so one glance covers the shape
+  of the session across the watchlist. Cards keep a sane height rather
+  than stretching to fill a tall terminal, where the session's own jitter
+  would read as noise instead of a path. `↑` `↓` move between cards and
+  page the grid when the watchlist outgrows the screen.
+
 ## 0.19.0 - 2026-09-10
 
 - The watchlist is editable while the app runs. `a` opens a prompt, the

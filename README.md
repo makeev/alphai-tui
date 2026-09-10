@@ -117,6 +117,11 @@ Built in Rust with [ratatui](https://ratatui.rs).
 
   ![alphai-tui insider view: the Form 4 trades chart, a log-scale scatter of sales over weekly dollar bars, above the filing stream with the 12-month rollup on top](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/insider.png)
 
+- **Summary**: the whole watchlist as small charts at once, laid out in a
+  grid sized to the terminal. The table's one-row sparkline says up or
+  down; this spends real rows on each ticker, so one glance covers the
+  shape of the session across every name you follow. `↑` `↓` move between
+  cards and page the grid when the watchlist outgrows the screen.
 - **Earnings**: AlphaAI's structured read of the selected ticker's own
   earnings filing, the way a company reports it: the verdict and why, the
   metric table with prior quarter, prior year and both changes, segments,
@@ -252,7 +257,7 @@ defaults. API keys can also come from env vars, which win over the config:
 
 | Key | Where | Action |
 |-----|-------|--------|
-| `Tab` / `1`..`6` | everywhere | switch view |
+| `Tab` / `1`..`7` | everywhere | switch view |
 | `↑` `↓` / `j` `k` | table, chart, split | select ticker |
 | `a` | everywhere | add a ticker: type the symbol, `Enter` adds it, `Esc` cancels |
 | `d` | everywhere | remove the selected ticker (the last one stays) |
