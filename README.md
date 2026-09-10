@@ -32,6 +32,9 @@ Built in Rust with [ratatui](https://ratatui.rs).
   range rather than it being folded out of whatever candles were fetched. Where the source reports
   them, the year's range and the day's volume follow at the end of the
   line, first to go as the terminal narrows.
+
+  ![alphai-tui split view an hour before the US open: the quote rail with the pre-market print measured against the close, the time to the bell and the day range, the watchlist with an Ext Δ% column, the candlestick chart and the scored news feed](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/rail.png)
+
 - **The watchlist, editable while it runs**: `a` opens a one-line prompt and
   the new ticker is polled from the next tick, `d` drops the selected one.
   Both are session-only, like every other runtime change here; Save in the
@@ -125,6 +128,9 @@ Built in Rust with [ratatui](https://ratatui.rs).
   down; this spends real rows on each ticker, so one glance covers the
   shape of the session across every name you follow. `↑` `↓` move between
   cards and page the grid when the watchlist outgrows the screen.
+
+  ![alphai-tui summary view: nine watchlist tickers as small charts in a three by three grid, each card with the price and the day's change](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/summary.png)
+
 - **Earnings**: AlphaAI's structured read of the selected ticker's own
   earnings filing, the way a company reports it: the verdict and why, the
   metric table with prior quarter, prior year and both changes, segments,
@@ -138,6 +144,9 @@ Built in Rust with [ratatui](https://ratatui.rs).
   as wide as its own content however wide the terminal is. `←` `→` walk the
   watchlist, `↑` `↓` scroll, and older quarters continue below the newest
   read.
+
+  ![alphai-tui earnings view: NVIDIA's second quarter fiscal 2027 read with the verdict, the summary paragraph and the metric table with prior quarter, prior year and both changes](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/earnings.png)
+
   When a company has not reported since AlphaAI began reading filings, the
   view says so and gives the date of its next report when the company has
   confirmed one. The bottom line carries the next couple of US macro
