@@ -8,7 +8,8 @@
 //! The AlphaAI client in `crate::alphai` is deliberately separate: different
 //! timeout, bearer auth and a richer error envelope.
 
-use std::time::Duration;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, anyhow, bail};
 use reqwest::StatusCode;
@@ -20,6 +21,28 @@ use serde::de::DeserializeOwned;
 pub const APP_UA: &str = concat!("alphai-tui/", env!("CARGO_PKG_VERSION"));
 
 const TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Base pause before a retry, plus up to `RETRY_JITTER` on top, and how
+/// many retries a request gets.
+///
+/// Alpaca's data edge refuses roughly one request in seven with a bare 429:
+/// no `Retry-After`, no rate-limit headers, and nothing to do with load.
+/// Measured 2026-09-10 against an idle key, 20 serial requests per regime:
+/// 2/20 refused as fast as the socket allowed, and *4/20* refused at two
+/// requests per second, an eighth of the pace. A limiter would ease off
+/// when the pace drops; this does not, so slowing down or spacing requests
+/// out buys nothing and a retry is the only lever. Two of them put the
+/// residual under a percent, and cost at most two extra requests against a
+/// 200 req/min ceiling.
+///
+/// The pause stays short because the refusal clears immediately (a lone
+/// retry succeeded 16 times out of 16, even at 200ms). The jitter is not
+/// for Alpaca at all: it is for the sources that meter for real, where a
+/// batch refused together and retried in lockstep would just rebuild the
+/// burst that got it refused.
+const RETRY_DELAY: Duration = Duration::from_millis(200);
+const RETRY_JITTER: Duration = Duration::from_millis(400);
+const MAX_RETRIES: usize = 2;
 
 /// Default client for a source: app UA, shared timeout.
 pub fn client() -> Result<reqwest::Client> {
@@ -39,6 +62,13 @@ pub fn client_with(ua: &str, headers: Option<HeaderMap>) -> Result<reqwest::Clie
 /// GET `url` with `query` and parse a 2xx JSON body as `T`. A non-2xx status
 /// routes `(status, body)` through `err_map`, so each source keeps its own
 /// API-specific messages; `api` names the source in the bad-JSON context.
+///
+/// A transient status is retried up to `MAX_RETRIES` times (see
+/// `is_transient`). That budget is deliberate: price sources are metered by
+/// the minute, so a couple of extra requests cost nothing, and without them
+/// a single unlucky 429 leaves the ticker showing an error until the next
+/// poll. The AlphaAI client is a separate path on purpose, so its per-day
+/// budget never sees these retries.
 pub async fn get_json<T: DeserializeOwned>(
     client: &reqwest::Client,
     api: &str,
@@ -46,12 +76,24 @@ pub async fn get_json<T: DeserializeOwned>(
     query: &[(&str, &str)],
     err_map: impl Fn(StatusCode, &str) -> String,
 ) -> Result<T> {
-    let resp = client
+    let mut resp = client
         .get(url)
         .query(query)
         .send()
         .await
         .context("request failed")?;
+    for _ in 0..MAX_RETRIES {
+        if !is_transient(resp.status()) {
+            break;
+        }
+        tokio::time::sleep(retry_delay()).await;
+        resp = client
+            .get(url)
+            .query(query)
+            .send()
+            .await
+            .context("request failed")?;
+    }
     let status = resp.status();
     if !status.is_success() {
         let body = resp.text().await.unwrap_or_default();
@@ -60,6 +102,44 @@ pub async fn get_json<T: DeserializeOwned>(
     resp.json()
         .await
         .with_context(|| format!("bad JSON from {api}"))
+}
+
+/// Statuses worth exactly one more try: a rate limiter that refused a burst,
+/// and the gateway-class blips in front of every one of these APIs. A plain
+/// 500 stays out — it is as likely to be deterministic as not, and a source
+/// that is genuinely down should say so on the first tick rather than after
+/// a doubled wait. Auth and unknown-symbol errors are never transient.
+fn is_transient(status: StatusCode) -> bool {
+    matches!(status.as_u16(), 429 | 502 | 503 | 504)
+}
+
+/// Bumped once per retry, so two of them scheduled inside the same clock
+/// tick still get different inputs. Needed because the clock alone is not
+/// enough: `SystemTime::now()` returns the *same* value for calls in quick
+/// succession (measured on macOS: eight back-to-back reads, one distinct
+/// value), which is exactly the situation a refused pair is in.
+static RETRY_SEQ: AtomicU64 = AtomicU64::new(0);
+
+/// `RETRY_DELAY` plus a jittered tail, so requests refused together do not
+/// come back together.
+///
+/// Neither input works raw. The clock stands still between neighbouring
+/// calls (see `RETRY_SEQ`), and a bare counter would hand out delays in
+/// lockstep across processes; `now % window` fails a third way, keeping
+/// near inputs near. So: seed with the clock, separate with the counter,
+/// then decorrelate through splitmix64's finalizer, which is what turns
+/// neighbouring inputs into delays hundreds of milliseconds apart. Cheap
+/// enough to save an RNG dependency for one call site.
+fn retry_delay() -> Duration {
+    let seq = RETRY_SEQ.fetch_add(1, Ordering::Relaxed);
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos() as u64);
+    let mut z = nanos.wrapping_add(seq.wrapping_mul(0x9e37_79b9_7f4a_7c15));
+    z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    z ^= z >> 31;
+    RETRY_DELAY + Duration::from_nanos(z % RETRY_JITTER.as_nanos() as u64)
 }
 
 /// Shared advice for a 429; the caller prefixes its plan's numbers, e.g.
@@ -132,6 +212,59 @@ mod tests {
     fn snippet_truncates_long_bodies() {
         assert_eq!(snippet("short"), "short");
         assert_eq!(snippet(&"x".repeat(300)).chars().count(), 120);
+    }
+
+    #[test]
+    fn only_rate_limit_and_gateway_statuses_retry() {
+        for code in [429, 502, 503, 504] {
+            assert!(
+                is_transient(StatusCode::from_u16(code).unwrap()),
+                "{code} should retry"
+            );
+        }
+        // Retrying these would double the wait before a real answer: the
+        // key is wrong, the symbol is unknown, or the API is really broken.
+        for code in [200, 400, 401, 403, 404, 422, 500] {
+            assert!(
+                !is_transient(StatusCode::from_u16(code).unwrap()),
+                "{code} should not retry"
+            );
+        }
+    }
+
+    #[test]
+    fn retry_delay_stays_in_its_jittered_window() {
+        let draws: Vec<Duration> = (0..64).map(|_| retry_delay()).collect();
+        assert!(
+            draws
+                .iter()
+                .all(|d| *d >= RETRY_DELAY && *d < RETRY_DELAY + RETRY_JITTER)
+        );
+    }
+
+    #[test]
+    fn back_to_back_retry_delays_spread_across_the_window() {
+        // The point of the mixer. Draws taken microseconds apart, as a
+        // refused pair takes them, must land far apart: feeding the raw
+        // clock through a plain modulo passes the window check above and
+        // still lands every neighbour within microseconds of the last,
+        // which recreates the very burst the retry is spreading out.
+        let draws: Vec<u128> = (0..64).map(|_| retry_delay().as_nanos()).collect();
+        let span = draws.iter().max().unwrap() - draws.iter().min().unwrap();
+        let window = RETRY_JITTER.as_nanos();
+        assert!(
+            span > window / 2,
+            "draws spanned {span}ns of a {window}ns window"
+        );
+        let scattered = draws
+            .windows(2)
+            .filter(|p| p[1].abs_diff(p[0]) > window / 8)
+            .count();
+        assert!(
+            scattered > draws.len() / 2,
+            "only {scattered} of {} neighbouring draws moved",
+            draws.len() - 1
+        );
     }
 
     #[test]

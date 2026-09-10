@@ -5,6 +5,21 @@ the crates.io releases; from 0.7.0 on each one is also a git tag and a
 GitHub release with prebuilt binaries. The Homebrew tap, the AUR and the
 apt repository joined later, and carry every version since.
 
+## 0.17.2 - 2026-09-10
+
+- Prices no longer drop out when the source refuses a request. Alpaca's data
+  edge turns down roughly one request in seven with a bare "too many
+  requests", and it does so no matter how slowly you ask: twenty requests
+  sent as fast as the socket allowed were refused twice, and the same twenty
+  paced at two per second were refused four times. Nothing was over any
+  published limit. One refusal used to be enough to leave a ticker showing an
+  error until the next poll, and to make `--once` print nothing but the
+  error; watching two symbols failed that way half the time. A refused
+  request is now retried, briefly and up to twice, which brings the same
+  check to twenty nine runs in thirty. Gateway errors are retried the same
+  way. A wrong key, an unknown symbol and a source that is genuinely down
+  still answer immediately, as before.
+
 ## 0.17.1 - 2026-09-08
 
 - The first refresh of a feed no longer lifts an old article to the top of it.
