@@ -155,6 +155,45 @@ Built in Rust with [ratatui](https://ratatui.rs).
 Prices work with no key at all (Yahoo). News, sentiment and insider views
 use the [AlphaAI](https://alphai.io?utm_source=alphai-tui&utm_medium=referral) API and need a free key.
 
+## How it compares
+
+There are good terminal stock tools already. The two you are most likely
+to be choosing between are [tickrs](https://github.com/tarkah/tickrs),
+which is the closest in shape (Rust, ratatui, charts per ticker), and
+[ticker](https://github.com/achannarasappa/ticker), which is the most
+widely used and is built around tracking what you own.
+
+The short version: they answer what the price is doing, this one also
+tries to answer why. Filings and scored news sit next to the chart instead
+of in a browser tab.
+
+| | alphai-tui | tickrs | ticker |
+|---|---|---|---|
+| Price charts | candles, line, SMA/EMA, RSI, volume | line, candle, kagi, volume | none |
+| Whole watchlist at once | summary grid, table with sparklines | summary pane | quote table |
+| News with per-article analysis | yes | no | no |
+| SEC Form 4 insider activity | chart and filing stream | no | no |
+| Earnings filing reads | yes | no | no |
+| Extended hours | price and candles | candles | price |
+| Options chain | no | yes | no |
+| Positions and P&L | no | quantity and average price | cost-basis lots, groups, currencies |
+| Export for scripts | `--once` text | no | CSV and JSON |
+| Price sources | Yahoo, Finnhub, Alpaca | Yahoo | Yahoo, Coinbase |
+| Add or remove a ticker in the app | yes | yes | no |
+| Rebindable keys | any action, in the config | vim keys | no |
+
+**What they do better.** tickrs has an options chain with calls and puts
+by expiry, which this has nothing to answer with, and a kagi chart if that
+is how you read price. ticker has the most complete position tracking of
+the three: several cost-basis lots per holding, named groups, currency
+conversion, and `ticker print` for piping into something else. If what you
+want is a portfolio view, ticker is the one to reach for.
+
+**One thing worth knowing.** Yahoo rate-limits by IP, and every tool here
+depends on it, this one included. Three price sources is the hedge: if
+Yahoo starts refusing, `s` switches to Finnhub or Alpaca without leaving
+the app.
+
 ## Install
 
 Homebrew (macOS and Linux):
