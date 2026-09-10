@@ -5,6 +5,19 @@ the crates.io releases; from 0.7.0 on each one is also a git tag and a
 GitHub release with prebuilt binaries. The Homebrew tap, the AUR and the
 apt repository joined later, and carry every version since.
 
+## 0.19.0 - 2026-09-10
+
+- The watchlist is editable while the app runs. `a` opens a prompt, the
+  typed ticker joins the list and is polled from the next tick; `d` removes
+  the selected one. Until now the watchlist could only be set with command
+  line arguments or by hand-editing the config, so following a name someone
+  mentioned meant quitting first. Both keys are rebindable as `add_ticker`
+  and `remove_ticker`, and both are session-only like every other runtime
+  change: Save in the settings screen writes the watchlist to the config.
+- The last ticker cannot be removed. Every view is scoped to a selected
+  ticker, so an empty watchlist needs empty states before it can be
+  reached.
+
 ## 0.18.0 - 2026-09-10
 
 - Extended-hours prices. After the closing bell the quote rail carries the

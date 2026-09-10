@@ -5,6 +5,7 @@ pub mod help;
 pub mod insider;
 pub mod insider_chart;
 pub mod news;
+pub mod prompt;
 pub mod rail;
 pub mod settings;
 pub mod split;
@@ -64,6 +65,7 @@ pub static DEFAULT_HINTS: &[Hint] = &[
     Hint::act(&[Action::Quit], "quit"),
     Hint::fixed("tab/1-9", "view"),
     Hint::act(&[Action::Up, Action::Down], "select"),
+    Hint::act(&[Action::AddTicker], "add"),
     Hint::act(&[Action::NextPreset], "interval"),
     Hint::act(&[Action::Refresh], "refresh"),
     Hint::act(&[Action::Settings], "settings"),
@@ -171,6 +173,9 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     if app.settings.open {
         settings::render(f, app);
     }
+    if app.ticker_prompt.open {
+        prompt::render(f, app);
+    }
 }
 
 /// `text` cut to `width` columns with a trailing ellipsis. Counts
@@ -263,7 +268,9 @@ fn hints_text(app: &App) -> String {
 }
 
 fn footer_line(app: &App) -> Paragraph<'static> {
-    let hints = if app.settings.open {
+    let hints = if app.ticker_prompt.open {
+        " type a ticker · enter add · esc cancel".to_string()
+    } else if app.settings.open {
         // The settings form is a text input; its keys are not remappable.
         " ↑↓ move · ←→ change · enter edit/save · esc close".to_string()
     } else if app.article_overlay.open {

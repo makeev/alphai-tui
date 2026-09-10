@@ -26,7 +26,7 @@ use crate::config::{ChartDefaults, Config, UiDefaults};
 use crate::domain::{Interval, Range, TickerData};
 use crate::indicators::MaType;
 use crate::keymap::{Action, Keymap};
-use crate::poller::{SharedEvery, SharedParams, SharedSource, SourceEvent};
+use crate::poller::{SharedEvery, SharedParams, SharedSource, SharedSymbols, SourceEvent};
 use crate::theme::Theme;
 use crate::ui;
 
@@ -77,6 +77,18 @@ impl NewsScope {
 pub struct ArticleOverlay {
     pub open: bool,
     pub scroll: u16,
+}
+
+/// State of the add-ticker prompt (a anywhere). A typed symbol is not
+/// validated here: whether it exists is the source's answer, and the row
+/// carries that answer already, as a price or as an error.
+#[derive(Default)]
+pub struct TickerPrompt {
+    pub open: bool,
+    pub input: String,
+    /// Set for the cases the prompt itself can rule on, such as a symbol
+    /// already on the list.
+    pub error: Option<String>,
 }
 
 /// State of the help overlay (? anywhere): the full key table.
@@ -180,6 +192,7 @@ fn next_preset(
 
 pub struct AppInit {
     pub symbols: Vec<String>,
+    pub shared_symbols: SharedSymbols,
     pub source: SharedSource,
     pub source_name: &'static str,
     pub range: Range,
@@ -279,6 +292,10 @@ pub struct App {
     pub article_overlay: ArticleOverlay,
     pub help: HelpOverlay,
     pub settings: SettingsState,
+    pub ticker_prompt: TickerPrompt,
+    /// The watchlist as the price poller sees it; kept in step with
+    /// `symbols` by `add_symbol` and `remove_selected_symbol`.
+    pub shared_symbols: SharedSymbols,
     pub config: Config,
     pub config_path: Option<PathBuf>,
     pub theme: Theme,
@@ -304,6 +321,8 @@ impl App {
         let source_delay = init.source.read().unwrap().delay_note();
         let mut app = Self {
             symbols: init.symbols,
+            shared_symbols: init.shared_symbols,
+            ticker_prompt: TickerPrompt::default(),
             data: HashMap::new(),
             errors: HashMap::new(),
             price_flash: HashMap::new(),
@@ -437,6 +456,9 @@ impl App {
         if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
             return true;
         }
+        if self.ticker_prompt.open {
+            return self.handle_ticker_prompt_key(key);
+        }
         if self.settings.open {
             return self.handle_settings_key(key);
         }
@@ -468,6 +490,13 @@ impl App {
         };
         match action {
             Action::Quit => return true,
+            Action::AddTicker => {
+                self.ticker_prompt = TickerPrompt {
+                    open: true,
+                    ..Default::default()
+                }
+            }
+            Action::RemoveTicker => self.remove_selected_symbol(),
             Action::NextView => self.switch_view((self.view_idx + 1) % ui::VIEWS.len()),
             Action::PrevView => {
                 self.switch_view((self.view_idx + ui::VIEWS.len() - 1) % ui::VIEWS.len())
@@ -495,17 +524,9 @@ impl App {
                     self.request_more_articles();
                 }
             }
-            Action::Left if lr_ticker => {
-                self.selected = self.selected.saturating_sub(1);
-                self.news_selected = 0;
-                self.card_scroll = 0;
-                self.earnings_scroll = 0;
-            }
+            Action::Left if lr_ticker => self.select_symbol(self.selected.saturating_sub(1)),
             Action::Right if lr_ticker => {
-                self.selected = (self.selected + 1).min(self.symbols.len() - 1);
-                self.news_selected = 0;
-                self.card_scroll = 0;
-                self.earnings_scroll = 0;
+                self.select_symbol((self.selected + 1).min(self.symbols.len() - 1))
             }
             // The earnings body is a document: up/down scroll it, and these
             // arms must stay above the unguarded ones at the end of the
@@ -632,6 +653,89 @@ impl App {
 
     /// Keys while the help overlay is open; like the article card it swallows
     /// everything. Esc or ? closes, q still quits.
+    /// Keys while the add-ticker prompt is open. It swallows everything,
+    /// the settings pattern, so typing "d" is a letter rather than the
+    /// remove action.
+    fn handle_ticker_prompt_key(&mut self, key: KeyEvent) -> bool {
+        match key.code {
+            KeyCode::Esc => self.ticker_prompt = TickerPrompt::default(),
+            KeyCode::Enter => {
+                let typed = self.ticker_prompt.input.trim().to_uppercase();
+                match self.add_symbol(&typed) {
+                    Ok(()) => self.ticker_prompt = TickerPrompt::default(),
+                    Err(msg) => self.ticker_prompt.error = Some(msg),
+                }
+            }
+            KeyCode::Backspace => {
+                self.ticker_prompt.input.pop();
+                self.ticker_prompt.error = None;
+            }
+            // Tickers are short; the cap is there so a stuck key cannot
+            // grow the line past its box.
+            KeyCode::Char(c) if self.ticker_prompt.input.chars().count() < 16 => {
+                self.ticker_prompt.input.push(c);
+                self.ticker_prompt.error = None;
+            }
+            _ => {}
+        }
+        false
+    }
+
+    /// Adds a symbol to the live watchlist and selects it. The poller reads
+    /// the shared list at the top of its next cycle, and the nudge makes
+    /// that cycle start now instead of up to one interval later.
+    ///
+    /// Session-only, like every other runtime change here (chart options,
+    /// scope, theme): Save in the settings screen writes the watchlist to
+    /// the config.
+    fn add_symbol(&mut self, symbol: &str) -> Result<(), String> {
+        if symbol.is_empty() {
+            return Err("type a ticker, e.g. AAPL".into());
+        }
+        if let Some(at) = self.symbols.iter().position(|s| s == symbol) {
+            // Not an error worth dwelling on: put the cursor where the
+            // ticker already is, and say why nothing was added.
+            self.select_symbol(at);
+            return Err(format!("{symbol} is already on the watchlist"));
+        }
+        self.symbols.push(symbol.to_string());
+        self.sync_shared_symbols();
+        self.select_symbol(self.symbols.len() - 1);
+        self.refresh.notify_one();
+        Ok(())
+    }
+
+    /// Drops the selected symbol. The last one stays: every view reads
+    /// `selected_symbol()` directly, so an empty watchlist needs empty
+    /// states before it can be reached.
+    fn remove_selected_symbol(&mut self) {
+        if self.symbols.len() < 2 {
+            return;
+        }
+        let gone = self.symbols.remove(self.selected);
+        self.sync_shared_symbols();
+        // Prices are cheap to fetch again; the AlphaAI feeds are not, so
+        // their cache survives a removal and a re-add costs no request.
+        self.data.remove(&gone);
+        self.errors.remove(&gone);
+        self.price_flash.remove(&gone);
+        self.select_symbol(self.selected.min(self.symbols.len() - 1));
+    }
+
+    /// Moves the watchlist cursor. Everything scoped to the selected
+    /// ticker starts over, or the new ticker's feed would open at the old
+    /// one's scroll position.
+    fn select_symbol(&mut self, idx: usize) {
+        self.selected = idx;
+        self.news_selected = 0;
+        self.card_scroll = 0;
+        self.earnings_scroll = 0;
+    }
+
+    fn sync_shared_symbols(&self) {
+        *self.shared_symbols.write().unwrap() = self.symbols.clone();
+    }
+
     fn handle_help_key(&mut self, key: KeyEvent) -> bool {
         if key.code == KeyCode::Esc {
             self.help = HelpOverlay::default();

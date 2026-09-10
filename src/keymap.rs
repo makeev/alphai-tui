@@ -45,11 +45,13 @@ pub enum Action {
     NextTheme,
     PrevTheme,
     ToggleBare,
+    AddTicker,
+    RemoveTicker,
 }
 
 /// Every action with its snake_case config name, the single source of truth
 /// for `[keybindings]` parsing and for the coverage test.
-pub const ACTIONS: [(Action, &str); 29] = [
+pub const ACTIONS: [(Action, &str); 31] = [
     (Action::Quit, "quit"),
     (Action::NextView, "next_view"),
     (Action::PrevView, "prev_view"),
@@ -79,6 +81,8 @@ pub const ACTIONS: [(Action, &str); 29] = [
     (Action::NextTheme, "next_theme"),
     (Action::PrevTheme, "prev_theme"),
     (Action::ToggleBare, "toggle_bare"),
+    (Action::AddTicker, "add_ticker"),
+    (Action::RemoveTicker, "remove_ticker"),
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -153,6 +157,8 @@ fn default_keys(action: Action) -> Vec<KeyCombo> {
         Action::PrevTheme => vec![ch('P')],
         // z for the zoomed-in look, next to tmux's own prefix-z.
         Action::ToggleBare => vec![ch('z')],
+        Action::AddTicker => vec![ch('a')],
+        Action::RemoveTicker => vec![ch('d')],
     }
 }
 

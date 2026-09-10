@@ -29,6 +29,11 @@ Built in Rust with [ratatui](https://ratatui.rs).
   is not read next to a price frozen at 16:00. Where the source reports
   them, the year's range and the day's volume follow at the end of the
   line, first to go as the terminal narrows.
+- **The watchlist, editable while it runs**: `a` opens a one-line prompt and
+  the new ticker is polled from the next tick, `d` drops the selected one.
+  Both are session-only, like every other runtime change here; Save in the
+  settings screen writes the watchlist to the config. The last ticker stays,
+  because every view is scoped to a selected one.
 - **Split** (the default view): watchlist and chart side by side in the top
   half, the news feed in the bottom half (hidden on very small terminals).
 - **News**: enriched articles for the selected ticker, the whole market or
@@ -249,6 +254,8 @@ defaults. API keys can also come from env vars, which win over the config:
 |-----|-------|--------|
 | `Tab` / `1`..`6` | everywhere | switch view |
 | `↑` `↓` / `j` `k` | table, chart, split | select ticker |
+| `a` | everywhere | add a ticker: type the symbol, `Enter` adds it, `Esc` cancels |
+| `d` | everywhere | remove the selected ticker (the last one stays) |
 | `↑` `↓` / `j` `k` | news, insider | scroll articles |
 | `↑` `↓` / `j` `k` | earnings | scroll the read |
 | `←` `→` / `h` `l` | news, insider, earnings | switch ticker |

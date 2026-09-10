@@ -34,13 +34,18 @@ pub type SharedParams = Arc<RwLock<(Range, Interval)>>;
 /// pattern as `SharedSource`: re-read before every sleep.
 pub type SharedEvery = Arc<RwLock<Duration>>;
 
+/// The watchlist, editable at runtime with the add and remove keys. Same
+/// pattern again: re-read at the top of every cycle, so a ticker added
+/// mid-session is polled from the next tick without restarting the task.
+pub type SharedSymbols = Arc<RwLock<Vec<String>>>;
+
 /// Polls every symbol concurrently, then sleeps until the next cycle or a
 /// manual refresh. Streaming sources will bypass this and push straight into
 /// the same channel. `slow_bars` is the slowest indicator period, sizing
 /// the warm-up over-fetch.
 pub async fn run(
     source: SharedSource,
-    symbols: Vec<String>,
+    symbols: SharedSymbols,
     params: SharedParams,
     every: SharedEvery,
     slow_bars: usize,
@@ -49,6 +54,7 @@ pub async fn run(
 ) {
     loop {
         let current = source.read().unwrap().clone();
+        let symbols = symbols.read().unwrap().clone();
         let (range, interval) = *params.read().unwrap();
         // Fetch wider than the visible range so indicators have their warm-up
         // history; the chart trims rendering back to `range`.

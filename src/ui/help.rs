@@ -30,6 +30,8 @@ static ROWS: &[Row] = &[
     Row::Act(Action::NextView, "next view"),
     Row::Act(Action::PrevView, "previous view"),
     Row::Fixed("1-9", "jump to a view"),
+    Row::Act(Action::AddTicker, "add a ticker to the watchlist"),
+    Row::Act(Action::RemoveTicker, "remove the selected ticker"),
     Row::Act(Action::Quit, "quit"),
     Row::Fixed("esc", "quit, close an overlay"),
     Row::Fixed("ctrl-c", "force quit"),

@@ -130,9 +130,12 @@ fn main() -> Result<()> {
     let params: poller::SharedParams = Arc::new(RwLock::new((range, interval)));
     let shared_every: poller::SharedEvery =
         Arc::new(RwLock::new(Duration::from_secs(every.max(2))));
+    // The watchlist is shared rather than moved: the add and remove keys
+    // edit it live and the poller picks the change up on its next tick.
+    let shared_symbols: poller::SharedSymbols = Arc::new(RwLock::new(symbols.clone()));
     rt.spawn(poller::run(
         shared.clone(),
-        symbols.clone(),
+        shared_symbols.clone(),
         params.clone(),
         shared_every.clone(),
         resolved.chart.sma_slow,
@@ -152,6 +155,7 @@ fn main() -> Result<()> {
     let mut terminal = ratatui::init();
     let mut app = App::new(AppInit {
         symbols,
+        shared_symbols,
         source: shared,
         source_name: source.name(),
         range,

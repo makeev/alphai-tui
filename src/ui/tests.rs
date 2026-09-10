@@ -47,6 +47,7 @@ fn empty_app_with_cmds(
     let (alphai_tx, alphai_rx) = tokio::sync::mpsc::unbounded_channel();
     let source = make_source("yahoo", &Config::default()).unwrap();
     let app = App::new(AppInit {
+        shared_symbols: Arc::new(RwLock::new(symbols.clone())),
         symbols,
         source: Arc::new(RwLock::new(source)),
         source_name: "yahoo",
@@ -248,6 +249,89 @@ fn table_shows_the_extended_column_only_when_a_row_has_one() {
     // MSFT has no late print, and an empty cell says that better than a
     // dash, which would read as missing data.
     assert!(!screen.contains("—"), "screen:\n{screen}");
+}
+
+/// The watchlist used to be reachable only through CLI arguments or a
+/// hand-edited config, so following a name someone mentioned meant
+/// quitting the app.
+#[test]
+fn a_adds_a_ticker_and_the_poller_sees_it() {
+    let mut app = fake_app();
+    press(&mut app, KeyCode::Char('a'));
+    assert!(app.ticker_prompt.open);
+    for c in "nvda".chars() {
+        press(&mut app, KeyCode::Char(c));
+    }
+    press(&mut app, KeyCode::Enter);
+
+    assert!(!app.ticker_prompt.open);
+    assert_eq!(app.symbols, vec!["AAPL", "MSFT", "NVDA"], "upper-cased");
+    assert_eq!(app.selected, 2, "the new ticker is selected");
+    // The poller reads its watchlist from the shared handle, so an add
+    // that stops at `app.symbols` would never be polled.
+    assert_eq!(*app.shared_symbols.read().unwrap(), app.symbols);
+}
+
+/// Typing has to win over the key bindings while the prompt is open, or a
+/// ticker with a bound letter in it cannot be typed at all.
+#[test]
+fn the_prompt_swallows_action_keys() {
+    let mut app = fake_app();
+    press(&mut app, KeyCode::Char('a'));
+    for c in "ddog".chars() {
+        press(&mut app, KeyCode::Char(c));
+    }
+    assert_eq!(app.ticker_prompt.input, "ddog");
+    assert_eq!(app.symbols.len(), 2, "nothing was removed by the d keys");
+    press(&mut app, KeyCode::Enter);
+    assert_eq!(app.symbols, vec!["AAPL", "MSFT", "DDOG"]);
+}
+
+#[test]
+fn adding_a_ticker_twice_says_so_and_moves_the_cursor() {
+    let mut app = fake_app();
+    app.selected = 0;
+    press(&mut app, KeyCode::Char('a'));
+    for c in "MSFT".chars() {
+        press(&mut app, KeyCode::Char(c));
+    }
+    press(&mut app, KeyCode::Enter);
+
+    assert!(app.ticker_prompt.open, "stays open with the message");
+    assert!(
+        app.ticker_prompt.error.is_some_and(|e| e.contains("MSFT")),
+        "the reason has to name the ticker"
+    );
+    assert_eq!(app.symbols.len(), 2, "no duplicate row");
+    assert_eq!(app.selected, 1, "cursor moved to where it already is");
+}
+
+#[test]
+fn d_removes_the_selected_ticker_but_never_the_last_one() {
+    let mut app = fake_app();
+    app.selected = 1;
+    press(&mut app, KeyCode::Char('d'));
+    assert_eq!(app.symbols, vec!["AAPL"]);
+    assert_eq!(app.selected, 0, "cursor followed the shrinking list");
+    assert_eq!(*app.shared_symbols.read().unwrap(), app.symbols);
+    assert!(!app.data.contains_key("MSFT"), "stale price dropped");
+
+    // Every view indexes the watchlist by the selection, so emptying it
+    // would panic rather than show an empty state.
+    press(&mut app, KeyCode::Char('d'));
+    assert_eq!(app.symbols, vec!["AAPL"]);
+}
+
+#[test]
+fn escape_closes_the_prompt_without_adding() {
+    let mut app = fake_app();
+    press(&mut app, KeyCode::Char('a'));
+    for c in "TSLA".chars() {
+        press(&mut app, KeyCode::Char(c));
+    }
+    press(&mut app, KeyCode::Esc);
+    assert!(!app.ticker_prompt.open);
+    assert_eq!(app.symbols, vec!["AAPL", "MSFT"]);
 }
 
 #[test]
@@ -2303,6 +2387,7 @@ fn config_defaults_seed_startup_state() {
     let (alphai_tx, _alphai_rx) = tokio::sync::mpsc::unbounded_channel();
     let source = make_source("yahoo", &Config::default()).unwrap();
     let mut app = App::new(AppInit {
+        shared_symbols: Arc::new(RwLock::new(vec!["AAPL".into()])),
         symbols: vec!["AAPL".into()],
         source: Arc::new(RwLock::new(source)),
         source_name: "yahoo",
@@ -2742,6 +2827,7 @@ fn first_run_opens_settings_with_welcome() {
     let (alphai_tx, _alphai_rx) = tokio::sync::mpsc::unbounded_channel();
     let source = make_source("yahoo", &Config::default()).unwrap();
     let mut app = App::new(AppInit {
+        shared_symbols: Arc::new(RwLock::new(vec!["AAPL".into()])),
         symbols: vec!["AAPL".into()],
         source: Arc::new(RwLock::new(source)),
         source_name: "yahoo",
