@@ -23,7 +23,12 @@ Built in Rust with [ratatui](https://ratatui.rs).
   the last; `[ui] quote_rail = false` turns the line off, and a terminal
   under 12 rows gives the row back to the view. A delayed source (Yahoo, or
   `ALPACA_FEED=delayed_sip`) says so on the rail instead of passing a
-  15 minute old price off as live.
+  15 minute old price off as live. After the closing bell the rail also
+  carries the extended-hours print (`AH`, or `PRE` before the open) with
+  its move measured against the close, so news breaking outside the session
+  is not read next to a price frozen at 16:00. Where the source reports
+  them, the year's range and the day's volume follow at the end of the
+  line, first to go as the terminal narrows.
 - **Split** (the default view): watchlist and chart side by side in the top
   half, the news feed in the bottom half (hidden on very small terminals).
 - **News**: enriched articles for the selected ticker, the whole market or
@@ -319,6 +324,8 @@ get a sourced brief without leaving the terminal.
 
 - `yahoo`: no API key, quote and candle history in one request, roughly
   15 minutes delayed. Crypto and FX tickers work as `BTC-USD`, `EURUSD=X`.
+  The only source here that reports extended-hours prices, the 52 week
+  range and full market volume, all in the same request as the price.
 - `finnhub`: needs a key (free at [finnhub.io](https://finnhub.io)).
   Real-time-ish quotes; historical candles are premium-only there, so charts
   build up from quotes collected during the session and reset on restart.
@@ -328,11 +335,16 @@ get a sourced brief without leaving the terminal.
   on startup and in the settings screen when the watchlist and the poll
   interval together go over that.
   Crypto needs exchange-prefixed symbols (`BINANCE:BTCUSDT`).
+  Its quote endpoint covers the regular session only, so no extended-hours
+  price, 52 week range or volume.
 - `alpaca`: needs a key id and secret (free at
   [alpaca.markets](https://alpaca.markets)). Realtime quotes from the IEX
   feed plus real historical bars, so charts are complete right after start
   instead of growing over the session. Crypto works in the usual `BTC-USD`
-  form. Getting free keys:
+  form. IEX is one exchange rather than the whole tape, so on the free feed
+  there are no pre or post market prints and no volume figure: a few
+  percent of the day's shares would read as the day's volume. Both appear
+  on `ALPACA_FEED=sip` or `delayed_sip`. Getting free keys:
   1. Sign up at [alpaca.markets](https://alpaca.markets). Email is enough;
      market data and paper trading need no KYC.
   2. The free Basic data plan is enabled by default.

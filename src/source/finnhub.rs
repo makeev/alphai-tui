@@ -82,6 +82,12 @@ impl DataSource for Finnhub {
                 price: q.c,
                 prev_close: Some(q.pc),
                 currency: None, // /quote does not report currency (US listings: USD)
+                // /quote is regular session only and carries no range,
+                // volume or name, so every view simply omits those zones
+                // for this source.
+                extended: None,
+                fifty_two_week: None,
+                volume: None,
             },
             candles,
         })

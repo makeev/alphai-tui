@@ -94,6 +94,20 @@ impl DataSource for Yahoo {
                     .or(daily_prev)
                     .or(result.meta.chart_previous_close),
                 currency: result.meta.currency.clone(),
+                // Only when the regular price came from the meta block: the
+                // pair means "regular versus extended" solely when both
+                // sides are the API's own numbers. Fall back to a candle
+                // close for one side and the difference stops being a
+                // session boundary and starts being a rounding artefact.
+                extended: result
+                    .meta
+                    .regular_market_price
+                    .and(result.meta.fullday_price),
+                fifty_two_week: result
+                    .meta
+                    .fifty_two_week_low
+                    .zip(result.meta.fifty_two_week_high),
+                volume: result.meta.regular_market_volume,
             },
             candles,
         })
@@ -162,6 +176,15 @@ struct Meta {
     regular_market_price: Option<f64>,
     previous_close: Option<f64>,
     chart_previous_close: Option<f64>,
+    /// Last trade of the *whole* day, extended sessions included. Verified
+    /// 2026-09-10: it rides along without `includePrePost`, so reading it
+    /// costs no extra request and leaves the candle set alone. During the
+    /// regular session it equals `regularMarketPrice`, and `Quote` filters
+    /// that case out rather than showing a zero move.
+    fullday_price: Option<f64>,
+    fifty_two_week_high: Option<f64>,
+    fifty_two_week_low: Option<f64>,
+    regular_market_volume: Option<f64>,
 }
 
 #[derive(Deserialize)]
@@ -176,4 +199,89 @@ struct QuoteBlock {
     low: Option<Vec<Option<f64>>>,
     close: Option<Vec<Option<f64>>>,
     volume: Option<Vec<Option<f64>>>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Trimmed from a live response (AAPL, 2026-09-10, after the bell). The
+    /// meta values are verbatim: `fulldayPrice` above `regularMarketPrice`
+    /// is the after-hours print, and it arrives without asking for
+    /// `includePrePost`, which is why reading it costs no extra request.
+    const CHART_AFTER_HOURS: &str = r#"{
+      "chart": {"result": [{
+        "meta": {
+          "symbol": "AAPL",
+          "currency": "USD",
+          "regularMarketPrice": 315.34,
+          "previousClose": 316.22,
+          "chartPreviousClose": 316.22,
+          "fulldayPrice": 317.47,
+          "fiftyTwoWeekHigh": 344.57,
+          "fiftyTwoWeekLow": 225.95,
+          "regularMarketVolume": 64902991
+        },
+        "timestamp": [1757520000, 1757520300],
+        "indicators": {"quote": [{
+          "open": [315.1, 315.2], "high": [315.6, 315.5],
+          "low": [314.9, 315.0], "close": [315.2, 315.34],
+          "volume": [120000, 98000]
+        }]}
+      }], "error": null}
+    }"#;
+
+    fn parse(raw: &str) -> ChartResult {
+        let body: ChartResponse = serde_json::from_str(raw).unwrap();
+        body.chart.result.unwrap().remove(0)
+    }
+
+    #[test]
+    fn after_hours_fields_come_off_the_meta_block() {
+        let meta = parse(CHART_AFTER_HOURS).meta;
+        assert_eq!(meta.regular_market_price, Some(315.34));
+        assert_eq!(meta.fullday_price, Some(317.47));
+        assert_eq!(meta.fifty_two_week_low, Some(225.95));
+        assert_eq!(meta.fifty_two_week_high, Some(344.57));
+        assert_eq!(meta.regular_market_volume, Some(64_902_991.0));
+    }
+
+    /// The headline price stays the regular close while the late print goes
+    /// to its own field, so the day still reads as down 0.28% and the
+    /// after-hours move as up 0.68% at the same time.
+    #[test]
+    fn the_quote_keeps_the_two_prices_apart() {
+        let meta = parse(CHART_AFTER_HOURS).meta;
+        let quote = Quote {
+            symbol: meta.symbol.clone(),
+            price: meta.regular_market_price.unwrap(),
+            prev_close: meta.previous_close,
+            currency: meta.currency.clone(),
+            extended: meta.regular_market_price.and(meta.fullday_price),
+            fifty_two_week: meta.fifty_two_week_low.zip(meta.fifty_two_week_high),
+            volume: meta.regular_market_volume,
+        };
+        assert!((quote.change_pct().unwrap() - -0.278_29).abs() < 1e-4);
+        assert!((quote.extended_change_pct().unwrap() - 0.675_43).abs() < 1e-4);
+        assert_eq!(quote.extended_price(), Some(317.47));
+    }
+
+    /// Symbols with no extended session report the same number twice, and
+    /// that must not read as a zero move.
+    #[test]
+    fn a_matching_fullday_price_is_not_an_extended_print() {
+        let raw = CHART_AFTER_HOURS.replace("\"fulldayPrice\": 317.47", "\"fulldayPrice\": 315.34");
+        let meta = parse(&raw).meta;
+        let quote = Quote {
+            symbol: meta.symbol.clone(),
+            price: meta.regular_market_price.unwrap(),
+            prev_close: meta.previous_close,
+            currency: None,
+            extended: meta.regular_market_price.and(meta.fullday_price),
+            fifty_two_week: None,
+            volume: None,
+        };
+        assert_eq!(quote.extended_price(), None);
+        assert_eq!(quote.extended_change_pct(), None);
+    }
 }

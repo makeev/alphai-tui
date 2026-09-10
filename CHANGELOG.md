@@ -5,6 +5,31 @@ the crates.io releases; from 0.7.0 on each one is also a git tag and a
 GitHub release with prebuilt binaries. The Homebrew tap, the AUR and the
 apt repository joined later, and carry every version since.
 
+## 0.18.0 - 2026-09-10
+
+- Extended-hours prices. After the closing bell the quote rail carries the
+  late print as its own zone, labelled `AH` (or `PRE` before the open), with
+  the move measured against the close the way a broker screen reads it. The
+  headline price stays the regular close, so the two facts no longer
+  overwrite each other: on 9 September AAPL closed down 0.28% and traded up
+  0.68% after hours, and only the first of those was visible. This is the
+  half that was missing from the news views, where a filing lands at 20:00
+  and the price beside it could not move until the next morning. The
+  watchlist table grows an `Ext Δ%` column when any row has a late print,
+  and gives the width back during the session, when there is nothing to
+  show.
+- The year's range and the day's volume at the end of the rail, on sources
+  that report them. Like every other zone they are dropped first as the
+  terminal narrows.
+- All of it rides in the request each source already makes, so a poll still
+  costs exactly what it did.
+- Sources differ in what they can answer, and now say so rather than
+  guessing. Yahoo reports all three. Alpaca's free IEX feed is one exchange
+  rather than the whole tape: it has no extended-hours prints, and its
+  share count is a few percent of the day's volume, so that figure is no
+  longer shown as the volume (it returns on `ALPACA_FEED=sip`). Finnhub's
+  quote endpoint is regular session only.
+
 ## 0.17.2 - 2026-09-10
 
 - Prices no longer drop out when the source refuses a request. Alpaca's data

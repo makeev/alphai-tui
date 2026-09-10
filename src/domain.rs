@@ -130,9 +130,19 @@ pub fn fetch_range(display: Range, interval: Interval, slow_bars: usize) -> Rang
 #[derive(Clone, Debug)]
 pub struct Quote {
     pub symbol: String,
+    /// The regular session's price: the last trade while the exchange was
+    /// open, which is what every view has always shown.
     pub price: f64,
     pub prev_close: Option<f64>,
     pub currency: Option<String>,
+    /// Last trade outside the regular session, when the source reports one.
+    /// Sources differ in what they can answer here, so it stays optional
+    /// everywhere and a view omits its zone when it is None.
+    pub extended: Option<f64>,
+    /// 52 week range as (low, high).
+    pub fifty_two_week: Option<(f64, f64)>,
+    /// Regular session volume, in shares.
+    pub volume: Option<f64>,
 }
 
 impl Quote {
@@ -144,6 +154,27 @@ impl Quote {
         self.prev_close
             .filter(|pc| *pc != 0.0)
             .map(|pc| (self.price - pc) / pc * 100.0)
+    }
+
+    /// The extended price, but only when it is genuinely a separate number.
+    /// A source that has no extended data at all, and one asked during the
+    /// regular session (when the two are the same trade), both answer None,
+    /// so a caller never has to ask what time it is to decide.
+    pub fn extended_price(&self) -> Option<f64> {
+        self.extended.filter(|e| *e != self.price)
+    }
+
+    /// Extended move measured against the regular close, not the previous
+    /// one: after hours a reader is asking what the stock did *since* the
+    /// bell, which is the convention every broker screen follows.
+    pub fn extended_change(&self) -> Option<f64> {
+        self.extended_price().map(|e| e - self.price)
+    }
+
+    pub fn extended_change_pct(&self) -> Option<f64> {
+        (self.price != 0.0)
+            .then(|| self.extended_change().map(|c| c / self.price * 100.0))
+            .flatten()
     }
 }
 

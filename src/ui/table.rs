@@ -6,6 +6,7 @@ use ratatui::widgets::{Cell, Row, Table};
 
 use crate::app::App;
 use crate::domain::fmt_price;
+use crate::ui::chart::move_color;
 use crate::ui::{View, ViewId};
 
 pub struct TableView;
@@ -30,6 +31,7 @@ const W_SYMBOL: u16 = 10;
 const W_PRICE: u16 = 12;
 const W_CHANGE: u16 = 10;
 const W_PCT: u16 = 9;
+const W_EXT: u16 = 9;
 const W_RANGE: u16 = 19;
 const SPARK_MIN: u16 = 8;
 const SPARK_MAX: u16 = 24;
@@ -45,32 +47,41 @@ const MARKER: u16 = 2;
 struct Columns {
     change: bool,
     pct: bool,
+    /// The extended-hours move. Unlike its neighbours this one also has to
+    /// have something to say: it takes no width during the regular session,
+    /// when no row has a separate print, and appears after the bell.
+    ext: bool,
     range: bool,
     /// 0 hides the sparkline.
     spark: u16,
 }
 
 /// Width the fixed columns need together, gaps included.
-fn fixed_width(change: bool, pct: bool, range: bool) -> u16 {
+fn fixed_width(change: bool, pct: bool, ext: bool, range: bool) -> u16 {
     W_SYMBOL
         + GAP
         + W_PRICE
         + if change { GAP + W_CHANGE } else { 0 }
         + if pct { GAP + W_PCT } else { 0 }
+        + if ext { GAP + W_EXT } else { 0 }
         + if range { GAP + W_RANGE } else { 0 }
 }
 
 /// The widest column set that fits `avail` (the inner width minus the
-/// selection marker). Symbol and price always stay.
-fn columns(avail: u16) -> Columns {
-    for (change, pct, range, spark) in [
-        (true, true, true, true),
-        (true, true, false, true),
-        (false, true, false, true),
-        (false, true, false, false),
-        (false, false, false, false),
+/// selection marker). Symbol and price always stay. `extended` says whether
+/// any row has an after-hours print to show; when none has, that column is
+/// not a candidate at all and the others get its width.
+fn columns(avail: u16, extended: bool) -> Columns {
+    for (change, pct, ext, range, spark) in [
+        (true, true, true, true, true),
+        (true, true, true, false, true),
+        (false, true, true, false, true),
+        (false, true, true, false, false),
+        (false, true, false, false, false),
+        (false, false, false, false, false),
     ] {
-        let fixed = fixed_width(change, pct, range);
+        let ext = ext && extended;
+        let fixed = fixed_width(change, pct, ext, range);
         if fixed + if spark { GAP + SPARK_MIN } else { 0 } <= avail {
             let spark = if spark {
                 (avail - fixed - GAP).min(SPARK_MAX)
@@ -80,6 +91,7 @@ fn columns(avail: u16) -> Columns {
             return Columns {
                 change,
                 pct,
+                ext,
                 range,
                 spark,
             };
@@ -89,6 +101,7 @@ fn columns(avail: u16) -> Columns {
     Columns {
         change: false,
         pct: false,
+        ext: false,
         range: false,
         spark: 0,
     }
@@ -96,7 +109,12 @@ fn columns(avail: u16) -> Columns {
 
 /// Shared by TableView and SplitView.
 pub fn render_table(f: &mut Frame, area: Rect, app: &mut App) {
-    let cols = columns(area.width.saturating_sub(2 + MARKER));
+    let extended = app.symbols.iter().any(|s| {
+        app.data
+            .get(s)
+            .is_some_and(|d| d.quote.extended_price().is_some())
+    });
+    let cols = columns(area.width.saturating_sub(2 + MARKER), extended);
     let spark_width = cols.spark as usize;
     let rows: Vec<Row> = app
         .symbols
@@ -158,6 +176,18 @@ pub fn render_table(f: &mut Frame, area: Rect, app: &mut App) {
             if cols.pct {
                 cells.push(Cell::from(right(change_pct)).style(dir_style));
             }
+            if cols.ext {
+                // A row with no late print of its own leaves the cell
+                // blank rather than printing a dash: after the bell most
+                // of a watchlist has not traded, and a column of dashes
+                // reads as missing data instead of "did not trade".
+                let cell = match q.extended_change_pct() {
+                    Some(pct) => Cell::from(right(format!("{pct:+.2}%")))
+                        .style(Style::new().fg(move_color(q.extended_change(), &app.theme))),
+                    None => Cell::from(""),
+                };
+                cells.push(cell);
+            }
             if cols.range {
                 cells.push(Cell::from(right(range)).dim());
             }
@@ -177,6 +207,13 @@ pub fn render_table(f: &mut Frame, area: Rect, app: &mut App) {
     if cols.pct {
         widths.push(Constraint::Length(W_PCT));
         header.push(Cell::from(right("Δ%")));
+    }
+    if cols.ext {
+        widths.push(Constraint::Length(W_EXT));
+        // Session-neutral on purpose: one header serves every row, and
+        // before the open the same column carries pre-market moves. The
+        // rail names the session for the selected ticker.
+        header.push(Cell::from(right("Ext Δ%")));
     }
     if cols.range {
         widths.push(Constraint::Length(W_RANGE));

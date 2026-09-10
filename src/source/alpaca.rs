@@ -9,6 +9,7 @@ use serde::Deserialize;
 use serde::de::DeserializeOwned;
 
 use crate::domain::{Candle, Interval, Quote, Range, TickerData};
+use crate::market;
 use crate::source::{DataSource, candle_from_ohlc, http, sort_ascending};
 
 pub const DEFAULT_DATA_URL: &str = "https://data.alpaca.markets";
@@ -76,7 +77,7 @@ impl Alpaca {
             self.get_json::<StockBars>(&bars_path, &bars_query),
         );
         Ok(TickerData {
-            quote: quote_from_snapshot(symbol, &snapshot?)?,
+            quote: quote_from_snapshot(symbol, &snapshot?, self.feed != "iex")?,
             candles: candles_from_desc(bars?.bars.unwrap_or_default()),
         })
     }
@@ -111,7 +112,7 @@ impl Alpaca {
             .remove(pair)
             .unwrap_or_default();
         Ok(TickerData {
-            quote: quote_from_snapshot(symbol, &snap)?,
+            quote: quote_from_snapshot(symbol, &snap, false)?,
             candles: candles_from_desc(bars),
         })
     }
@@ -165,15 +166,45 @@ fn timeframe(interval: Interval) -> &'static str {
 /// Price fallback chain for thin IEX data: illiquid names may have no
 /// `latestTrade`, so fall through to the latest minute bar, then the daily
 /// bar. A snapshot with none of them is an unknown or dead symbol.
-fn quote_from_snapshot(symbol: &str, snap: &Snapshot) -> Result<Quote> {
+///
+/// IEX reports extended-hours trades, so `latestTrade` outside the regular
+/// session is a pre or post market print. Those are split out rather than
+/// shown as *the* price: quoting the last trade whenever it happened made
+/// this source disagree with yahoo after the bell, and with the way every
+/// broker screen reads, where the headline number stays the regular close
+/// and the extended move sits beside it.
+/// `whole_market_volume` says whether the snapshot's share count is the
+/// market's or one venue's. It is the market's only on a SIP feed: IEX is a
+/// single exchange carrying a few percent of the tape, so reporting its
+/// daily bar as "volume" would understate AAPL by a factor of twenty five
+/// (measured 2026-09-09: 2.46M against a consolidated 64.9M). Alpaca's
+/// crypto venue is its own book for the same reason.
+fn quote_from_snapshot(symbol: &str, snap: &Snapshot, whole_market_volume: bool) -> Result<Quote> {
     let close = |bar: &Option<AlpacaBar>| bar.as_ref().and_then(|b| b.c);
-    let price = snap
+    let latest = snap.latest_trade.as_ref().and_then(|t| t.p);
+    let latest_session = snap
         .latest_trade
         .as_ref()
-        .and_then(|t| t.p)
-        .or_else(|| close(&snap.minute_bar))
-        .or_else(|| close(&snap.daily_bar));
-    let Some(price) = price else {
+        .and_then(|t| t.t.as_deref())
+        .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
+        .map(|t| market::clock_at(t.into()).session);
+    let extended_now = matches!(
+        latest_session,
+        Some(market::Session::Pre) | Some(market::Session::Post)
+    );
+
+    // Outside the regular session the daily bar is the session's own close,
+    // which is exactly the headline number; the late print becomes the
+    // extended one. Crypto never lands here: it has no session to be
+    // outside of, so `clock_at` leaves it on the regular path.
+    let regular = if extended_now {
+        close(&snap.daily_bar).or(latest)
+    } else {
+        latest
+            .or_else(|| close(&snap.minute_bar))
+            .or_else(|| close(&snap.daily_bar))
+    };
+    let Some(price) = regular else {
         return Err(http::unknown_symbol(symbol, None));
     };
     Ok(Quote {
@@ -182,6 +213,12 @@ fn quote_from_snapshot(symbol: &str, snap: &Snapshot) -> Result<Quote> {
         prev_close: close(&snap.prev_daily_bar),
         // Both endpoint families quote in USD; the API reports no currency.
         currency: Some("USD".into()),
+        extended: extended_now.then_some(latest).flatten(),
+        // The snapshot carries neither a 52 week range nor a company name.
+        fifty_two_week: None,
+        volume: whole_market_volume
+            .then(|| snap.daily_bar.as_ref().and_then(|b| b.v))
+            .flatten(),
     })
 }
 
@@ -237,6 +274,9 @@ struct Snapshot {
 #[serde(default)]
 struct Trade {
     p: Option<f64>,
+    /// RFC 3339 print time, which is what says whether the trade landed
+    /// inside the regular session or after it.
+    t: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -304,11 +344,46 @@ mod tests {
     #[test]
     fn quote_uses_latest_trade() {
         let snap: Snapshot = serde_json::from_str(SNAPSHOT_FULL).unwrap();
-        let q = quote_from_snapshot("AAPL", &snap).unwrap();
+        let q = quote_from_snapshot("AAPL", &snap, true).unwrap();
         assert_eq!(q.price, 214.53);
         assert_eq!(q.prev_close, Some(210.4));
         assert_eq!(q.currency.as_deref(), Some("USD"));
         assert_eq!(q.symbol, "AAPL");
+    }
+
+    /// A print after the closing bell is the extended one, not the price.
+    /// Quoting the last trade whenever it happened made this source read
+    /// differently from yahoo after hours, and hid the fact that the
+    /// regular session had already closed lower.
+    #[test]
+    fn a_late_print_becomes_the_extended_quote() {
+        let raw = r#"{
+          "symbol": "AAPL",
+          "latestTrade": {"t": "2026-07-10T22:30:00Z", "p": 216.9},
+          "dailyBar": {"t": "2026-07-10T04:00:00Z", "o": 212.0, "h": 215.0, "l": 211.5, "c": 214.5, "v": 5000000},
+          "prevDailyBar": {"t": "2026-07-09T04:00:00Z", "o": 210.0, "h": 212.5, "l": 209.0, "c": 210.4, "v": 4800000}
+        }"#;
+        let snap: Snapshot = serde_json::from_str(raw).unwrap();
+        let q = quote_from_snapshot("AAPL", &snap, true).unwrap();
+        // 22:30 UTC is 18:30 in New York: inside the post session.
+        assert_eq!(q.price, 214.5, "headline price stays the regular close");
+        assert_eq!(q.extended, Some(216.9));
+        assert!((q.extended_change().unwrap() - 2.4).abs() < 1e-9);
+    }
+
+    /// One venue's share count is not the market's, and IEX carries a few
+    /// percent of the tape.
+    #[test]
+    fn single_venue_volume_is_withheld() {
+        let snap: Snapshot = serde_json::from_str(SNAPSHOT_FULL).unwrap();
+        assert_eq!(
+            quote_from_snapshot("AAPL", &snap, false).unwrap().volume,
+            None
+        );
+        assert_eq!(
+            quote_from_snapshot("AAPL", &snap, true).unwrap().volume,
+            Some(5_000_000.0)
+        );
     }
 
     #[test]
@@ -318,7 +393,7 @@ mod tests {
           "dailyBar": {"t": "2026-07-10T04:00:00Z", "o": 9.0, "h": 10.0, "l": 8.5, "c": 9.8, "v": 300}
         }"#;
         let snap: Snapshot = serde_json::from_str(raw).unwrap();
-        let q = quote_from_snapshot("THIN", &snap).unwrap();
+        let q = quote_from_snapshot("THIN", &snap, true).unwrap();
         assert_eq!(q.price, 9.8);
         assert_eq!(q.prev_close, None);
     }
@@ -326,7 +401,7 @@ mod tests {
     #[test]
     fn empty_snapshot_is_an_error() {
         let snap: Snapshot = serde_json::from_str("{}").unwrap();
-        let err = quote_from_snapshot("NOPE", &snap).unwrap_err();
+        let err = quote_from_snapshot("NOPE", &snap, true).unwrap_err();
         assert!(err.to_string().contains("no data for 'NOPE'"), "{err}");
     }
 
@@ -404,7 +479,7 @@ mod tests {
             .unwrap()
             .remove("BTC/USD")
             .unwrap();
-        let q = quote_from_snapshot("BTC-USD", &snap).unwrap();
+        let q = quote_from_snapshot("BTC-USD", &snap, false).unwrap();
         assert_eq!(q.symbol, "BTC-USD");
         assert_eq!(q.price, 65000.5);
         assert_eq!(q.prev_close, Some(64500.0));

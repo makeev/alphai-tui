@@ -197,12 +197,19 @@ pub(crate) fn flash_style(up: bool, theme: &Theme) -> Style {
         .add_modifier(Modifier::REVERSED | Modifier::BOLD)
 }
 
-pub(crate) fn dir_color(q: &Quote, theme: &Theme) -> Color {
-    match q.change() {
+/// Color for a price move. Split out of `dir_color` so a view can color a
+/// move the quote does not carry as its headline change, such as the rail's
+/// extended-hours print.
+pub(crate) fn move_color(change: Option<f64>, theme: &Theme) -> Color {
+    match change {
         Some(c) if c < 0.0 => theme.down,
         Some(_) => theme.up,
         None => theme.flat,
     }
+}
+
+pub(crate) fn dir_color(q: &Quote, theme: &Theme) -> Color {
+    move_color(q.change(), theme)
 }
 
 /// Legend labels appear only for average lines that actually have points on

@@ -18,6 +18,21 @@ use crate::source::make_source;
 use crate::theme::Theme;
 use crate::ui;
 
+/// A quote carrying only what a test sets. The optional extras (extended
+/// price, 52 week range, volume, name) default to absent, so adding one
+/// more of them later does not mean editing every construction site.
+fn plain_quote(symbol: &str, price: f64, prev_close: Option<f64>, currency: Option<&str>) -> Quote {
+    Quote {
+        symbol: symbol.into(),
+        price,
+        prev_close,
+        currency: currency.map(Into::into),
+        extended: None,
+        fifty_two_week: None,
+        volume: None,
+    }
+}
+
 fn empty_app(symbols: Vec<String>) -> App {
     let (app, _rx) = empty_app_with_cmds(symbols);
     app
@@ -97,12 +112,7 @@ fn fake_app() -> App {
         app.data.insert(
             symbol.into(),
             TickerData {
-                quote: Quote {
-                    symbol: symbol.into(),
-                    price,
-                    prev_close: Some(base),
-                    currency: Some("USD".into()),
-                },
+                quote: plain_quote(symbol, price, Some(base), Some("USD")),
                 candles,
             },
         );
@@ -309,12 +319,7 @@ fn price_flash_tracks_update_direction() {
     let data = |price: f64| SourceEvent::Data {
         symbol: "AAPL".into(),
         data: TickerData {
-            quote: Quote {
-                symbol: "AAPL".into(),
-                price,
-                prev_close: Some(price),
-                currency: None,
-            },
+            quote: plain_quote("AAPL", price, Some(price), None),
             candles: vec![],
         },
     };
@@ -346,12 +351,7 @@ fn live_quote_updates_the_last_candle() {
     let data = |price: f64| SourceEvent::Data {
         symbol: "AAPL".into(),
         data: TickerData {
-            quote: Quote {
-                symbol: "AAPL".into(),
-                price,
-                prev_close: Some(100.0),
-                currency: None,
-            },
+            quote: plain_quote("AAPL", price, Some(100.0), None),
             candles: vec![
                 Candle {
                     ts: 0,
@@ -3270,6 +3270,16 @@ fn earnings_metric_columns_follow_the_data() {
 
 /// A fixed moment inside the regular session: the rail's countdown changes
 /// its own width, so the ladder is only measurable at a known instant.
+/// Thursday 10 September 2026, 17:30 in New York: after the bell, inside
+/// the post session.
+fn post_market_moment() -> chrono::DateTime<chrono::Utc> {
+    chrono::NaiveDate::from_ymd_opt(2026, 9, 10)
+        .unwrap()
+        .and_hms_opt(21, 30, 0)
+        .unwrap()
+        .and_utc()
+}
+
 fn market_open_moment() -> chrono::DateTime<chrono::Utc> {
     // Thursday 10 September 2026, 09:45 in New York.
     chrono::NaiveDate::from_ymd_opt(2026, 9, 10)
@@ -3362,12 +3372,7 @@ fn quote_rail_badges_crypto_and_realtime_sources() {
     app.data.insert(
         "BTC-USD".into(),
         TickerData {
-            quote: Quote {
-                symbol: "BTC-USD".into(),
-                price: 64_000.0,
-                prev_close: Some(63_000.0),
-                currency: Some("USD".into()),
-            },
+            quote: plain_quote("BTC-USD", 64_000.0, Some(63_000.0), Some("USD")),
             candles: vec![Candle {
                 ts: 1_700_000_000,
                 open: 63_500.0,
@@ -3382,6 +3387,58 @@ fn quote_rail_badges_crypto_and_realtime_sources() {
     assert!(rail.contains("24/7"), "{rail}");
     assert!(!rail.contains("live"), "{rail}");
     assert!(!rail.contains("delayed"), "{rail}");
+}
+
+/// The reason the rail carries an extended zone at all: after the bell the
+/// headline price is frozen at the close, so the move a filing caused is
+/// only visible if the late print gets its own zone.
+#[test]
+fn quote_rail_shows_the_after_hours_print() {
+    let mut app = empty_app(vec!["AAPL".into()]);
+    app.source_delay = None;
+    let mut quote = plain_quote("AAPL", 315.34, Some(316.22), Some("USD"));
+    quote.extended = Some(316.90);
+    app.data.insert(
+        "AAPL".into(),
+        TickerData {
+            quote,
+            candles: vec![Candle {
+                ts: 1_700_000_000,
+                open: 315.0,
+                high: 319.15,
+                low: 309.9,
+                close: 315.34,
+                volume: None,
+            }],
+        },
+    );
+    let rail = ui::rail::text(&ui::rail::line(&app, 120, post_market_moment()));
+    // Measured against the close, not the previous one: the day was down
+    // 0.28% while the after-hours print is up 0.49%, and the zone has to
+    // report the second number without disturbing the first.
+    assert!(rail.contains("AH"), "{rail}");
+    assert!(rail.contains("316.90"), "{rail}");
+    assert!(rail.contains("+0.49%"), "{rail}");
+    assert!(rail.contains("-0.28%"), "{rail}");
+}
+
+/// During the regular session the two prices are the same trade, so the
+/// zone must not claim a zero move.
+#[test]
+fn quote_rail_hides_the_extended_zone_during_the_session() {
+    let mut app = empty_app(vec!["AAPL".into()]);
+    let mut quote = plain_quote("AAPL", 315.34, Some(316.22), Some("USD"));
+    quote.extended = Some(315.34);
+    app.data.insert(
+        "AAPL".into(),
+        TickerData {
+            quote,
+            candles: Vec::new(),
+        },
+    );
+    let rail = ui::rail::text(&ui::rail::line(&app, 120, market_open_moment()));
+    assert!(!rail.contains("AH"), "{rail}");
+    assert!(!rail.contains("PRE"), "{rail}");
 }
 
 /// A ticker still loading, and one the source rejected, both have to read

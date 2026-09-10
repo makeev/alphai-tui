@@ -20,10 +20,10 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
 use crate::app::App;
-use crate::domain::{Candle, fmt_price};
+use crate::domain::{Candle, Quote, fmt_price, fmt_volume};
 use crate::market::{self, Session};
 use crate::theme::Theme;
-use crate::ui::chart::{dir_color, flash_style};
+use crate::ui::chart::{dir_color, flash_style, move_color};
 use crate::ui::table::spark_line;
 
 /// Cells between the brackets of the day-range track.
@@ -132,6 +132,7 @@ fn optional_zones(app: &App, symbol: &str, now: DateTime<Utc>) -> Vec<Vec<Vec<Sp
             )],
         ]);
     }
+    zones.push(extended_zone(quote, now, theme));
     zones.push(session_zone(app, symbol, now));
     if let Some(note) = app.source_delay {
         zones.push(vec![vec![Span::styled(
@@ -147,7 +148,57 @@ fn optional_zones(app: &App, symbol: &str, now: DateTime<Utc>) -> Vec<Vec<Vec<Sp
             Span::styled(spark_line(&closes, SPARK), Style::new().fg(color)),
         ]]);
     }
+    // Last, because they are context rather than news: they say where the
+    // day sits in the year and how heavily it traded, and a narrow terminal
+    // gives their width back to everything above.
+    if let Some((lo, hi)) = quote.fifty_two_week {
+        zones.push(vec![vec![Span::styled(
+            format!("  52w {}–{}", fmt_price(lo), fmt_price(hi)),
+            Style::new().dim(),
+        )]]);
+    }
+    if let Some(volume) = quote.volume.filter(|v| *v > 0.0) {
+        zones.push(vec![vec![Span::styled(
+            format!("  vol {}", fmt_volume(volume)),
+            Style::new().dim(),
+        )]]);
+    }
     zones
+}
+
+/// The extended-hours print, when there is one, measured against the
+/// closing bell. This is the zone the rail exists for on a news view: a
+/// filing lands at 20:00 and the headline price, which is the regular
+/// close, cannot move until the next open. It sits ahead of the session
+/// badge because it is the newer fact, and it disappears by itself during
+/// the regular session, when there is no separate print to show.
+fn extended_zone(quote: &Quote, now: DateTime<Utc>, theme: &Theme) -> Vec<Vec<Span<'static>>> {
+    let (Some(price), Some(change), Some(pct)) = (
+        quote.extended_price(),
+        quote.extended_change(),
+        quote.extended_change_pct(),
+    ) else {
+        return Vec::new();
+    };
+    // Named for the session the print came from, not the one running now:
+    // read overnight, an evening print is still the after-hours one.
+    let label = if market::clock_at(now).session == Session::Pre {
+        "PRE"
+    } else {
+        "AH"
+    };
+    let style = Style::new().fg(move_color(Some(change), theme));
+    vec![
+        vec![Span::styled(
+            format!("  {label} {} {change:+.2} {pct:+.2}%", fmt_price(price)),
+            style,
+        )],
+        vec![Span::styled(
+            format!("  {label} {} {pct:+.2}%", fmt_price(price)),
+            style,
+        )],
+        vec![Span::styled(format!("  {label} {pct:+.2}%"), style)],
+    ]
 }
 
 /// Session badge plus the countdown to the next bell. Crypto pairs trade
