@@ -44,6 +44,17 @@ apt repository joined later, and carry every version since.
 - The config file is now written to a temporary file and renamed into
   place. It holds API keys, and it is written on every position edit, so a
   half-finished write should never be able to replace it.
+- Prices that survive a source fallback are labelled with their real age
+  instead of passing as live: a quote carries the source it came from, and
+  a row inherited from the abandoned one keeps the time it was fetched.
+  Adding credentials in the settings screen also makes a fallback search
+  that had run out of options worth trying again.
+- The quote cache is written out when the app exits, so a session shorter
+  than its flush interval still leaves its prices behind for the next
+  start, and a failed write backs off like a successful one.
+- News marks respect the length of a candle: a mark lands on the bar whose
+  interval actually contains its publish time, so an overnight gap or a
+  missing recent bar no longer pins unrelated news to the last candle.
 
 ## 0.21.0 - 2026-09-11
 

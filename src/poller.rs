@@ -12,10 +12,12 @@ use crate::source::DataSource;
 
 pub enum SourceEvent {
     Data {
+        source: Arc<dyn DataSource>,
         symbol: String,
         data: TickerData,
     },
     Error {
+        source: Arc<dyn DataSource>,
         symbol: String,
         error: String,
     },
@@ -96,9 +98,14 @@ pub async fn run(poller: Poller) {
                     // Kept for the next start, not for this session: the
                     // store is never read to answer a fetch.
                     cache.put(source_name, &symbol, &window, &data);
-                    SourceEvent::Data { symbol, data }
+                    SourceEvent::Data {
+                        source: current.clone(),
+                        symbol,
+                        data,
+                    }
                 }
                 Err(e) => SourceEvent::Error {
+                    source: current.clone(),
                     symbol,
                     error: format!("{e:#}"),
                 },

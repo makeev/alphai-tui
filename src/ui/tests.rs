@@ -76,6 +76,10 @@ fn empty_app_with_cmds(
     (app, alphai_rx)
 }
 
+fn current_source(app: &App) -> Arc<dyn crate::source::DataSource> {
+    app.price_source()
+}
+
 fn press(app: &mut App, code: KeyCode) {
     app.handle_key(KeyEvent::from(code));
 }
@@ -524,7 +528,9 @@ fn line_mode_renders_with_and_without_margin() {
 #[test]
 fn price_flash_tracks_update_direction() {
     let mut app = empty_app(vec!["AAPL".into()]);
+    let source = current_source(&app);
     let data = |price: f64| SourceEvent::Data {
+        source: source.clone(),
         symbol: "AAPL".into(),
         data: TickerData {
             quote: plain_quote("AAPL", price, Some(price), None),
@@ -556,7 +562,9 @@ fn price_flash_tracks_update_direction() {
 #[test]
 fn live_quote_updates_the_last_candle() {
     let mut app = empty_app(vec!["AAPL".into()]);
+    let source = current_source(&app);
     let data = |price: f64| SourceEvent::Data {
+        source: source.clone(),
         symbol: "AAPL".into(),
         data: TickerData {
             quote: plain_quote("AAPL", price, Some(100.0), None),
@@ -1009,10 +1017,17 @@ fn cached_rows_open_the_app_and_the_rail_says_how_old_they_are() {
     let rail = ui::rail::text(&ui::rail::line(&app, 130, market_open_moment()));
     assert!(rail.contains("214.50"), "cached price missing: {rail}");
     assert!(rail.contains("cached 2h"), "cached badge missing: {rail}");
+    let narrow = ui::rail::line(&app, 32, market_open_moment());
+    assert!(narrow.width() <= 32);
+    assert!(
+        ui::rail::text(&narrow).contains("cached 2h"),
+        "freshness must outlive optional quote details"
+    );
 
     // The first live poll retires the badge, and does not pulse: the move
     // from a two hour old price is not a tick that just happened.
     app.apply(SourceEvent::Data {
+        source: current_source(&app),
         symbol: "AAPL".into(),
         data: TickerData {
             quote: plain_quote("AAPL", 216.0, Some(200.0), Some("USD")),
@@ -1046,6 +1061,7 @@ fn a_dead_source_is_swapped_for_a_configured_one() {
     app.config.keys.insert("finnhub".into(), "test-key".into());
     for symbol in ["AAPL", "MSFT"] {
         app.apply(SourceEvent::Error {
+            source: current_source(&app),
             symbol: symbol.into(),
             error: crate::source::yahoo::THROTTLE_MSG.into(),
         });
@@ -1083,6 +1099,7 @@ fn a_dead_source_is_swapped_for_a_configured_one() {
     // instead of rebuilding a client on every frame.
     for symbol in ["AAPL", "MSFT"] {
         app.apply(SourceEvent::Error {
+            source: current_source(&app),
             symbol: symbol.into(),
             error: "finnhub API 500".into(),
         });
@@ -1099,6 +1116,7 @@ fn nothing_is_swapped_when_there_is_nowhere_to_go() {
     let mut app = fake_app();
     for symbol in ["AAPL", "MSFT"] {
         app.apply(SourceEvent::Error {
+            source: current_source(&app),
             symbol: symbol.into(),
             error: "yahoo API 429".into(),
         });
@@ -1122,6 +1140,7 @@ fn the_fallback_can_be_turned_off() {
     app.config.keys.insert("finnhub".into(), "test-key".into());
     for symbol in ["AAPL", "MSFT"] {
         app.apply(SourceEvent::Error {
+            source: current_source(&app),
             symbol: symbol.into(),
             error: "yahoo API 429".into(),
         });
@@ -1129,6 +1148,179 @@ fn the_fallback_can_be_turned_off() {
     app.source_trouble_since = Some(Instant::now() - std::time::Duration::from_secs(120));
     app.fallback_if_stuck();
     assert_eq!(app.source_name, "yahoo");
+}
+
+#[test]
+fn a_manual_source_change_starts_a_fresh_fallback_grace_period() {
+    let mut app = fake_app();
+    app.config.keys.insert("finnhub".into(), "test-key".into());
+    for symbol in ["AAPL", "MSFT"] {
+        app.apply(SourceEvent::Error {
+            source: current_source(&app),
+            symbol: symbol.into(),
+            error: "unavailable".into(),
+        });
+    }
+    app.source_trouble_since = Some(Instant::now() - std::time::Duration::from_secs(120));
+    app.from_cache.insert("AAPL".into(), 1_700_000_000);
+    app.price_flash
+        .insert("AAPL".into(), (Instant::now(), true));
+    app.open_settings();
+    app.settings.source_choice = "finnhub".into();
+    app.settings.cursor = settings_rows()
+        .iter()
+        .position(|row| matches!(row, SettingsRow::Save))
+        .unwrap();
+    press(&mut app, KeyCode::Enter);
+    // No config path in this fixture: Save applies live but leaves the
+    // write-error overlay open. Close it before exercising fallback.
+    press(&mut app, KeyCode::Esc);
+    assert_eq!(app.source_name, "finnhub");
+    assert!(
+        app.source_trouble_since.is_none(),
+        "the previous source's outage survived Save"
+    );
+    assert!(app.from_cache.is_empty());
+    assert!(app.price_flash.is_empty());
+    app.fallback_if_stuck();
+    assert_eq!(
+        app.source_name, "finnhub",
+        "the manual choice was immediately undone"
+    );
+}
+
+#[test]
+fn saving_an_alternative_key_reenables_an_exhausted_fallback() {
+    let mut app = fake_app();
+    for symbol in ["AAPL", "MSFT"] {
+        app.apply(SourceEvent::Error {
+            source: current_source(&app),
+            symbol: symbol.into(),
+            error: "unavailable".into(),
+        });
+    }
+    app.source_trouble_since = Some(Instant::now() - std::time::Duration::from_secs(120));
+    app.fallback_if_stuck();
+    assert_eq!(app.source_name, "yahoo");
+    app.open_settings();
+    app.settings.key_values.insert("finnhub", "test-key".into());
+    app.settings.cursor = settings_rows()
+        .iter()
+        .position(|row| matches!(row, SettingsRow::Save))
+        .unwrap();
+    press(&mut app, KeyCode::Enter);
+    // No config path in this fixture: Save applies live but leaves the
+    // write-error overlay open. Close it before exercising fallback.
+    press(&mut app, KeyCode::Esc);
+    app.fallback_if_stuck();
+    assert_eq!(
+        app.source_name, "finnhub",
+        "new credentials were never considered"
+    );
+}
+
+#[test]
+fn fallback_keeps_prices_labelled_and_rejects_late_responses() {
+    let mut app = fake_app();
+    app.config.keys.insert("finnhub".into(), "test-key".into());
+    let old_source = current_source(&app);
+    let data = app.data["AAPL"].clone();
+    app.apply(SourceEvent::Data {
+        source: old_source.clone(),
+        symbol: "AAPL".into(),
+        data: data.clone(),
+    });
+    for symbol in ["AAPL", "MSFT"] {
+        app.apply(SourceEvent::Error {
+            source: old_source.clone(),
+            symbol: symbol.into(),
+            error: "unavailable".into(),
+        });
+    }
+    app.source_trouble_since = Some(Instant::now() - std::time::Duration::from_secs(120));
+    app.fallback_if_stuck();
+    assert_eq!(app.source_name, "finnhub");
+    assert!(
+        app.cached_age("AAPL").is_some(),
+        "retained prices look live"
+    );
+    let mut late = data.clone();
+    late.quote.price = 1.0;
+    app.apply(SourceEvent::Data {
+        source: old_source.clone(),
+        symbol: "AAPL".into(),
+        data: late,
+    });
+    app.apply(SourceEvent::Error {
+        source: old_source,
+        symbol: "AAPL".into(),
+        error: "late failure".into(),
+    });
+    assert_eq!(app.data["AAPL"].quote.price, data.quote.price);
+    assert!(app.errors.is_empty());
+    assert!(app.cached_age("AAPL").is_some());
+    app.apply(SourceEvent::Data {
+        source: current_source(&app),
+        symbol: "AAPL".into(),
+        data,
+    });
+    assert!(app.cached_age("AAPL").is_none());
+}
+
+#[test]
+fn replacing_credentials_rejects_the_same_providers_old_responses() {
+    let mut app = fake_app();
+    app.config.keys.insert("finnhub".into(), "old-key".into());
+    app.open_settings();
+    app.settings.source_choice = "finnhub".into();
+    app.settings.cursor = settings_rows()
+        .iter()
+        .position(|row| matches!(row, SettingsRow::Save))
+        .unwrap();
+    press(&mut app, KeyCode::Enter);
+    // No config path in this fixture: Save applies live but leaves the
+    // write-error overlay open. Close it before exercising fallback.
+    press(&mut app, KeyCode::Esc);
+    let old_source = current_source(&app);
+    app.open_settings();
+    app.settings.key_values.insert("finnhub", "new-key".into());
+    app.settings.cursor = settings_rows()
+        .iter()
+        .position(|row| matches!(row, SettingsRow::Save))
+        .unwrap();
+    press(&mut app, KeyCode::Enter);
+    // No config path in this fixture: Save applies live but leaves the
+    // write-error overlay open. Close it before exercising fallback.
+    press(&mut app, KeyCode::Esc);
+    assert_eq!(app.source_name, old_source.name());
+    app.apply(SourceEvent::Error {
+        source: old_source,
+        symbol: "AAPL".into(),
+        error: "old key rejected".into(),
+    });
+    assert!(app.errors.is_empty());
+}
+
+#[test]
+fn a_new_symbol_gets_a_chance_before_fallback() {
+    let mut app = fake_app();
+    app.config.keys.insert("finnhub".into(), "test-key".into());
+    for symbol in ["AAPL", "MSFT"] {
+        app.apply(SourceEvent::Error {
+            source: current_source(&app),
+            symbol: symbol.into(),
+            error: "unavailable".into(),
+        });
+    }
+    app.source_trouble_since = Some(Instant::now() - std::time::Duration::from_secs(120));
+    press(&mut app, KeyCode::Char('a'));
+    for c in "NVDA".chars() {
+        press(&mut app, KeyCode::Char(c));
+    }
+    press(&mut app, KeyCode::Enter);
+    app.fallback_if_stuck();
+    assert_eq!(app.source_name, "yahoo");
+    assert!(app.source_trouble_since.is_none());
 }
 
 #[test]

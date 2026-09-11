@@ -259,11 +259,14 @@ pub struct App {
     /// pulse the price for `PRICE_FLASH` after it via `price_flash_dir`;
     /// the first data a symbol ever gets sets no flash (nothing changed).
     pub price_flash: HashMap<String, (Instant, bool)>,
-    /// Symbols whose rows came off disk (`crate::cache`) rather than from
-    /// this session, with the unix second they were fetched. The rail
+    /// Symbols whose rows came off disk or from an abandoned source,
+    /// with the unix second they were fetched. The rail
     /// badges them so a blocked source never passes old prices off as live;
     /// the first real poll of a symbol clears its entry.
     pub from_cache: HashMap<String, i64>,
+    /// Last successful fetch per symbol, for labelling retained prices
+    /// when a fallback changes the source before new quotes arrive.
+    quote_fetched: HashMap<String, i64>,
     /// Since when every symbol on the watchlist has been failing. The
     /// fallback is measured from here; any successful poll clears it.
     pub(crate) source_trouble_since: Option<Instant>,
@@ -398,6 +401,7 @@ impl App {
             errors: HashMap::new(),
             price_flash: HashMap::new(),
             from_cache: HashMap::new(),
+            quote_fetched: HashMap::new(),
             source_trouble_since: None,
             abandoned: Vec::new(),
             source_fallback: init.source_fallback,
@@ -471,11 +475,12 @@ impl App {
     /// lands. Marked as cached until that poll replaces them, so the age of
     /// what is on screen is never a guess.
     pub fn seed_cached(&mut self, symbol: String, entry: crate::cache::Entry) {
+        self.quote_fetched.insert(symbol.clone(), entry.fetched);
         self.from_cache.insert(symbol.clone(), entry.fetched);
         self.data.insert(symbol, entry.data);
     }
 
-    /// How old the shown rows are when they came off disk, as a label.
+    /// How old the retained rows are, as a label.
     pub fn cached_age(&self, symbol: &str) -> Option<String> {
         self.from_cache
             .get(symbol)
@@ -524,8 +529,17 @@ impl App {
 
     pub(crate) fn apply(&mut self, event: SourceEvent) {
         match event {
-            SourceEvent::Data { symbol, mut data } => {
+            SourceEvent::Data {
+                source,
+                symbol,
+                mut data,
+            } => {
+                if !self.accepts_price_event(&source, &symbol) {
+                    return;
+                }
                 self.errors.remove(&symbol);
+                self.quote_fetched
+                    .insert(symbol.clone(), chrono::Utc::now().timestamp());
                 // A live answer clears the outage clock and retires the
                 // cached rows this symbol started on.
                 self.source_trouble_since = None;
@@ -553,19 +567,62 @@ impl App {
                 self.data.insert(symbol, data);
                 self.last_update = Some(Local::now());
             }
-            SourceEvent::Error { symbol, error } => {
+            SourceEvent::Error {
+                source,
+                symbol,
+                error,
+            } => {
+                if !self.accepts_price_event(&source, &symbol) {
+                    return;
+                }
                 self.errors.insert(symbol, error);
                 self.last_update = Some(Local::now());
                 // One failing ticker is a bad symbol; all of them is the
                 // source, and that is what the fallback waits on.
-                if self.source_trouble_since.is_none()
-                    && self.symbols.iter().all(|s| self.errors.contains_key(s))
-                {
+                if self.source_trouble_since.is_none() && self.all_prices_failing() {
                     self.source_trouble_since = Some(Instant::now());
                 }
             }
             SourceEvent::Alphai(ev) => self.apply_alphai(ev),
         }
+    }
+
+    fn accepts_price_event(
+        &self,
+        source: &Arc<dyn crate::source::DataSource>,
+        symbol: &str,
+    ) -> bool {
+        // Name alone cannot distinguish rebuilt credentials for the same
+        // provider. Pending responses retain the exact source instance.
+        Arc::ptr_eq(source, &self.price_source())
+            && self
+                .shared_symbols
+                .read()
+                .unwrap()
+                .iter()
+                .any(|s| s == symbol)
+    }
+
+    pub(crate) fn price_source(&self) -> Arc<dyn crate::source::DataSource> {
+        self.source.read().unwrap().clone()
+    }
+
+    fn all_prices_failing(&self) -> bool {
+        let symbols = self.shared_symbols.read().unwrap();
+        !symbols.is_empty() && symbols.iter().all(|s| self.errors.contains_key(s))
+    }
+
+    /// State shared by manual and automatic source changes. The caller
+    /// decides whether to retain quotes and reset the fallback history.
+    fn set_price_source(&mut self, source: Arc<dyn crate::source::DataSource>) {
+        self.source_name = source.name();
+        self.source_delay = source.delay_note();
+        *self.source.write().unwrap() = source;
+        self.errors.clear();
+        self.source_trouble_since = None;
+        self.price_flash.clear();
+        self.notice = None;
+        self.refresh.notify_one();
     }
 
     /// Swaps a source that has stopped answering for one that has not.
@@ -581,13 +638,18 @@ impl App {
         if !self.source_fallback || self.fallback_exhausted || self.settings.open {
             return;
         }
+        // The polled symbols can change while the grace period runs.
+        if !self.all_prices_failing() {
+            self.source_trouble_since = None;
+            return;
+        }
         let Some(since) = self.source_trouble_since else {
             return;
         };
         if since.elapsed() < FALLBACK_AFTER {
             return;
         }
-        let Some((name, src)) = self.working_source() else {
+        let Some(src) = self.fallback_source() else {
             // Nothing else is configured: stop looking until the user picks
             // a source themselves, or this rebuilds a client every frame.
             self.fallback_exhausted = true;
@@ -595,14 +657,9 @@ impl App {
         };
         let failed = self.source_name;
         self.abandoned.push(failed);
-        self.source_name = name;
-        self.source_delay = src.delay_note();
-        *self.source.write().unwrap() = src;
-        // The rows stay: what is on screen is the last thing that worked,
-        // and the rail already says how old it is.
-        self.errors.clear();
-        self.source_trouble_since = None;
-        self.refresh.notify_one();
+        self.from_cache.extend(self.quote_fetched.clone());
+        self.set_price_source(src);
+        let name = self.source_name;
         self.notice = Some((
             format!("{failed} stopped answering, switched to {name} (s to choose another)"),
             Instant::now(),
@@ -611,18 +668,14 @@ impl App {
 
     /// The first registered source that is not the current one, has not
     /// already failed this session, and has the credentials it needs.
-    fn working_source(&self) -> Option<(&'static str, Arc<dyn crate::source::DataSource>)> {
+    fn fallback_source(&self) -> Option<Arc<dyn crate::source::DataSource>> {
         crate::source::registry::SOURCES
             .iter()
             .filter(|info| {
                 !info.id.eq_ignore_ascii_case(self.source_name)
                     && !self.abandoned.contains(&info.id)
             })
-            .find_map(|info| {
-                crate::source::make_source(info.id, &self.config)
-                    .ok()
-                    .map(|src| (info.id, src))
-            })
+            .find_map(|info| crate::source::make_source(info.id, &self.config).ok())
     }
 
     /// Returns true when the app should quit. Fixed keys resolve first
@@ -1027,6 +1080,8 @@ impl App {
             self.data.remove(&gone);
             self.errors.remove(&gone);
             self.price_flash.remove(&gone);
+            self.from_cache.remove(&gone);
+            self.quote_fetched.remove(&gone);
         }
         self.select_symbol(self.selected.min(self.symbols.len() - 1));
     }

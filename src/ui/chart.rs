@@ -316,7 +316,7 @@ fn render_price_line(
     // News marks ride above the close line, and folding them into the
     // range keeps the highest one on screen.
     let marks = if app.show_news_markers {
-        news_marks::place(app.ticker_articles(symbol), visible)
+        news_marks::place(app.ticker_articles(symbol), visible, app.interval)
     } else {
         Vec::new()
     };
@@ -578,7 +578,10 @@ fn render_price_candles(
     // The ticker's news, placed on the candles it was published in. Read
     // from the cache the News and Split views fill, so this costs nothing.
     let marks = if app.show_news_markers {
-        news_marks::place(app.ticker_articles(symbol), &display)
+        news_marks::resample(
+            news_marks::place(app.ticker_articles(symbol), visible, app.interval),
+            &sample_idx,
+        )
     } else {
         Vec::new()
     };

@@ -265,18 +265,24 @@ impl App {
         if source_changed {
             match make_source(&self.settings.source_choice, &cfg) {
                 Ok(src) => {
-                    self.source_name = src.name();
-                    self.source_delay = src.delay_note();
-                    *self.source.write().unwrap() = src;
+                    self.set_price_source(src);
                     self.data.clear();
-                    self.errors.clear();
-                    self.refresh.notify_one();
+                    self.from_cache.clear();
+                    self.quote_fetched.clear();
+                    self.abandoned.clear();
+                    self.fallback_exhausted = false;
                 }
                 Err(e) => {
                     self.settings.message = Some(format!("{e:#}"));
                     return;
                 }
             }
+        }
+
+        // Adding credentials for an alternative source makes an exhausted
+        // fallback search useful again, even if the active source stays.
+        if cfg.keys != self.config.keys {
+            self.fallback_exhausted = false;
         }
 
         // The poller re-reads the interval before every sleep; the nudge

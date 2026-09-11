@@ -54,7 +54,7 @@ pub struct Store {
     path: Option<PathBuf>,
     entries: HashMap<String, Entry>,
     dirty: bool,
-    last_write: Instant,
+    last_write: Option<Instant>,
 }
 
 impl Store {
@@ -83,7 +83,7 @@ impl Store {
             path,
             entries,
             dirty: false,
-            last_write: Instant::now(),
+            last_write: None,
         }
     }
 
@@ -111,12 +111,12 @@ impl Store {
         self.dirty = true;
     }
 
-    /// Writes the store back if anything changed and the write interval has
-    /// passed. Returns whether it wrote, for the tests; failures are
+    /// Writes the first successful cycle immediately, then at most once
+    /// per write interval. Returns whether it wrote; failures are
     /// swallowed, since a cache that cannot be written is not an error the
     /// user can act on.
     pub fn flush_due(&mut self) -> bool {
-        if !self.dirty || self.last_write.elapsed() < WRITE_EVERY {
+        if !self.dirty || self.last_write.is_some_and(|at| at.elapsed() < WRITE_EVERY) {
             return false;
         }
         self.flush()
@@ -124,6 +124,8 @@ impl Store {
 
     /// Writes the store back regardless of the timer.
     pub fn flush(&mut self) -> bool {
+        // Failed writes get the same backoff as successful ones.
+        self.last_write = Some(Instant::now());
         let Some(path) = self.path.clone() else {
             return false;
         };
@@ -145,9 +147,18 @@ impl Store {
         let written = std::fs::write(&tmp, raw).is_ok() && std::fs::rename(&tmp, &path).is_ok();
         if written {
             self.dirty = false;
-            self.last_write = Instant::now();
         }
         written
+    }
+}
+
+impl Drop for Store {
+    fn drop(&mut self) {
+        // Runtime shutdown drops the poller even while it is sleeping or
+        // fetching. Preserve the final updates of short sessions too.
+        if self.dirty {
+            self.flush();
+        }
     }
 }
 
@@ -261,6 +272,31 @@ mod tests {
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 
+    #[test]
+    fn a_short_session_keeps_its_last_successful_fetch() {
+        let path = tmp_path("short-session");
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+        let params = params_key(Range::D1, Interval::M5, Sessions::Regular);
+        {
+            let mut store = Store::load_at(Some(path.clone()));
+            store.put("yahoo", "AAPL", &params, &data(10.0));
+            assert!(store.flush_due(), "the first cycle should reach disk");
+            store.put("yahoo", "AAPL", &params, &data(11.0));
+            assert!(!store.flush_due(), "subsequent cycles should be throttled");
+        }
+        let store = Store::load_at(Some(path.clone()));
+        assert_eq!(
+            store
+                .get("yahoo", "AAPL", &params)
+                .unwrap()
+                .data
+                .quote
+                .price,
+            11.0
+        );
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
     /// A file from another version, or a truncated one, must not stop the
     /// app: it is a cache, and an empty store is a correct answer.
     #[test]
@@ -292,8 +328,10 @@ mod tests {
         let params = params_key(Range::D1, Interval::M5, Sessions::Regular);
         let mut store = Store::load_at(Some(path.clone()));
         store.put("yahoo", "AAPL", &params, &data(10.0));
+        assert!(store.flush_due(), "did not write the first cycle");
+        store.put("yahoo", "AAPL", &params, &data(11.0));
         assert!(!store.flush_due(), "wrote inside the interval");
-        store.last_write = Instant::now() - WRITE_EVERY - Duration::from_secs(1);
+        store.last_write = Some(Instant::now() - WRITE_EVERY - Duration::from_secs(1));
         assert!(store.flush_due(), "did not write after the interval");
         assert!(!store.flush_due(), "wrote again with nothing new");
         let _ = std::fs::remove_dir_all(path.parent().unwrap());

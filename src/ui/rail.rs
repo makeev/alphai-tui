@@ -8,7 +8,7 @@
 //! the selected quote, where it sits in the day, what the US session is
 //! doing, and the rest of the watchlist compressed.
 //!
-//! Everything past the symbol and its price is optional: zones go in in
+//! Everything past the symbol, price and cache label is optional: zones go in in
 //! priority order while they fit, the way the watchlist table drops whole
 //! columns instead of squeezing every one of them.
 
@@ -72,7 +72,7 @@ pub(crate) fn line(app: &App, width: u16, now: DateTime<Utc>) -> Line<'static> {
     Line::from(spans)
 }
 
-/// Symbol and price: the part that is never dropped.
+/// Symbol, price and freshness: the part that is never dropped.
 fn head(app: &App, symbol: &str) -> Vec<Span<'static>> {
     let theme = &app.theme;
     let mut out = vec![Span::styled(
@@ -87,6 +87,12 @@ fn head(app: &App, symbol: &str) -> Vec<Span<'static>> {
                 .price_flash_dir(symbol)
                 .map_or(Style::new().bold(), |up| flash_style(up, theme));
             out.push(Span::styled(fmt_price(data.quote.price), style));
+            if let Some(age) = app.cached_age(symbol) {
+                out.push(Span::styled(
+                    format!("  cached {age} ago"),
+                    Style::new().fg(theme.warn),
+                ));
+            }
         }
         None if app.errors.contains_key(symbol) => {
             out.push(Span::styled("error", Style::new().fg(theme.error)));
@@ -130,20 +136,6 @@ fn optional_zones(app: &App, symbol: &str, now: DateTime<Utc>) -> Vec<Vec<Vec<Sp
             vec![Span::styled(
                 format!("  {pct:+.2}%"),
                 Style::new().fg(color),
-            )],
-        ]);
-    }
-    // Right behind the price it qualifies: these rows are the last ones
-    // that worked, not what the market is doing now.
-    if let Some(age) = app.cached_age(symbol) {
-        zones.push(vec![
-            vec![Span::styled(
-                format!("  cached {age} ago"),
-                Style::new().fg(theme.warn),
-            )],
-            vec![Span::styled(
-                format!("  cached {age}"),
-                Style::new().fg(theme.warn),
             )],
         ]);
     }
