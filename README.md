@@ -4,12 +4,13 @@
 [![crates.io](https://img.shields.io/crates/v/alphai-tui.svg)](https://crates.io/crates/alphai-tui)
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/makeev/alphai-tui/blob/main/LICENSE)
 
-A stock dashboard for the terminal that also answers why the price moved.
-Live quotes and candlestick charts on one side; on the other, for the same
-ticker, AI-scored news with a full analysis of each story, the SEC Form 4
-insider filings and a structured read of the last earnings report. One Rust
-binary built on [ratatui](https://ratatui.rs), no browser tab, and no
-account needed for the prices.
+An open-source, Bloomberg-style stock dashboard for the terminal that also
+answers why the price moved. Live quotes and candlestick charts on one side;
+on the other, for the same ticker, AI-scored news with a full analysis of
+each story, the SEC Form 4 insider filings and a structured read of the last
+earnings report. One Rust binary built on [ratatui](https://ratatui.rs), no
+browser tab, and no account needed for the prices. Coming from tickrs or
+ticker? See [how it compares](#how-it-compares).
 
 ![alphai-tui demo: the split dashboard with the quote rail, the news list next to the full AI analysis card, the market-wide scope, a year of SEC Form 4 insider filings, the earnings read, the summary grid and the candlestick chart with moving averages, volume and RSI](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/demo.gif)
 
@@ -20,7 +21,7 @@ alphai-tui NVDA AVGO AAPL MSFT META TSLA AMZN GOOGL BTC-USD
 
 Quotes and charts run keyless on Yahoo, or on Finnhub or Alpaca with their
 own free keys. The News, Insider and Earnings views run on a free
-[AlphaAI](https://alphai.io?utm_source=alphai-tui&utm_medium=referral) key
+[AlphAI](https://alphai.io?utm_source=alphai-tui&utm_medium=referral) key
 that you paste once in the settings screen. The first run walks you through
 both, and after that a bare `alphai-tui` reopens your watchlist.
 
@@ -149,7 +150,7 @@ stream by trade size.
 
 ![alphai-tui earnings view: NVIDIA's second quarter fiscal 2027 read with the verdict, the summary and a metric table carrying the prior quarter, the prior year and both changes](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/earnings.png)
 
-AlphaAI's structured read of the ticker's own earnings filing, the way the
+AlphAI's structured read of the ticker's own earnings filing, the way the
 company reported it: the verdict and why, the metric table with the prior
 quarter, the prior year and both changes, segments, the outlook, concerns,
 what to watch and several paragraphs of analysis. Every figure was checked
@@ -159,7 +160,7 @@ American and foreign filings both (an 8-K item 2.02, or a foreign private
 issuer's 6-K with its half years and its own currency).
 
 `←` `→` walk the watchlist, older quarters continue below the newest read.
-When a company has not reported since AlphaAI began reading filings, the
+When a company has not reported since AlphAI began reading filings, the
 view says so and gives the date of its next report if the company has
 confirmed one. The bottom line carries the next couple of US macro releases
 (CPI, the jobs report, an FOMC decision), which is the other half of what
@@ -326,7 +327,7 @@ alphai-tui NVDA AVGO AAPL MSFT META TSLA AMZN GOOGL BTC-USD
 ```
 
 The first run opens the settings screen: pick a price source and paste your
-AlphaAI key (get one free at [alphai.io](https://alphai.io?utm_source=alphai-tui&utm_medium=referral), Account >
+AlphAI key (get one free at [alphai.io](https://alphai.io?utm_source=alphai-tui&utm_medium=referral), Account >
 API keys). Leave it empty if you only want quotes and charts. Your watchlist
 and options persist in the config file, so next time plain `alphai-tui` works.
 
@@ -348,7 +349,7 @@ alphai-tui -s finnhub NVDA  # explicit source for one run
 | `--bare` | off | Start without the header and footer, for a tmux pane (`z` toggles it live) |
 | `--once` | | Print quotes to stdout and exit |
 | `--json` | | Print those quotes as JSON instead of a text table (implies `--once`) |
-| `--earnings TICKER` | | Print the latest earnings read to stdout and exit (needs an AlphaAI key; one request) |
+| `--earnings TICKER` | | Print the latest earnings read to stdout and exit (needs an AlphAI key; one request) |
 | `--config` | | Use an alternate config file (Save writes back to it) |
 
 `-r` and `-i` set the startup window; the `t` key cycles the preset
@@ -521,7 +522,7 @@ wall of charts next to a live scored feed:
 
 Two things the instances share. The config file is one: the last pane to
 save settings wins, so set things up once and let the other panes just
-read it. Your AlphaAI key's rate budget is the other: every pane showing
+read it. Your AlphAI key's rate budget is the other: every pane showing
 news or insider data spends requests from the same per-key allowance, so
 on a free key keep an eye on how many such panes you open.
 
@@ -529,7 +530,7 @@ The same trick turns the terminal into a full trading desk with an AI
 analyst on staff. Run an agent such as
 [Claude Code](https://claude.com/claude-code) in the pane next to
 alphai-tui and connect it to the
-[AlphaAI MCP server](https://alphai.io/mcp?utm_source=alphai-tui&utm_medium=referral), which serves the same news,
+[AlphAI MCP server](https://alphai.io/mcp?utm_source=alphai-tui&utm_medium=referral), which serves the same news,
 sentiment and insider data as the dashboard. You watch the tape on one
 side while the agent digs through whatever the tape surfaces: ask it for
 the last insider sells and the news that moved the stock this week, and
@@ -613,7 +614,7 @@ Three things happen here instead:
 
 **News, sentiment, insider**
 
-- [AlphaAI](https://alphai.io?utm_source=alphai-tui&utm_medium=referral): AI-enriched financial news feed. Every
+- [AlphAI](https://alphai.io?utm_source=alphai-tui&utm_medium=referral): AI-enriched financial news feed. Every
   article carries validated tickers, a category, a deterministic 1 to 10
   relevance score and a full per-ticker AI analysis (sentiment, price
   impact, confidence, novelty, actionability); insider rows are generated
@@ -649,7 +650,7 @@ Three things happen here instead:
   [alphai.io/developers](https://alphai.io/developers?utm_source=alphai-tui&utm_medium=referral).
 
 Ticker forms follow the US/Yahoo convention (`AAPL`, `BTC-USD`, `VOD.L`),
-which is also what AlphaAI uses. Finnhub-specific symbols like
+which is also what AlphAI uses. Finnhub-specific symbols like
 `BINANCE:BTCUSDT` will not have news attached.
 
 ## Configuration
@@ -820,7 +821,7 @@ that are actually bound.
 
 ### Not configurable on purpose
 
-The AlphaAI response cache (5 minutes), the feed page sizes, the 2 second
+The AlphAI response cache (5 minutes), the feed page sizes, the 2 second
 poll floor and the chart warm-up factors are fixed. They keep the app a
 fair citizen of the free API tiers, and a config knob for them would turn
 an innocent-looking file into an abuse vector. `ALPACA_FEED`,
@@ -839,13 +840,13 @@ src/
     yahoo.rs     Yahoo v8 chart endpoint (quote + history in one call)
     finnhub.rs   Finnhub /quote with synthetic session history
     alpaca.rs    snapshot + real historical bars (IEX/SIP feeds, crypto)
-  alphai.rs      AlphaAI API client + demand-driven fetch task (TTL cache)
+  alphai.rs      AlphAI API client + demand-driven fetch task (TTL cache)
   keymap.rs      semantic actions + the key table (footer hints derive from it)
   theme.rs       semantic color palette ([theme] overrides)
   indicators.rs  SMA, EMA and RSI (Wilder smoothing)
   poller.rs      fetches all symbols concurrently on a timer -> mpsc channel
   app.rs         App state, event loop, key handling
-    app/feeds.rs     feed cache and every AlphaAI request-budget guard
+    app/feeds.rs     feed cache and every AlphAI request-budget guard
     app/settings.rs  settings overlay state, rows derived from the registry
   ui/            View trait + implementations
     table.rs     watchlist table
@@ -859,9 +860,9 @@ src/
     settings.rs  modal settings overlay
 ```
 
-Data flows one way: background tasks (price poller, AlphaAI fetcher) push
+Data flows one way: background tasks (price poller, AlphAI fetcher) push
 events over an mpsc channel into `App::apply`; views are stateless renderers
-over `&mut App`. The UI never blocks on the network, and every AlphaAI
+over `&mut App`. The UI never blocks on the network, and every AlphAI
 request-budget guard lives in one file (`app/feeds.rs`).
 
 ### Adding a price source
@@ -882,7 +883,7 @@ request-budget guard lives in one file (`app/feeds.rs`).
    stateless `render` over `&mut App`, a new `ViewId` variant, a footer hint
    line, and the capability methods (`feed_shown`, `navigates_articles`,
    `has_chart_panel`) that opt into the shared key handling and the
-   demand-driven AlphaAI fetch. Views never fetch anything themselves.
+   demand-driven AlphAI fetch. Views never fetch anything themselves.
 2. Add it to `ui::VIEWS`. Order in that array defines the tab cycle and the
    `1`..`9` hotkeys; the header pills and the footer hints derive from it.
 
