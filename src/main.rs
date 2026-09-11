@@ -61,6 +61,11 @@ struct Args {
     #[arg(long)]
     once: bool,
 
+    /// Print those quotes as JSON instead of a text table, for status bars
+    /// and scripts (implies --once)
+    #[arg(long, conflicts_with = "earnings")]
+    json: bool,
+
     /// Print the latest AlphaAI earnings read for one ticker and exit
     /// (no TUI); needs an API key. One request.
     #[arg(long, value_name = "TICKER")]
@@ -117,8 +122,15 @@ fn main() -> Result<()> {
         .unwrap_or(Interval::M5);
 
     let rt = tokio::runtime::Runtime::new()?;
-    if args.once {
-        return print_once(&rt, source, &symbols, range, interval);
+    if args.once || args.json {
+        return print_once(
+            &rt,
+            source,
+            &symbols,
+            range,
+            interval,
+            args.json.then_some(source_name.as_str()),
+        );
     }
     if let Some(ticker) = args.earnings.as_deref() {
         return print_earnings(&rt, cfg.alphai_key(), ticker);
@@ -383,18 +395,24 @@ fn parse_enum<T: ValueEnum>(value: Option<&str>) -> Option<T> {
     T::from_str(value?, true).ok()
 }
 
+/// `--once`, and with `json` the same run as a JSON array on stdout (any
+/// warning has already gone to stderr, so the document stays machine
+/// readable). One row per symbol, in the order they were asked for.
 fn print_once(
     rt: &tokio::runtime::Runtime,
     source: Arc<dyn source::DataSource>,
     symbols: &[String],
     range: Range,
     interval: Interval,
+    json: Option<&str>,
 ) -> Result<()> {
+    let mut rows: Vec<serde_json::Value> = Vec::new();
     for symbol in symbols {
         // Regular sessions only: this prints a quote and a candle count
         // for a script, and the extended candles change neither.
-        match rt.block_on(source.fetch(symbol, range, interval, Sessions::Regular)) {
-            Ok(data) => {
+        let fetched = rt.block_on(source.fetch(symbol, range, interval, Sessions::Regular));
+        match (fetched, json) {
+            (Ok(data), None) => {
                 let q = &data.quote;
                 let change = match (q.change(), q.change_pct()) {
                     (Some(c), Some(p)) => format!("{c:+.2} ({p:+.2}%)"),
@@ -409,8 +427,170 @@ fn print_once(
                     data.candles.len()
                 );
             }
-            Err(e) => println!("{symbol:<8} error: {e:#}"),
+            (Ok(data), Some(source_name)) => rows.push(quote_json(&data, source_name)),
+            (Err(e), None) => println!("{symbol:<8} error: {e:#}"),
+            // A failed symbol is a row of its own rather than a missing
+            // one: a script watching four tickers still gets four rows and
+            // can say which of them is the broken one.
+            (Err(e), Some(_)) => rows.push(serde_json::json!({
+                "symbol": symbol,
+                "error": format!("{e:#}"),
+            })),
         }
     }
+    if json.is_some() {
+        println!("{}", serde_json::to_string_pretty(&rows)?);
+    }
     Ok(())
+}
+
+/// One ticker as JSON. Absent figures are left out rather than sent as
+/// null: sources differ in what they can answer, and a key that is there
+/// only sometimes is easier to test for than a value that is null only
+/// sometimes. `symbol` and `price` are the two that are always present.
+fn quote_json(data: &domain::TickerData, source_name: &str) -> serde_json::Value {
+    use serde_json::{Value, json};
+
+    let q = &data.quote;
+    let mut out = json!({
+        "symbol": q.symbol,
+        "price": q.price,
+        "candles": data.candles.len(),
+        "source": source_name,
+        // Whole seconds and a Z, the shape a log line or a cache key wants.
+        "fetched": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+    });
+    let map = out.as_object_mut().expect("object");
+    let mut put = |key: &str, value: Option<Value>| {
+        if let Some(v) = value {
+            map.insert(key.to_string(), v);
+        }
+    };
+    let range = |r: Option<(f64, f64)>| r.map(|(low, high)| json!({ "low": low, "high": high }));
+    put("currency", q.currency.clone().map(Value::from));
+    put("prev_close", q.prev_close.map(Value::from));
+    put("change", q.change().map(|c| json!(trimmed(c, 6))));
+    put("change_pct", q.change_pct().map(|p| json!(trimmed(p, 4))));
+    put("day_range", range(q.day_range));
+    put("fifty_two_week", range(q.fifty_two_week));
+    put("volume", q.volume.map(Value::from));
+    // The extended print is its own object: its move is measured from the
+    // regular close, not from the previous one, so putting the two moves
+    // side by side under one set of keys would invite reading them alike.
+    if let Some(price) = q.extended_price() {
+        let mut ext = json!({ "price": price });
+        let ext_map = ext.as_object_mut().expect("object");
+        if let Some(c) = q.extended_change() {
+            ext_map.insert("change".into(), json!(trimmed(c, 6)));
+        }
+        if let Some(p) = q.extended_change_pct() {
+            ext_map.insert("change_pct".into(), json!(trimmed(p, 4)));
+        }
+        map.insert("extended".into(), ext);
+    }
+    out
+}
+
+/// A derived figure with its float noise trimmed: a change of
+/// 11.230000000000018 is arithmetic showing through, not data. Prices and
+/// volumes come from the source untouched.
+fn trimmed(v: f64, places: i32) -> f64 {
+    let scale = 10f64.powi(places);
+    (v * scale).round() / scale
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::{Candle, Quote, TickerData};
+
+    fn data(quote: Quote) -> TickerData {
+        TickerData {
+            quote,
+            candles: vec![Candle {
+                ts: 1_700_000_000,
+                open: 1.0,
+                high: 2.0,
+                low: 0.5,
+                close: 1.5,
+                volume: None,
+            }],
+        }
+    }
+
+    fn plain(price: f64, prev_close: Option<f64>) -> Quote {
+        Quote {
+            symbol: "AAPL".into(),
+            price,
+            prev_close,
+            currency: Some("USD".into()),
+            extended: None,
+            fifty_two_week: None,
+            day_range: None,
+            volume: None,
+        }
+    }
+
+    /// The keys a script can count on, and the derived figures without the
+    /// float noise the subtraction leaves behind.
+    #[test]
+    fn json_carries_the_quote_and_its_derived_moves() {
+        let json = quote_json(&data(plain(326.57, Some(315.34))), "yahoo");
+        assert_eq!(json["symbol"], "AAPL");
+        assert_eq!(json["price"], 326.57);
+        assert_eq!(json["currency"], "USD");
+        assert_eq!(json["prev_close"], 315.34);
+        assert_eq!(json["source"], "yahoo");
+        assert_eq!(json["candles"], 1);
+        // 326.57 - 315.34 is 11.230000000000018 in binary floating point.
+        assert_eq!(json["change"], 11.23);
+        assert_eq!(json["change_pct"], 3.5612);
+        assert!(json["fetched"].is_string());
+    }
+
+    /// Sources answer different subsets, so what is missing is missing
+    /// rather than null: `has("extended")` beats a null check.
+    #[test]
+    fn json_leaves_out_what_the_source_did_not_answer() {
+        let json = quote_json(&data(plain(100.0, None)), "finnhub");
+        let obj = json.as_object().unwrap();
+        assert!(!obj.contains_key("change"), "{json}");
+        assert!(!obj.contains_key("prev_close"), "{json}");
+        assert!(!obj.contains_key("extended"), "{json}");
+        assert!(!obj.contains_key("volume"), "{json}");
+        assert!(!obj.contains_key("day_range"), "{json}");
+    }
+
+    /// The extended print keeps its own object: its move is measured from
+    /// the regular close, the headline one from the previous close.
+    #[test]
+    fn json_keeps_the_extended_print_apart() {
+        let mut quote = plain(315.34, Some(310.0));
+        quote.extended = Some(317.22);
+        quote.day_range = Some((310.5, 316.0));
+        quote.fifty_two_week = Some((164.08, 340.0));
+        quote.volume = Some(64_900_000.0);
+        let json = quote_json(&data(quote), "yahoo");
+        assert_eq!(json["extended"]["price"], 317.22);
+        assert_eq!(json["extended"]["change"], 1.88);
+        assert_eq!(json["extended"]["change_pct"], 0.5962);
+        assert_eq!(json["day_range"]["high"], 316.0);
+        assert_eq!(json["fifty_two_week"]["low"], 164.08);
+        assert_eq!(json["volume"], 64_900_000.0);
+        // The headline move still counts from the previous close.
+        assert_eq!(json["change"], 5.34);
+    }
+
+    /// A quote whose extended print is the regular one (the market is open,
+    /// or the source has no extended data) carries no extended object.
+    #[test]
+    fn json_omits_an_extended_print_that_is_the_regular_one() {
+        let mut quote = plain(315.34, Some(310.0));
+        quote.extended = Some(315.34);
+        let json = quote_json(&data(quote), "alpaca");
+        assert!(
+            !json.as_object().unwrap().contains_key("extended"),
+            "{json}"
+        );
+    }
 }

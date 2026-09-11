@@ -208,7 +208,7 @@ chain and no position tracking.
 | Extended hours | price and candles | candles | price |
 | Options chain | no | yes | no |
 | Positions and P&L | no | quantity and average price | cost-basis lots, groups, currencies |
-| Export for scripts | `--once` text | no | CSV and JSON |
+| Export for scripts | `--once` text, `--json` | no | CSV and JSON |
 | Price sources | Yahoo, Finnhub, Alpaca | Yahoo | Yahoo, Coinbase |
 | Add or remove a ticker in the app | yes | yes | no |
 | Rebindable keys | any action, in the config | vim keys | no |
@@ -301,6 +301,7 @@ and options persist in the config file, so next time plain `alphai-tui` works.
 
 ```sh
 alphai-tui --once AAPL      # print quotes to stdout and exit (for scripts)
+alphai-tui --json AAPL      # the same run as JSON, for a status bar
 alphai-tui -s finnhub NVDA  # explicit source for one run
 ```
 
@@ -315,12 +316,51 @@ alphai-tui -s finnhub NVDA  # explicit source for one run
 | `--theme` | `default` | Color preset, e.g. `catppuccin-mocha` (also a key and a settings row) |
 | `--bare` | off | Start without the header and footer, for a tmux pane (`z` toggles it live) |
 | `--once` | | Print quotes to stdout and exit |
+| `--json` | | Print those quotes as JSON instead of a text table (implies `--once`) |
 | `--earnings TICKER` | | Print the latest earnings read to stdout and exit (needs an AlphaAI key; one request) |
 | `--config` | | Use an alternate config file (Save writes back to it) |
 
 `-r` and `-i` set the startup window; the `t` key cycles the preset
 combinations (configurable as `[chart] presets`) for the session without
 persisting them.
+
+### Quotes as JSON
+
+`--json` prints one object per symbol, in the order they were asked for, so
+a status bar or a cron job can read the numbers instead of parsing a table:
+
+```sh
+alphai-tui --json AAPL NVDA
+alphai-tui --json AAPL | jq -r '.[0] | "\(.symbol) \(.price) \(.change_pct)%"'
+```
+
+```json
+[
+  {
+    "candles": 79,
+    "change": 11.23,
+    "change_pct": 3.5612,
+    "currency": "USD",
+    "day_range": { "high": 326.68, "low": 316.57 },
+    "extended": { "change": -1.07, "change_pct": -0.3276, "price": 325.5 },
+    "fetched": "2026-09-11T09:31:38Z",
+    "fifty_two_week": { "high": 344.57, "low": 226.65 },
+    "prev_close": 315.34,
+    "price": 326.57,
+    "source": "yahoo",
+    "symbol": "AAPL",
+    "volume": 69820744.0
+  }
+]
+```
+
+`symbol` and `price` are always there; the rest depends on what the source
+answers, and a figure it does not answer is left out rather than sent as
+null. `change` and `change_pct` count from the previous close, while the
+`extended` object measures its own move from the regular session's close,
+the way a broker screen does. A symbol that failed still gets a row, as
+`{"symbol": "…", "error": "…"}`, so a watchlist of four always prints four.
+Warnings go to stderr, so stdout stays a valid JSON document.
 
 CLI arguments win over the config file; the config file wins over built-in
 defaults. API keys can also come from env vars, which win over the config:

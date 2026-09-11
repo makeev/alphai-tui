@@ -23,6 +23,13 @@ apt repository joined later, and carry every version since.
   the highest-scoring one, so a busy day stays readable.
 - The Split view's footer drops its `s settings` hint to stay inside 110
   columns, the way the News footer already does. `?` still lists it.
+- `--json` prints the one-shot quote run as a JSON array instead of a text
+  table, for status bars and cron jobs: price, the move from the previous
+  close, the extended print with its own move from the regular close, the
+  day and 52 week ranges, volume and the source. It implies `--once`.
+  Absent figures are left out rather than sent as null, a symbol that
+  failed gets a row carrying its error, and warnings stay on stderr so
+  stdout is a valid document.
 
 ## 0.20.0 - 2026-09-10
 
