@@ -125,6 +125,8 @@ pub struct ChartConfig {
     pub volume: Option<bool>,
     /// Draw pre and post market candles too (yahoo only).
     pub extended_hours: Option<bool>,
+    /// Mark the ticker's news on the price chart.
+    pub news_markers: Option<bool>,
     pub sma_fast: Option<usize>,
     pub sma_slow: Option<usize>,
     pub rsi_period: Option<usize>,
@@ -163,6 +165,10 @@ pub struct ChartDefaults {
     /// Start with the extended sessions drawn. Only yahoo can answer it;
     /// the other sources have no pre or post market candles to draw.
     pub extended_hours: bool,
+    /// Start with the news marks on the price chart. They are drawn from
+    /// the news the app already holds for the ticker, so this costs no
+    /// request either way.
+    pub news_markers: bool,
     pub sma_fast: usize,
     pub sma_slow: usize,
     pub rsi_period: usize,
@@ -180,6 +186,7 @@ impl Default for ChartDefaults {
             rsi: true,
             volume: true,
             extended_hours: false,
+            news_markers: true,
             sma_fast: indicators::SMA_FAST,
             sma_slow: indicators::SMA_SLOW,
             rsi_period: indicators::RSI_PERIOD,
@@ -324,6 +331,9 @@ fn resolve_chart(raw: Option<&ChartConfig>, warnings: &mut Vec<String>) -> Chart
     }
     if let Some(v) = raw.extended_hours {
         out.extended_hours = v;
+    }
+    if let Some(v) = raw.news_markers {
+        out.news_markers = v;
     }
     out.sma_fast = period(raw.sma_fast, out.sma_fast, "sma_fast", 2..=250, warnings);
     out.sma_slow = period(raw.sma_slow, out.sma_slow, "sma_slow", 2..=250, warnings);
@@ -795,7 +805,7 @@ mod tests {
         );
 
         // A bad entry warns and keeps the default; the good one still lands.
-        let cfg: Config = toml::from_str("[keybindings]\nquit = \"supr\"\ncard = \"n\"").unwrap();
+        let cfg: Config = toml::from_str("[keybindings]\nquit = \"supr\"\ncard = \"u\"").unwrap();
         let (resolved, warnings) = resolve(&cfg, None);
         assert_eq!(warnings.len(), 2, "{warnings:?}");
         assert_eq!(
@@ -803,7 +813,7 @@ mod tests {
             Some(Action::Quit)
         );
         assert_eq!(
-            resolved.keymap.resolve(&KeyEvent::from(KeyCode::Char('n'))),
+            resolved.keymap.resolve(&KeyEvent::from(KeyCode::Char('u'))),
             Some(Action::Card)
         );
 

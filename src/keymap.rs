@@ -48,11 +48,12 @@ pub enum Action {
     AddTicker,
     RemoveTicker,
     ToggleExtended,
+    NewsMarkers,
 }
 
 /// Every action with its snake_case config name, the single source of truth
 /// for `[keybindings]` parsing and for the coverage test.
-pub const ACTIONS: [(Action, &str); 32] = [
+pub const ACTIONS: [(Action, &str); 33] = [
     (Action::Quit, "quit"),
     (Action::NextView, "next_view"),
     (Action::PrevView, "prev_view"),
@@ -85,6 +86,7 @@ pub const ACTIONS: [(Action, &str); 32] = [
     (Action::AddTicker, "add_ticker"),
     (Action::RemoveTicker, "remove_ticker"),
     (Action::ToggleExtended, "extended_hours"),
+    (Action::NewsMarkers, "news_markers"),
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -164,6 +166,8 @@ fn default_keys(action: Action) -> Vec<KeyCombo> {
         // Shift-E for Extended: e is taken by the average type, and the
         // lowercase letters left are all without a mnemonic.
         Action::ToggleExtended => vec![ch('E')],
+        // n for news: the marks the feed puts on the price chart.
+        Action::NewsMarkers => vec![ch('n')],
     }
 }
 

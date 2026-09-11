@@ -706,6 +706,125 @@ fn sma_slow_appears_with_warmup_history() {
     assert!(screen.contains("SMA100"), "screen:\n{screen}");
 }
 
+/// An article published at a given second, for the chart's news marks: the
+/// shared helper dates every row to the same fixed moment, which no
+/// candle series in these tests covers.
+fn article_at(title: &str, ts: i64, score: i64, sentiment: &str) -> Article {
+    let mut a = article(title, "AAPL", score, sentiment);
+    a.original.time_published = chrono::DateTime::from_timestamp(ts, 0)
+        .unwrap()
+        .to_rfc3339();
+    a
+}
+
+/// The news the app already holds for a ticker, marked on the candles it
+/// was published in: shape for the AI sentiment call, and the freshest
+/// headline on the bottom border. `n` takes them away again.
+#[test]
+fn chart_marks_the_tickers_news_on_its_candles() {
+    let mut app = fake_app();
+    app.view_idx = ui::view_index(ui::ViewId::Chart);
+    // Candle 20 of AAPL's series, and candle 6.
+    app.feeds.insert(
+        "AAPL".into(),
+        FeedBundle::new(
+            vec![
+                article_at("Apple wins the appeal", 1_700_006_000, 9, "positive"),
+                article_at("A supplier walks away", 1_700_001_900, 8, "negative"),
+            ],
+            None,
+            None,
+        ),
+    );
+    let screen = render(&mut app);
+    // The rail draws its own arrows, so only the panels count here.
+    let body = panels(&screen);
+    assert!(body.contains('▲'), "bullish mark missing:\n{screen}");
+    assert!(body.contains('▼'), "bearish mark missing:\n{screen}");
+    assert!(
+        body.contains("Apple wins the appeal"),
+        "the freshest headline is not on the border:\n{screen}"
+    );
+    assert!(
+        !body.contains("A supplier walks away"),
+        "only the freshest mark is named:\n{screen}"
+    );
+
+    press(&mut app, KeyCode::Char('n'));
+    assert!(!app.show_news_markers);
+    let screen = render(&mut app);
+    let body = panels(&screen);
+    assert!(!body.contains('▲'), "mark survived the toggle:\n{screen}");
+    assert!(
+        !body.contains("Apple wins the appeal"),
+        "headline survived the toggle:\n{screen}"
+    );
+}
+
+/// A story older than the window does not get pulled onto its left edge,
+/// where it would claim a move it had nothing to do with.
+#[test]
+fn chart_marks_ignore_news_older_than_the_window() {
+    let mut app = fake_app();
+    app.view_idx = ui::view_index(ui::ViewId::Chart);
+    app.feeds.insert(
+        "AAPL".into(),
+        FeedBundle::new(
+            vec![article_at(
+                "Long before the window",
+                1_699_900_000,
+                9,
+                "positive",
+            )],
+            None,
+            None,
+        ),
+    );
+    let body = panels(&render(&mut app)).to_string();
+    assert!(!body.contains('▲'), "an old row was marked:\n{body}");
+    assert!(!body.contains("Long before"), "and named:\n{body}");
+}
+
+/// Line mode cannot draw the sentiment shapes (the Chart widget owns its
+/// markers), so the marks become dots in the same colors, lifted off the
+/// close line so they are not hidden under it.
+#[test]
+fn line_mode_marks_the_news_with_dots() {
+    let mut app = fake_app();
+    app.view_idx = ui::view_index(ui::ViewId::Chart);
+    app.feeds.insert(
+        "AAPL".into(),
+        FeedBundle::new(
+            vec![article_at(
+                "Apple wins the appeal",
+                1_700_006_000,
+                9,
+                "positive",
+            )],
+            None,
+            None,
+        ),
+    );
+    press(&mut app, KeyCode::Char('c'));
+    assert_eq!(app.chart_style, ChartStyle::Line);
+    let body = panels(&render(&mut app)).to_string();
+    assert!(body.contains('•'), "no news dot in line mode:\n{body}");
+    assert!(body.contains("Apple wins the appeal"), "{body}");
+}
+
+/// The marks are a garnish on cached rows: the Chart view still fetches
+/// nothing, which is what keeps the free tier's 100 requests a day intact.
+#[test]
+fn chart_marks_never_cost_a_request() {
+    let (mut app, mut cmds) = empty_app_with_cmds(vec!["AAPL".into()]);
+    app.view_idx = ui::view_index(ui::ViewId::Chart);
+    app.ensure_alphai_data();
+    assert!(
+        cmds.try_recv().is_err(),
+        "the chart view asked for a feed of its own"
+    );
+}
+
 #[test]
 fn rsi_toggle_hides_panel() {
     let mut app = fake_app();
@@ -966,7 +1085,7 @@ fn view_ids_are_unique_and_indexable() {
 }
 
 /// The footer renders the keys actually bound in the keymap, in the
-/// traditional shapes ("↑↓ select", "c/m/i/b/e chart").
+/// traditional shapes ("↑↓ select", "c/m/i/b/e/n chart").
 #[test]
 fn footer_shows_bound_keys() {
     let mut app = fake_app();
@@ -974,7 +1093,7 @@ fn footer_shows_bound_keys() {
     assert!(screen.contains("q quit"), "screen:\n{screen}");
     assert!(screen.contains("tab/1-9 view"), "screen:\n{screen}");
     assert!(screen.contains("↑↓ select"), "screen:\n{screen}");
-    assert!(screen.contains("c/m/i/b/e chart"), "screen:\n{screen}");
+    assert!(screen.contains("c/m/i/b/e/n chart"), "screen:\n{screen}");
     app.view_idx = ui::view_index(ui::ViewId::News);
     let screen = render(&mut app);
     assert!(screen.contains("⏎ open"), "screen:\n{screen}");
@@ -988,7 +1107,7 @@ fn footer_and_dispatch_follow_a_remap() {
     let mut app = fake_app();
     let mut warnings = Vec::new();
     app.keymap = crate::keymap::Keymap::from_config(
-        [("open", vec!["w"]), ("card", vec!["n"])],
+        [("open", vec!["w"]), ("card", vec!["u"])],
         &mut warnings,
     );
     assert!(warnings.is_empty(), "{warnings:?}");
@@ -1010,7 +1129,7 @@ fn footer_and_dispatch_follow_a_remap() {
         !app.article_overlay.open,
         "the replaced default still fired"
     );
-    press(&mut app, KeyCode::Char('n'));
+    press(&mut app, KeyCode::Char('u'));
     assert!(app.article_overlay.open, "the remapped key did not fire");
 }
 

@@ -55,6 +55,7 @@ static ROWS: &[Row] = &[
     Row::Act(Action::ToggleSma, "toggle the moving average overlays"),
     Row::Act(Action::ToggleRsi, "toggle the RSI panel"),
     Row::Act(Action::ToggleVolume, "toggle the volume panel"),
+    Row::Act(Action::NewsMarkers, "mark the ticker's news on the candles"),
     Row::Act(
         Action::ToggleExtended,
         "draw pre and post market candles (yahoo)",

@@ -109,6 +109,15 @@ simple or exponential, `t` cycles interval presets, and `E` draws the pre
 and post market candles too (on Yahoo, the one source here that reports
 them).
 
+The ticker's news is marked on the candles it was published in: `▲` and
+`▼` for the AI sentiment call, `◆` when it is neutral, brighter for a
+higher relevance score, and the freshest of them named on the bottom
+border. So the move and its reason share a column instead of living in
+different views. `n` turns the marks off. They are drawn from the news the
+app already holds for that ticker, which the Split and News views keep
+fresh, so they never cost an API request and they are simply absent until
+one of those views has loaded that ticker's feed.
+
 The client quietly fetches more history than the window shows, so the
 average and RSI lines are fully drawn from the first candle on screen
 instead of warming up over the next hundred. Like a trading terminal, the
@@ -193,7 +202,7 @@ chain and no position tracking.
 |---|---|---|---|
 | Price charts | candles, line, SMA/EMA, RSI, volume | line, candle, kagi, volume | none |
 | Whole watchlist at once | summary grid, table with sparklines | summary pane | quote table |
-| News with per-article analysis | yes | no | no |
+| News with per-article analysis | yes, and marked on the price chart | no | no |
 | SEC Form 4 insider activity | chart and filing stream | no | no |
 | Earnings filing reads | yes | no | no |
 | Extended hours | price and candles | candles | price |
@@ -344,6 +353,7 @@ defaults. API keys can also come from env vars, which win over the config:
 | `e` | chart, split | average them simple (SMA) or exponential (EMA) |
 | `i` | chart, split | toggle the RSI(14) panel |
 | `b` | chart, split | toggle the volume panel |
+| `n` | chart, split | mark the ticker's cached news on the candles |
 | `t` / `T` | everywhere | cycle candle interval presets forward / back (each interval with a matching history window; the list is configurable as `[chart] presets`) |
 | `r` | everywhere | refresh prices and the visible news view |
 | `z` | everywhere | bare mode: hide the header and footer, giving both rows to the view |
@@ -492,8 +502,8 @@ persists the watchlist on screen. Every key is optional. A misspelled value
 in the `[ui]`, `[chart]`, `[theme]` or `[keybindings]` sections prints a
 warning on startup and keeps that entry's default; only a TOML syntax error
 makes the whole file fall back to defaults. The `[ui]` and `[chart]` sections set startup
-defaults; the session keys (`x`, `f`, `g`, `+`, `-`, `c`, `m`, `i`, `b`, `e`, `t`) still
-change everything live without persisting it:
+defaults; the session keys (`x`, `f`, `g`, `+`, `-`, `c`, `m`, `i`, `b`, `e`, `n`, `t`)
+still change everything live without persisting it:
 
 ```toml
 source = "yahoo"
@@ -528,6 +538,7 @@ ma_type = "sma"           # sma | ema, both using the periods below
 rsi = true                # RSI panel visible at start
 volume = true             # volume panel visible at start
 extended_hours = false    # draw pre and post market candles (yahoo only)
+news_markers = true       # mark the ticker's cached news on the candles
 sma_fast = 20             # 2 to 250
 sma_slow = 100            # 2 to 250; also sizes the history warm-up
 rsi_period = 14           # 2 to 100
@@ -617,8 +628,9 @@ The actions: `quit`, `next_view`, `prev_view`, `settings`, `help`,
 `refresh`, `up`, `down`, `left`, `right`, `page_up`, `page_down`, `open`,
 `card`, `cycle_scope`, `cycle_layout`, `score_up`, `score_down`,
 `insider_chart`, `chart_style`, `toggle_sma`, `toggle_rsi`,
-`toggle_volume`, `ma_type`, `next_preset`, `prev_preset`, `next_theme`,
-`prev_theme`.
+`toggle_volume`, `news_markers`, `ma_type`, `next_preset`, `prev_preset`,
+`next_theme`, `prev_theme`, `toggle_bare`, `add_ticker`, `remove_ticker`,
+`extended_hours`.
 The `?` help overlay shows this list with the current keys next to it.
 
 Reserved and never remappable: `ctrl-c` (force quit), `esc`, the digits

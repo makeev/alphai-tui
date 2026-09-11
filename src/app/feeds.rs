@@ -242,6 +242,17 @@ impl App {
         self.feeds.get(&key).map(|b| b.articles.as_slice())
     }
 
+    /// The ticker-scoped news rows already in the cache, for the price
+    /// chart's news marks. Read-only on purpose: the chart never asks for a
+    /// feed of its own, it garnishes what the News and Split views have
+    /// loaded, so the marks cost no request (and are simply absent until
+    /// one of those views has fetched the ticker).
+    pub(crate) fn ticker_articles(&self, symbol: &str) -> &[Article] {
+        self.feeds
+            .get(symbol)
+            .map_or(&[][..], |b| b.articles.as_slice())
+    }
+
     /// The cached read for one article uid, from any ticker in the cache.
     /// The card needs it in the market and trending scopes too, where the
     /// selected watchlist symbol has nothing to do with the article on

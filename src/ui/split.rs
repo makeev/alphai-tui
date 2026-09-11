@@ -34,12 +34,15 @@ impl View for SplitView {
                     Action::ToggleRsi,
                     Action::ToggleVolume,
                     Action::MaType,
+                    Action::NewsMarkers,
                 ],
                 "chart",
             ),
             Hint::act(&[Action::NextPreset], "interval"),
             Hint::act(&[Action::Refresh], "refresh"),
-            Hint::act(&[Action::Settings], "settings"),
+            // No settings hint: with the news marks key this line is the
+            // widest in the app after the News one, it has to fit 110
+            // columns, and the help overlay lists s anyway.
             Hint::act(&[Action::Help], "help"),
         ];
         HINTS

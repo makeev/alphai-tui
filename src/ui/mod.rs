@@ -5,6 +5,7 @@ pub mod help;
 pub mod insider;
 pub mod insider_chart;
 pub mod news;
+pub mod news_marks;
 pub mod prompt;
 pub mod rail;
 pub mod settings;

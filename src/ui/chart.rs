@@ -12,6 +12,7 @@ use crate::domain::{Candle, Quote, Range, TickerData, fmt_price, fmt_volume};
 use crate::indicators;
 use crate::keymap::Action;
 use crate::theme::Theme;
+use crate::ui::news_marks;
 use crate::ui::{Hint, View, ViewId};
 
 pub struct ChartView;
@@ -39,6 +40,7 @@ impl View for ChartView {
                     Action::ToggleRsi,
                     Action::ToggleVolume,
                     Action::MaType,
+                    Action::NewsMarkers,
                 ],
                 "chart",
             ),
@@ -252,6 +254,17 @@ fn chart_title(symbol: &str, data: &TickerData, app: &App, flash: Option<bool>) 
     Line::from(spans)
 }
 
+/// The chart's bottom border when the news marks have something to name:
+/// the freshest of them, with its headline. Shared by both chart modes.
+fn headline(
+    marks: &[news_marks::Mark],
+    symbol: &str,
+    width: u16,
+    theme: &Theme,
+) -> Option<Line<'static>> {
+    news_marks::headline(news_marks::latest(marks)?, symbol, width, theme)
+}
+
 /// Clock labels inside a ~day, dates beyond: "19:00" is ambiguous once the
 /// window spans several days (e.g. the 1mo/60m preset).
 fn axis_time_fmt(first_ts: i64, last_ts: i64) -> &'static str {
@@ -300,6 +313,24 @@ fn render_price_line(
     // and the last-price marker must stay on screen.
     lo = lo.min(q.price);
     hi = hi.max(q.price);
+    // News marks ride above the close line, and folding them into the
+    // range keeps the highest one on screen.
+    let marks = if app.show_news_markers {
+        news_marks::place(app.ticker_articles(symbol), visible)
+    } else {
+        Vec::new()
+    };
+    // Far enough above it that a dot reads as a mark and not as a hole in
+    // the line: one terminal row covers four braille rows, so a small
+    // offset lands the dot inside the very cell the line is drawn in.
+    let lift = (hi - lo) * 0.08;
+    let mark_points: Vec<(f64, f64)> = marks
+        .iter()
+        .map(|mark| (mark.col as f64, visible[mark.col].close + lift))
+        .collect();
+    for &(_, y) in &mark_points {
+        hi = hi.max(y);
+    }
     let pad = ((hi - lo) * 0.05).max(hi.abs() * 0.0005).max(1e-9);
     let (y_lo, y_hi) = (lo - pad, hi + pad);
     let x_hi = (points.len() - 1) as f64;
@@ -384,6 +415,18 @@ fn render_price_line(
                 .data(&marker_points),
         );
     }
+    // Last, so the marks sit on top of everything. The Chart widget draws
+    // its own points, so line mode gets plain dots where the candle chart
+    // gets the sentiment shapes; the border headline names the freshest.
+    if !mark_points.is_empty() {
+        datasets.push(
+            Dataset::default()
+                .marker(symbols::Marker::Dot)
+                .graph_type(GraphType::Scatter)
+                .style(Style::new().fg(app.theme.accent))
+                .data(&mark_points),
+        );
+    }
 
     let fmt = axis_time_fmt(visible[0].ts, time_at(visible, x_max));
     let x_labels = vec![
@@ -397,12 +440,15 @@ fn render_price_line(
         fmt_price(y_hi),
     ];
 
+    let mut block = app
+        .theme
+        .panel()
+        .title(chart_title(symbol, data, app, flash));
+    if let Some(line) = headline(&marks, symbol, area.width, &app.theme) {
+        block = block.title_bottom(line);
+    }
     let chart = Chart::new(datasets)
-        .block(
-            app.theme
-                .panel()
-                .title(chart_title(symbol, data, app, flash)),
-        )
+        .block(block)
         .x_axis(
             Axis::default()
                 .bounds([0.0, x_max])
@@ -462,8 +508,10 @@ fn render_price_candles(
         .theme
         .panel()
         .title(chart_title(symbol, data, app, flash));
+    // Titles live on the border row, so the inner area is known before the
+    // bottom one is: the block itself is rendered further down, once the
+    // candle columns (and with them the news marks) are laid out.
     let inner = block.inner(area);
-    f.render_widget(block, area);
 
     // Aggregation preserves the visible low/high, so the y-range can be
     // folded over the raw visible candles before the downsampling decision.
@@ -490,6 +538,7 @@ fn render_price_candles(
     ];
     let gutter = y_labels.iter().map(|s| s.chars().count()).max().unwrap() as u16 + 1;
     if inner.width <= gutter + 2 || inner.height <= 2 {
+        f.render_widget(block, area);
         return None; // too small: leave the bare block
     }
     let plot = Rect {
@@ -525,6 +574,19 @@ fn render_price_candles(
     let slot = (max_cols / n).clamp(2, 4) as u16;
     let body_w = slot - 1;
     let slot_x = |i: usize| plot.x + usable - (n - i) as u16 * slot;
+
+    // The ticker's news, placed on the candles it was published in. Read
+    // from the cache the News and Split views fill, so this costs nothing.
+    let marks = if app.show_news_markers {
+        news_marks::place(app.ticker_articles(symbol), &display)
+    } else {
+        Vec::new()
+    };
+    let block = match headline(&marks, symbol, area.width, &app.theme) {
+        Some(line) => block.title_bottom(line),
+        None => block,
+    };
+    f.render_widget(block, area);
 
     let buf = f.buffer_mut();
 
@@ -592,6 +654,18 @@ fn render_price_candles(
             }
         }
         overlay.blit(buf, plot);
+    }
+
+    // News marks: one glyph per candle that carried a story, sitting just
+    // above its high, so the move and its reason share a column. Drawn
+    // after the averages, which a mark may safely overwrite.
+    for mark in &marks {
+        let x = slot_x(mark.col) + (slot - body_w) + body_w / 2;
+        let top = (scale(display[mark.col].high, y_lo, y_hi, plot.height as usize * 2) / 2) as u16;
+        let (ch, style) = news_marks::glyph(mark.article, symbol, &app.theme);
+        if let Some(cell) = buf.cell_mut((x, plot.y + top.saturating_sub(1))) {
+            cell.set_char(ch).set_style(style);
+        }
     }
 
     // Last-price marker in the right margin: a line at the quote's level

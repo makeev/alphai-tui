@@ -5,6 +5,25 @@ the crates.io releases; from 0.7.0 on each one is also a git tag and a
 GitHub release with prebuilt binaries. The Homebrew tap, the AUR and the
 apt repository joined later, and carry every version since.
 
+## 0.21.0 - 2026-09-11
+
+- The price chart marks the ticker's news on the candles it was published
+  in: `▲` or `▼` for the AI sentiment call, `◆` when it is neutral, dimmer
+  or brighter with the relevance score, and the freshest of them named on
+  the chart's bottom border. The scored news was the one thing here no
+  other terminal stock tool has, and it lived in a view of its own, so a
+  chart-first reader never saw it; now the move and its reason share a
+  column. `n` toggles the marks, `[chart] news_markers = false` starts
+  without them, and the action is rebindable as `news_markers`.
+- The marks cost no API request. They are drawn from the news bundle the
+  Split and News views already keep fresh for the selected ticker, which
+  also means they are absent until one of those views has loaded it.
+- Rows older than the first candle on screen are dropped rather than
+  pinned to the left edge, and a candle that carried several stories keeps
+  the highest-scoring one, so a busy day stays readable.
+- The Split view's footer drops its `s settings` hint to stay inside 110
+  columns, the way the News footer already does. `?` still lists it.
+
 ## 0.20.0 - 2026-09-10
 
 - `E` draws the pre and post market candles on the chart, not just the

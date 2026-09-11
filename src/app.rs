@@ -243,6 +243,10 @@ pub struct App {
     pub show_sma: bool,
     pub show_rsi: bool,
     pub show_volume: bool,
+    /// Whether the price chart marks the ticker's news on its candles
+    /// (`n`, `[chart] news_markers`). The marks are drawn from the feed
+    /// already in the cache, so they never cost a request.
+    pub show_news_markers: bool,
     pub ma_type: MaType,
     /// Validated [chart] values: indicator periods and the t/T preset cycle.
     pub chart: ChartDefaults,
@@ -346,6 +350,7 @@ impl App {
             show_sma: init.chart.sma,
             show_rsi: init.chart.rsi,
             show_volume: init.chart.volume,
+            show_news_markers: init.chart.news_markers,
             ma_type: init.chart.ma_type,
             chart: init.chart,
             feeds: HashMap::new(),
@@ -605,6 +610,7 @@ impl App {
             Action::ToggleSma if chart_view => self.show_sma = !self.show_sma,
             Action::ToggleRsi if chart_view => self.show_rsi = !self.show_rsi,
             Action::ToggleVolume if chart_view => self.show_volume = !self.show_volume,
+            Action::NewsMarkers if chart_view => self.show_news_markers = !self.show_news_markers,
             Action::MaType if chart_view => {
                 self.ma_type = match self.ma_type {
                     MaType::Sma => MaType::Ema,
