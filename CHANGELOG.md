@@ -58,6 +58,9 @@ apt repository joined later, and carry every version since.
 
 ## 0.21.0 - 2026-09-11
 
+Never tagged on its own: everything below shipped with 0.22.0, whose
+release notes carry it too.
+
 - The price chart marks the ticker's news on the candles it was published
   in: `▲` or `▼` for the AI sentiment call, `◆` when it is neutral, dimmer
   or brighter with the relevance score, and the freshest of them named on
