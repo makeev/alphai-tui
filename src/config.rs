@@ -13,6 +13,7 @@ use crate::app::{ChartStyle, InsiderChartWindow, NewsLayout, NewsScope, RANGE_PR
 use crate::domain::{Interval, Range};
 use crate::indicators::{self, MaType};
 use crate::keymap::Keymap;
+use crate::portfolio::Position;
 use crate::theme::Theme;
 use crate::ui;
 
@@ -76,6 +77,13 @@ pub struct Config {
     /// degrades the whole file.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub keybindings: Option<BTreeMap<String, KeysSpec>>,
+    /// `[[positions]]`: what the user holds, one entry per ticker, with
+    /// the quantity and the average price paid. Validated in `resolve`,
+    /// per entry like every other section. Declared last on purpose:
+    /// `toml` serializes in field order, and a scalar written after an
+    /// array of tables would be parsed back as part of it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub positions: Vec<Position>,
 }
 
 /// Keys of one `[keybindings]` action: a bare string or a list of them.
@@ -154,6 +162,8 @@ pub struct Resolved {
     pub chart: ChartDefaults,
     pub ui: UiDefaults,
     pub keymap: Keymap,
+    /// `[[positions]]`, validated; empty when the section is absent.
+    pub positions: Vec<Position>,
 }
 
 /// Validated `[chart]` values; `Default` is the traditional look. The
@@ -276,6 +286,7 @@ pub fn resolve(cfg: &Config, cli_theme: Option<&str>) -> (Resolved, Vec<String>)
             .map(|(name, spec)| (name.as_str(), spec.as_list())),
         &mut warnings,
     );
+    let positions = resolve_positions(&cfg.positions, &mut warnings);
     (
         Resolved {
             theme,
@@ -283,9 +294,48 @@ pub fn resolve(cfg: &Config, cli_theme: Option<&str>) -> (Resolved, Vec<String>)
             chart,
             ui,
             keymap,
+            positions,
         },
         warnings,
     )
+}
+
+/// `[[positions]]`: a broken entry warns and is dropped, the rest stand.
+/// Symbols are upper-cased the way the watchlist is, so a holding written
+/// in lower case still meets its quote.
+fn resolve_positions(raw: &[Position], warnings: &mut Vec<String>) -> Vec<Position> {
+    let mut out: Vec<Position> = Vec::new();
+    for entry in raw {
+        let symbol = entry.symbol.trim().to_uppercase();
+        if symbol.is_empty() {
+            warnings.push("[[positions]]: an entry has no symbol, skipping it".to_string());
+            continue;
+        }
+        if !entry.qty.is_finite() || entry.qty == 0.0 {
+            warnings.push(format!(
+                "[[positions]] {symbol}: qty must be a non-zero number, skipping it"
+            ));
+            continue;
+        }
+        if !entry.avg_price.is_finite() || entry.avg_price < 0.0 {
+            warnings.push(format!(
+                "[[positions]] {symbol}: avg_price must be zero or more, skipping it"
+            ));
+            continue;
+        }
+        if out.iter().any(|kept| kept.symbol == symbol) {
+            warnings.push(format!(
+                "[[positions]] {symbol}: listed twice, keeping the first entry"
+            ));
+            continue;
+        }
+        out.push(Position {
+            symbol,
+            qty: entry.qty,
+            avg_price: entry.avg_price,
+        });
+    }
+    out
 }
 
 /// `[ui] borders`: the line set panel frames draw with. Lives in `[ui]`
@@ -586,11 +636,20 @@ pub fn save_to(p: &Path, cfg: &Config) -> Result<()> {
         std::fs::create_dir_all(dir).context("create config dir failed")?;
     }
     let raw = toml::to_string_pretty(cfg).context("serialize failed")?;
-    std::fs::write(p, raw).context("write failed")?;
+    // Written beside the target and renamed over it. The position prompt
+    // saves on every edit, so a torn write is no longer a once-a-session
+    // risk, and this file also holds the API keys. The mode is set on the
+    // temporary file, before it takes the real name.
+    let tmp = p.with_extension(format!("toml.tmp{}", std::process::id()));
+    std::fs::write(&tmp, raw).context("write failed")?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o600));
+        let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600));
+    }
+    if let Err(e) = std::fs::rename(&tmp, p) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e).context("replace failed");
     }
     Ok(())
 }
@@ -607,6 +666,46 @@ mod tests {
         label: "test",
     };
 
+    /// Every section validates per entry: a broken holding warns and is
+    /// dropped, the rest of the list still loads.
+    #[test]
+    fn bad_positions_warn_and_are_dropped() {
+        let cfg: Config = toml::from_str(
+            r#"
+[[positions]]
+symbol = "aapl"
+qty = 12
+avg_price = 182.31
+
+[[positions]]
+symbol = "MSFT"
+qty = 0
+avg_price = 400
+
+[[positions]]
+symbol = "NVDA"
+qty = 3
+avg_price = -1
+
+[[positions]]
+symbol = "AAPL"
+qty = 5
+avg_price = 100
+"#,
+        )
+        .unwrap();
+        let (resolved, warnings) = resolve(&cfg, None);
+        assert_eq!(resolved.positions.len(), 1);
+        // Upper-cased like the watchlist, or the holding would never meet
+        // its quote.
+        assert_eq!(resolved.positions[0].symbol, "AAPL");
+        assert_eq!(resolved.positions[0].qty, 12.0);
+        assert_eq!(warnings.len(), 3, "{warnings:?}");
+        assert!(warnings.iter().any(|w| w.contains("MSFT")), "{warnings:?}");
+        assert!(warnings.iter().any(|w| w.contains("NVDA")), "{warnings:?}");
+        assert!(warnings.iter().any(|w| w.contains("twice")), "{warnings:?}");
+    }
+
     #[test]
     fn round_trip() {
         let dir = std::env::temp_dir().join(format!("alphai-tui-test-{}", std::process::id()));
@@ -619,6 +718,11 @@ mod tests {
             interval: Some("15m".into()),
             source_fallback: Some(false),
             news_open: Some("original".into()),
+            positions: vec![Position {
+                symbol: "AAPL".into(),
+                qty: 12.0,
+                avg_price: 182.31,
+            }],
             keys: BTreeMap::from([
                 ("finnhub".to_string(), "fh-key".to_string()),
                 ("alphai".to_string(), "ak_live_x".to_string()),

@@ -22,6 +22,7 @@ use ratatui::widgets::Paragraph;
 use crate::app::App;
 use crate::domain::{Candle, Quote, fmt_price, fmt_volume};
 use crate::market::{self, Session};
+use crate::portfolio::fmt_signed;
 use crate::theme::Theme;
 use crate::ui::chart::{dir_color, flash_style, move_color};
 use crate::ui::table::spark_line;
@@ -147,6 +148,12 @@ fn optional_zones(app: &App, symbol: &str, now: DateTime<Utc>) -> Vec<Vec<Vec<Sp
         ]);
     }
     zones.push(extended_zone(quote, now, theme));
+    zones.push(position_zone(
+        app,
+        symbol,
+        crate::portfolio::price(quote),
+        theme,
+    ));
     zones.push(session_zone(app, symbol, now));
     if let Some(note) = app.source_delay {
         zones.push(vec![vec![Span::styled(
@@ -178,6 +185,38 @@ fn optional_zones(app: &App, symbol: &str, now: DateTime<Utc>) -> Vec<Vec<Vec<Sp
         )]]);
     }
     zones
+}
+
+/// What this ticker has made its holder, for the rows that are held. It
+/// sits ahead of the session badge on purpose: someone who owns the name
+/// reads their own number first, and the badge says the same thing for
+/// every symbol on the list. Absent for a ticker that is only watched, so
+/// it costs nothing to the rest of the line.
+fn position_zone(app: &App, symbol: &str, price: f64, theme: &Theme) -> Vec<Vec<Span<'static>>> {
+    let Some(position) = app.position(symbol) else {
+        return Vec::new();
+    };
+    let pnl = position.pnl(price);
+    let style = Style::new().fg(move_color(Some(pnl), theme));
+    let money = fmt_signed(pnl);
+    let pct = position.pnl_pct(price);
+    let mut forms = Vec::new();
+    if let Some(pct) = pct {
+        forms.push(vec![Span::styled(
+            format!("  ×{} {money} {pct:+.2}%", position.qty),
+            style,
+        )]);
+        forms.push(vec![Span::styled(format!("  {money} {pct:+.2}%"), style)]);
+        forms.push(vec![Span::styled(format!("  {pct:+.2}%"), style)]);
+    } else {
+        // No cost basis to measure against, so the money is all there is.
+        forms.push(vec![Span::styled(
+            format!("  ×{} {money}", position.qty),
+            style,
+        )]);
+        forms.push(vec![Span::styled(format!("  {money}"), style)]);
+    }
+    forms
 }
 
 /// The extended-hours print, when there is one, measured against the

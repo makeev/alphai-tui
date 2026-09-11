@@ -32,14 +32,15 @@ carries that ticker's price into all of them.
 
 ### The quote rail, in every view
 
-![alphai-tui quote rail: symbol and price, the day's change, the pre-market print measured against the close, the session badge with a countdown to the opening bell, the feed delay, the day range with the price marked in it, a sparkline and the day's volume](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/rail.png)
+![alphai-tui quote rail: symbol and price, the day's change, the pre-market print measured against the close, what the holding in that ticker has made, the session badge with a countdown to the opening bell, the feed delay and the day range with the price marked in it](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/rail.png)
 
 Price, the change on the day, the extended-hours print measured against the
-regular close, what the US market is doing right now (pre, live, post or
-closed) and how long until the next bell, whether the feed is delayed, where
-the price sits between the day's low and high, and, where the source reports
-them, the year's range and the day's volume. The rest of the watchlist
-follows as percentages.
+regular close, what you are up or down on the ticker if you hold any of it,
+what the US market is doing right now (pre, live, post or closed) and how
+long until the next bell, whether the feed is delayed, where the price sits
+between the day's low and high, and, where the source reports them and the
+terminal is wide enough, the year's range and the day's volume. The rest of
+the watchlist follows as percentages.
 
 So the News, Insider and Earnings views are never a ticker name with no
 price attached, and moving between tickers with the arrow keys is not a
@@ -174,6 +175,34 @@ name, so one glance covers the shape of the session across the whole list.
 `↑` `↓` move between cards and page the grid when the watchlist outgrows the
 screen.
 
+### 8 Portfolio: what you hold and what it did
+
+![alphai-tui portfolio view: three holdings with quantity, average price, last price, value, the day's move in money, profit and loss with its percentage and the share of the portfolio, and a total row underneath](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/portfolio.png)
+
+What the watchlist cannot answer: the price times what you own of it. One
+row per holding with its quantity, average price, value, the day's move in
+money, the profit or loss since you bought and the share of the portfolio
+it carries, and a total underneath. `p` opens a one-line prompt on the
+ticker under the cursor, prefilled with what is held, so a correction is
+two keystrokes and an emptied line drops the holding; the quantity and the
+price are written to the config file right away rather than waiting for
+Save. A holding that is not on the watchlist is polled all the same, so
+every row has a price, and a row still waiting for its first one says so
+instead of counting as zero. The same numbers turn up as two extra columns
+in the Table view and as a zone in the quote rail, but only for the
+tickers you actually hold.
+
+Holdings use the premarket or after-hours price when the source reports
+one, falling back to the regular quote otherwise. This applies to `Last`,
+value, P&L, totals and the holding figures in the table and quote rail,
+independently of the `E` candle toggle. An extended `Last` carries a `*`.
+During premarket, `Day` starts at the latest regular close; after hours,
+it includes both the regular session and the extended move.
+
+There is no currency conversion here and there is not going to be one: if
+the holdings quote in more than one currency, the total says `mixed
+currencies` rather than pretending the sum means something.
+
 ### Everywhere: help, settings, themes
 
 ![alphai-tui help overlay: the full key table with the config name of every action next to it, drawn over the summary grid](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/help.png)
@@ -182,7 +211,7 @@ screen.
 use in the config to rebind it. `s` opens the settings: price source, API
 keys, poll interval (applied immediately), color theme and where Enter opens
 an article. Save writes all of it, plus the watchlist on screen, to the
-config file. `p` and `P` walk the color presets live, `z` hides the header
+config file. `}` and `{` walk the color presets live, `z` hides the header
 and the footer for a tmux pane that carries its own status bar, and `r`
 refreshes prices and the visible feed.
 
@@ -196,7 +225,7 @@ widely used and is built around tracking what you own.
 
 The short version: both are built around the price. This one puts the
 filings and the scored news next to it, and pays for that with no options
-chain and no position tracking.
+chain and a simpler idea of a position.
 
 | | alphai-tui | tickrs | ticker |
 |---|---|---|---|
@@ -207,7 +236,7 @@ chain and no position tracking.
 | Earnings filing reads | yes | no | no |
 | Extended hours | price and candles | candles | price |
 | Options chain | no | yes | no |
-| Positions and P&L | no | quantity and average price | cost-basis lots, groups, currencies |
+| Positions and P&L | quantity and average price, in a view of its own | quantity and average price | cost-basis lots, groups, currencies |
 | Export for scripts | `--once` text, `--json` | no | CSV and JSON |
 | Price sources | Yahoo, Finnhub, Alpaca | Yahoo | Yahoo, Coinbase |
 | A source that stops answering | cached start, automatic switch | no | no |
@@ -216,10 +245,11 @@ chain and no position tracking.
 
 **What they do better.** tickrs has an options chain with calls and puts
 by expiry, which this has nothing to answer with, and a kagi chart if that
-is how you read price. ticker has the most complete position tracking of
-the three: several cost-basis lots per holding, named groups, currency
-conversion, and `ticker print` for piping into something else. If what you
-want is a portfolio view, ticker is the one to reach for.
+is how you read price. ticker still has the most complete position
+tracking of the three: several cost-basis lots per holding, named groups
+and currency conversion, where this one keeps a single average price per
+ticker and sums in whatever currency the quotes come back in. If you track
+lots across currencies, ticker is the one to reach for.
 
 **One thing worth knowing.** Yahoo rate-limits by IP, and every tool here
 depends on it, this one included. Three price sources is the hedge: if
@@ -355,6 +385,16 @@ alphai-tui --json AAPL | jq -r '.[0] | "\(.symbol) \(.price) \(.change_pct)%"'
 ]
 ```
 
+A ticker you hold also carries a `position` object with `qty`,
+`avg_price`, `cost`, `price` (the price used to value the holding,
+including extended trading), `value`, `pnl`, and `pnl_pct` and `day_pnl` when
+those can be worked out, so a status bar can show the money rather than
+the price:
+
+```sh
+alphai-tui --json AAPL | jq -r '.[0].position | "\(.pnl) (\(.pnl_pct)%)"'
+```
+
 `symbol` and `price` are always there; the rest depends on what the source
 answers, and a figure it does not answer is left out rather than sent as
 null. `change` and `change_pct` count from the previous close, while the
@@ -420,10 +460,11 @@ defaults. API keys can also come from env vars, which win over the config:
 
 | Key | Where | Action |
 |-----|-------|--------|
-| `Tab` / `1`..`7` | everywhere | switch view |
+| `Tab` / `1`..`8` | everywhere | switch view |
 | `↑` `↓` / `j` `k` | table, chart, split | select ticker |
 | `a` | everywhere | add a ticker: type the symbol, `Enter` adds it, `Esc` cancels |
 | `d` | everywhere | remove the selected ticker (the last one stays) |
+| `p` | everywhere | set what you hold of the ticker: `qty avg`, `Enter` saves it to the config, an empty line clears it |
 | `↑` `↓` / `j` `k` | news, insider | scroll articles |
 | `↑` `↓` / `j` `k` | earnings | scroll the read |
 | `←` `→` / `h` `l` | news, insider, earnings | switch ticker |
@@ -447,7 +488,7 @@ defaults. API keys can also come from env vars, which win over the config:
 | `t` / `T` | everywhere | cycle candle interval presets forward / back (each interval with a matching history window; the list is configurable as `[chart] presets`) |
 | `r` | everywhere | refresh prices and the visible news view |
 | `z` | everywhere | bare mode: hide the header and footer, giving both rows to the view |
-| `p` / `P` | everywhere | next / previous color preset (session-only until Save) |
+| `}` / `{` | everywhere | next / previous color preset (session-only until Save) |
 | `s` | everywhere | settings |
 | `?` | everywhere | help overlay: every action with its current keys |
 | `q` / `Esc` / `Ctrl-C` | everywhere | quit |
@@ -639,7 +680,7 @@ alpaca_key_id = ""
 alpaca_secret = ""
 
 [ui]
-default_view = "split"    # split | news | table | chart | insider | earnings
+default_view = "split"    # split | news | table | chart | insider | earnings | summary | portfolio
 quote_rail = true         # the price line under the tabs
 bare = false              # start with no header and no footer (--bare, z)
 news_layout = "side"      # side | stacked
@@ -669,7 +710,26 @@ presets = [               # the combos the t and T keys cycle
   ["6mo", "1d"],
   ["1y", "1d"],
 ]
+
+# What you hold, one entry per ticker. The p key writes these for you and
+# saves them here immediately; editing them by hand works just as well.
+# A ticker listed here is polled even when it is not on the watchlist.
+[[positions]]
+symbol = "AAPL"
+qty = 12
+avg_price = 182.31
+
+[[positions]]
+symbol = "BTC-USD"
+qty = 0.25
+avg_price = 58200
 ```
+
+A quantity may be fractional, for crypto or for a broker that sells
+slices, and negative for a short, in which case a falling price is a
+profit. `avg_price` is what one unit cost on average: this is not a ledger
+and it does not keep lots, so a second buy means updating the average
+yourself (or letting `p` overwrite the line).
 
 ### Colors
 
@@ -680,9 +740,9 @@ presets = [               # the combos the t and T keys cycle
 preset = "catppuccin-mocha"
 ```
 
-![alphai-tui cycling through its color presets with the p key: catppuccin mocha, macchiato and frappe, dracula, gruvbox and nord](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/themes.gif)
+![alphai-tui cycling through its color presets: catppuccin mocha, macchiato and frappe, dracula, gruvbox and nord](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/themes.gif)
 
-`p` and `P` walk the presets live, `--theme catppuccin-mocha` picks one
+`}` and `{` walk the presets live, `--theme catppuccin-mocha` picks one
 for a single run, and the Theme row in the settings screen (`s`) does
 both: `←` `→` cycle it with a live preview, Save writes it here.
 
@@ -749,7 +809,7 @@ The actions: `quit`, `next_view`, `prev_view`, `settings`, `help`,
 `insider_chart`, `chart_style`, `toggle_sma`, `toggle_rsi`,
 `toggle_volume`, `news_markers`, `ma_type`, `next_preset`, `prev_preset`,
 `next_theme`, `prev_theme`, `toggle_bare`, `add_ticker`, `remove_ticker`,
-`extended_hours`.
+`position`, `extended_hours`.
 The `?` help overlay shows this list with the current keys next to it.
 
 Reserved and never remappable: `ctrl-c` (force quit), `esc`, the digits

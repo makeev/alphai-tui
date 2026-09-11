@@ -7,6 +7,7 @@ mod indicators;
 mod keymap;
 mod market;
 mod poller;
+mod portfolio;
 mod source;
 mod theme;
 mod ui;
@@ -108,8 +109,11 @@ fn main() -> Result<()> {
     // A poll cycle spends `reqs_per_symbol` per ticker: a watchlist long
     // enough to outrun the plan's ceiling turns tickers into error rows,
     // which reads as a broken key rather than as a budget.
+    // Holdings off the watchlist are polled too, so they count here: a
+    // budget warning that ignored them would understate the real load.
+    let polled = portfolio::polled_symbols(&symbols, &resolved.positions);
     if let Some(info) = source::registry::find(&source_name)
-        && let Some(msg) = source::registry::rate_warning(info, symbols.len(), every.max(2))
+        && let Some(msg) = source::registry::rate_warning(info, polled.len(), every.max(2))
     {
         eprintln!("warning: {msg}");
     }
@@ -128,6 +132,7 @@ fn main() -> Result<()> {
             &rt,
             source,
             &symbols,
+            &resolved.positions,
             range,
             interval,
             args.json.then_some(source_name.as_str()),
@@ -150,7 +155,7 @@ fn main() -> Result<()> {
         Arc::new(RwLock::new(Duration::from_secs(every.max(2))));
     // The watchlist is shared rather than moved: the add and remove keys
     // edit it live and the poller picks the change up on its next tick.
-    let shared_symbols: poller::SharedSymbols = Arc::new(RwLock::new(symbols.clone()));
+    let shared_symbols: poller::SharedSymbols = Arc::new(RwLock::new(polled.clone()));
     // Last-good prices from the previous run: the screen starts with
     // numbers on it instead of "loading…", and a source that is blocked
     // right now has something to be blocked in front of.
@@ -160,7 +165,7 @@ fn main() -> Result<()> {
         interval,
         sessions,
     );
-    let seeds: Vec<(String, cache::Entry)> = symbols
+    let seeds: Vec<(String, cache::Entry)> = polled
         .iter()
         .filter_map(|symbol| {
             cached
@@ -194,6 +199,7 @@ fn main() -> Result<()> {
     let mut terminal = ratatui::init();
     let mut app = App::new(AppInit {
         symbols,
+        positions: resolved.positions,
         shared_symbols,
         sessions,
         source: shared,
@@ -428,6 +434,7 @@ fn print_once(
     rt: &tokio::runtime::Runtime,
     source: Arc<dyn source::DataSource>,
     symbols: &[String],
+    positions: &[portfolio::Position],
     range: Range,
     interval: Interval,
     json: Option<&str>,
@@ -453,7 +460,10 @@ fn print_once(
                     data.candles.len()
                 );
             }
-            (Ok(data), Some(source_name)) => rows.push(quote_json(&data, source_name)),
+            (Ok(data), Some(source_name)) => {
+                let held = positions.iter().find(|p| p.symbol == data.quote.symbol);
+                rows.push(quote_json(&data, source_name, held));
+            }
             (Err(e), None) => println!("{symbol:<8} error: {e:#}"),
             // A failed symbol is a row of its own rather than a missing
             // one: a script watching four tickers still gets four rows and
@@ -474,7 +484,20 @@ fn print_once(
 /// null: sources differ in what they can answer, and a key that is there
 /// only sometimes is easier to test for than a value that is null only
 /// sometimes. `symbol` and `price` are the two that are always present.
-fn quote_json(data: &domain::TickerData, source_name: &str) -> serde_json::Value {
+fn quote_json(
+    data: &domain::TickerData,
+    source_name: &str,
+    position: Option<&portfolio::Position>,
+) -> serde_json::Value {
+    quote_json_at(data, source_name, position, chrono::Utc::now())
+}
+
+fn quote_json_at(
+    data: &domain::TickerData,
+    source_name: &str,
+    position: Option<&portfolio::Position>,
+    now: chrono::DateTime<chrono::Utc>,
+) -> serde_json::Value {
     use serde_json::{Value, json};
 
     let q = &data.quote;
@@ -484,7 +507,7 @@ fn quote_json(data: &domain::TickerData, source_name: &str) -> serde_json::Value
         "candles": data.candles.len(),
         "source": source_name,
         // Whole seconds and a Z, the shape a log line or a cache key wants.
-        "fetched": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        "fetched": now.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
     });
     let map = out.as_object_mut().expect("object");
     let mut put = |key: &str, value: Option<Value>| {
@@ -513,6 +536,27 @@ fn quote_json(data: &domain::TickerData, source_name: &str) -> serde_json::Value
             ext_map.insert("change_pct".into(), json!(trimmed(p, 4)));
         }
         map.insert("extended".into(), ext);
+    }
+    // Only for a ticker the config holds: a status bar that asks for a
+    // price gets a price, and one that tracks a holding gets the money.
+    if let Some(held) = position {
+        let price = portfolio::price(q);
+        let mut pos = json!({
+            "qty": held.qty,
+            "avg_price": held.avg_price,
+            "cost": trimmed(held.cost(), 6),
+            "price": price,
+            "value": trimmed(held.value(price), 6),
+            "pnl": trimmed(held.pnl(price), 6),
+        });
+        let pos_map = pos.as_object_mut().expect("object");
+        if let Some(pct) = held.pnl_pct(price) {
+            pos_map.insert("pnl_pct".into(), json!(trimmed(pct, 4)));
+        }
+        if let Some(day) = held.day_pnl(q, now) {
+            pos_map.insert("day_pnl".into(), json!(trimmed(day, 6)));
+        }
+        map.insert("position".into(), pos);
     }
     out
 }
@@ -557,11 +601,73 @@ mod tests {
         }
     }
 
+    /// A held ticker carries its money too, with the same float-noise
+    /// trimming the quote's own derived figures get.
+    #[test]
+    fn json_carries_the_position_when_the_ticker_is_held() {
+        let held = portfolio::Position {
+            symbol: "AAPL".into(),
+            qty: 12.0,
+            avg_price: 182.31,
+        };
+        let json = quote_json(&data(plain(326.57, Some(315.34))), "yahoo", Some(&held));
+        let pos = &json["position"];
+        assert_eq!(pos["qty"], 12.0);
+        assert_eq!(pos["avg_price"], 182.31);
+        assert_eq!(pos["cost"], 2187.72);
+        assert_eq!(pos["value"], 3918.84);
+        assert_eq!(pos["pnl"], 1731.12);
+        assert_eq!(pos["pnl_pct"], 79.129);
+        assert_eq!(pos["day_pnl"], 134.76);
+    }
+
+    #[test]
+    fn json_values_a_position_at_premarket_with_the_latest_close_as_reference() {
+        let held = portfolio::Position {
+            symbol: "CRWV".into(),
+            qty: 300.0,
+            avg_price: 90.26,
+        };
+        let mut quote = plain(89.12, Some(94.94));
+        quote.symbol = held.symbol.clone();
+        quote.extended = Some(91.28);
+        let now = "2026-09-11T10:30:00Z".parse().unwrap();
+        let json = quote_json_at(&data(quote), "yahoo", Some(&held), now);
+        assert_eq!(json["price"], 89.12);
+        assert_eq!(json["extended"]["price"], 91.28);
+        assert_eq!(json["position"]["price"], 91.28);
+        assert_eq!(json["position"]["value"], 27384.0);
+        assert_eq!(json["position"]["pnl"], 306.0);
+        assert_eq!(json["position"]["pnl_pct"], 1.1301);
+        assert_eq!(json["position"]["day_pnl"], 648.0);
+    }
+
+    /// No previous close, no day figure: the key is left out rather than
+    /// sent as null, like every other absent figure here.
+    #[test]
+    fn a_position_without_a_previous_close_has_no_day_figure() {
+        let held = portfolio::Position {
+            symbol: "AAPL".into(),
+            qty: 12.0,
+            avg_price: 182.31,
+        };
+        let json = quote_json(&data(plain(326.57, None)), "yahoo", Some(&held));
+        assert!(json["position"]["day_pnl"].is_null());
+        assert_eq!(json["position"]["pnl"], 1731.12);
+    }
+
+    /// A ticker that is only watched says nothing about money.
+    #[test]
+    fn json_has_no_position_key_for_an_unheld_ticker() {
+        let json = quote_json(&data(plain(326.57, Some(315.34))), "yahoo", None);
+        assert!(json["position"].is_null());
+    }
+
     /// The keys a script can count on, and the derived figures without the
     /// float noise the subtraction leaves behind.
     #[test]
     fn json_carries_the_quote_and_its_derived_moves() {
-        let json = quote_json(&data(plain(326.57, Some(315.34))), "yahoo");
+        let json = quote_json(&data(plain(326.57, Some(315.34))), "yahoo", None);
         assert_eq!(json["symbol"], "AAPL");
         assert_eq!(json["price"], 326.57);
         assert_eq!(json["currency"], "USD");
@@ -578,7 +684,7 @@ mod tests {
     /// rather than null: `has("extended")` beats a null check.
     #[test]
     fn json_leaves_out_what_the_source_did_not_answer() {
-        let json = quote_json(&data(plain(100.0, None)), "finnhub");
+        let json = quote_json(&data(plain(100.0, None)), "finnhub", None);
         let obj = json.as_object().unwrap();
         assert!(!obj.contains_key("change"), "{json}");
         assert!(!obj.contains_key("prev_close"), "{json}");
@@ -596,7 +702,7 @@ mod tests {
         quote.day_range = Some((310.5, 316.0));
         quote.fifty_two_week = Some((164.08, 340.0));
         quote.volume = Some(64_900_000.0);
-        let json = quote_json(&data(quote), "yahoo");
+        let json = quote_json(&data(quote), "yahoo", None);
         assert_eq!(json["extended"]["price"], 317.22);
         assert_eq!(json["extended"]["change"], 1.88);
         assert_eq!(json["extended"]["change_pct"], 0.5962);
@@ -613,7 +719,7 @@ mod tests {
     fn json_omits_an_extended_print_that_is_the_regular_one() {
         let mut quote = plain(315.34, Some(310.0));
         quote.extended = Some(315.34);
-        let json = quote_json(&data(quote), "alpaca");
+        let json = quote_json(&data(quote), "alpaca", None);
         assert!(
             !json.as_object().unwrap().contains_key("extended"),
             "{json}"

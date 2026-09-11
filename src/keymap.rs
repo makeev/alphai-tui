@@ -47,13 +47,14 @@ pub enum Action {
     ToggleBare,
     AddTicker,
     RemoveTicker,
+    Position,
     ToggleExtended,
     NewsMarkers,
 }
 
 /// Every action with its snake_case config name, the single source of truth
 /// for `[keybindings]` parsing and for the coverage test.
-pub const ACTIONS: [(Action, &str); 33] = [
+pub const ACTIONS: [(Action, &str); 34] = [
     (Action::Quit, "quit"),
     (Action::NextView, "next_view"),
     (Action::PrevView, "prev_view"),
@@ -85,6 +86,7 @@ pub const ACTIONS: [(Action, &str); 33] = [
     (Action::ToggleBare, "toggle_bare"),
     (Action::AddTicker, "add_ticker"),
     (Action::RemoveTicker, "remove_ticker"),
+    (Action::Position, "position"),
     (Action::ToggleExtended, "extended_hours"),
     (Action::NewsMarkers, "news_markers"),
 ];
@@ -156,13 +158,17 @@ fn default_keys(action: Action) -> Vec<KeyCombo> {
         Action::MaType => vec![ch('e')],
         Action::NextPreset => vec![ch('t')],
         Action::PrevPreset => vec![ch('T')],
-        // p for palette, in the t/T shape; session-only until Save.
-        Action::NextTheme => vec![ch('p')],
-        Action::PrevTheme => vec![ch('P')],
+        // The brackets are the leftovers of a swap: p and P used to cycle
+        // the palette, and p went to the position prompt, which earns a
+        // home key far more than a color preset does.
+        Action::NextTheme => vec![ch('}')],
+        Action::PrevTheme => vec![ch('{')],
         // z for the zoomed-in look, next to tmux's own prefix-z.
         Action::ToggleBare => vec![ch('z')],
         Action::AddTicker => vec![ch('a')],
         Action::RemoveTicker => vec![ch('d')],
+        // p for position, next to a for add: what you own of the ticker.
+        Action::Position => vec![ch('p')],
         // Shift-E for Extended: e is taken by the average type, and the
         // lowercase letters left are all without a mnemonic.
         Action::ToggleExtended => vec![ch('E')],

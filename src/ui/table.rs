@@ -6,6 +6,7 @@ use ratatui::widgets::{Cell, Row, Table};
 
 use crate::app::App;
 use crate::domain::fmt_price;
+use crate::portfolio::{fmt_money, fmt_signed};
 use crate::ui::chart::move_color;
 use crate::ui::{View, ViewId};
 
@@ -32,6 +33,8 @@ const W_PRICE: u16 = 12;
 const W_CHANGE: u16 = 10;
 const W_PCT: u16 = 9;
 const W_EXT: u16 = 9;
+const W_VALUE: u16 = 12;
+const W_PNL: u16 = 12;
 const W_RANGE: u16 = 19;
 const SPARK_MIN: u16 = 8;
 const SPARK_MAX: u16 = 24;
@@ -52,12 +55,17 @@ struct Columns {
     /// when no row has a separate print, and appears after the bell.
     ext: bool,
     range: bool,
+    /// What the row is worth and what it has made, for a watchlist that
+    /// holds some of its tickers. Like `ext` this one has to have
+    /// something to say: with no positions configured it is not a
+    /// candidate at all.
+    pos: bool,
     /// 0 hides the sparkline.
     spark: u16,
 }
 
 /// Width the fixed columns need together, gaps included.
-fn fixed_width(change: bool, pct: bool, ext: bool, range: bool) -> u16 {
+fn fixed_width(change: bool, pct: bool, ext: bool, range: bool, pos: bool) -> u16 {
     W_SYMBOL
         + GAP
         + W_PRICE
@@ -65,23 +73,30 @@ fn fixed_width(change: bool, pct: bool, ext: bool, range: bool) -> u16 {
         + if pct { GAP + W_PCT } else { 0 }
         + if ext { GAP + W_EXT } else { 0 }
         + if range { GAP + W_RANGE } else { 0 }
+        + if pos { GAP + W_VALUE + GAP + W_PNL } else { 0 }
 }
 
 /// The widest column set that fits `avail` (the inner width minus the
 /// selection marker). Symbol and price always stay. `extended` says whether
 /// any row has an after-hours print to show; when none has, that column is
 /// not a candidate at all and the others get its width.
-fn columns(avail: u16, extended: bool) -> Columns {
-    for (change, pct, ext, range, spark) in [
-        (true, true, true, true, true),
-        (true, true, true, false, true),
-        (false, true, true, false, true),
-        (false, true, true, false, false),
-        (false, true, false, false, false),
-        (false, false, false, false, false),
+fn columns(avail: u16, extended: bool, held: bool) -> Columns {
+    // The position pair outranks the sparkline and the range: a reader who
+    // configured holdings is asking a money question, and the shape of the
+    // session is what the chart views are for. It still goes before the
+    // extended print, which is the same number for everyone on the list.
+    for (change, pct, ext, range, pos, spark) in [
+        (true, true, true, true, true, true),
+        (true, true, true, false, true, true),
+        (false, true, true, false, true, true),
+        (false, true, true, false, true, false),
+        (false, true, true, false, false, false),
+        (false, true, false, false, false, false),
+        (false, false, false, false, false, false),
     ] {
         let ext = ext && extended;
-        let fixed = fixed_width(change, pct, ext, range);
+        let pos = pos && held;
+        let fixed = fixed_width(change, pct, ext, range, pos);
         if fixed + if spark { GAP + SPARK_MIN } else { 0 } <= avail {
             let spark = if spark {
                 (avail - fixed - GAP).min(SPARK_MAX)
@@ -93,6 +108,7 @@ fn columns(avail: u16, extended: bool) -> Columns {
                 pct,
                 ext,
                 range,
+                pos,
                 spark,
             };
         }
@@ -103,6 +119,7 @@ fn columns(avail: u16, extended: bool) -> Columns {
         pct: false,
         ext: false,
         range: false,
+        pos: false,
         spark: 0,
     }
 }
@@ -114,7 +131,8 @@ pub fn render_table(f: &mut Frame, area: Rect, app: &mut App) {
             .get(s)
             .is_some_and(|d| d.quote.extended_price().is_some())
     });
-    let cols = columns(area.width.saturating_sub(2 + MARKER), extended);
+    let held = app.symbols.iter().any(|s| app.position(s).is_some());
+    let cols = columns(area.width.saturating_sub(2 + MARKER), extended, held);
     let spark_width = cols.spark as usize;
     let rows: Vec<Row> = app
         .symbols
@@ -188,6 +206,25 @@ pub fn render_table(f: &mut Frame, area: Rect, app: &mut App) {
                 };
                 cells.push(cell);
             }
+            if cols.pos {
+                // Blank, not a dash, for the rows that are only watched:
+                // most watchlists hold a few of their tickers, and a
+                // column of dashes reads as data that went missing.
+                let held = app.position(symbol);
+                let price = crate::portfolio::price(q);
+                cells.push(match held {
+                    Some(p) => Cell::from(right(fmt_money(p.value(price)))),
+                    None => Cell::from(""),
+                });
+                cells.push(match held {
+                    Some(p) => {
+                        let pnl = p.pnl(price);
+                        Cell::from(right(fmt_signed(pnl)))
+                            .style(Style::new().fg(move_color(Some(pnl), &app.theme)))
+                    }
+                    None => Cell::from(""),
+                });
+            }
             if cols.range {
                 cells.push(Cell::from(right(range)).dim());
             }
@@ -214,6 +251,12 @@ pub fn render_table(f: &mut Frame, area: Rect, app: &mut App) {
         // before the open the same column carries pre-market moves. The
         // rail names the session for the selected ticker.
         header.push(Cell::from(right("Ext Δ%")));
+    }
+    if cols.pos {
+        widths.push(Constraint::Length(W_VALUE));
+        header.push(Cell::from(right("Value")));
+        widths.push(Constraint::Length(W_PNL));
+        header.push(Cell::from(right("P&L")));
     }
     if cols.range {
         widths.push(Constraint::Length(W_RANGE));

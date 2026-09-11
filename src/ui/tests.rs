@@ -14,6 +14,7 @@ use crate::app::{
 use crate::config::{ChartDefaults, Config, UiDefaults};
 use crate::domain::{Candle, Interval, Quote, Range, Sessions, TickerData};
 use crate::poller::SourceEvent;
+use crate::portfolio::Position;
 use crate::source::make_source;
 use crate::theme::Theme;
 use crate::ui;
@@ -48,6 +49,7 @@ fn empty_app_with_cmds(
     let (alphai_tx, alphai_rx) = tokio::sync::mpsc::unbounded_channel();
     let source = make_source("yahoo", &Config::default()).unwrap();
     let app = App::new(AppInit {
+        positions: Vec::new(),
         shared_symbols: Arc::new(RwLock::new(symbols.clone())),
         symbols,
         sessions: Sessions::Regular,
@@ -261,13 +263,13 @@ fn table_shows_the_extended_column_only_when_a_row_has_one() {
 fn a_adds_a_ticker_and_the_poller_sees_it() {
     let mut app = fake_app();
     press(&mut app, KeyCode::Char('a'));
-    assert!(app.ticker_prompt.open);
+    assert!(app.prompt.open);
     for c in "nvda".chars() {
         press(&mut app, KeyCode::Char(c));
     }
     press(&mut app, KeyCode::Enter);
 
-    assert!(!app.ticker_prompt.open);
+    assert!(!app.prompt.open);
     assert_eq!(app.symbols, vec!["AAPL", "MSFT", "NVDA"], "upper-cased");
     assert_eq!(app.selected, 2, "the new ticker is selected");
     // The poller reads its watchlist from the shared handle, so an add
@@ -284,7 +286,7 @@ fn the_prompt_swallows_action_keys() {
     for c in "ddog".chars() {
         press(&mut app, KeyCode::Char(c));
     }
-    assert_eq!(app.ticker_prompt.input, "ddog");
+    assert_eq!(app.prompt.input, "ddog");
     assert_eq!(app.symbols.len(), 2, "nothing was removed by the d keys");
     press(&mut app, KeyCode::Enter);
     assert_eq!(app.symbols, vec!["AAPL", "MSFT", "DDOG"]);
@@ -300,9 +302,9 @@ fn adding_a_ticker_twice_says_so_and_moves_the_cursor() {
     }
     press(&mut app, KeyCode::Enter);
 
-    assert!(app.ticker_prompt.open, "stays open with the message");
+    assert!(app.prompt.open, "stays open with the message");
     assert!(
-        app.ticker_prompt.error.is_some_and(|e| e.contains("MSFT")),
+        app.prompt.error.is_some_and(|e| e.contains("MSFT")),
         "the reason has to name the ticker"
     );
     assert_eq!(app.symbols.len(), 2, "no duplicate row");
@@ -333,7 +335,7 @@ fn escape_closes_the_prompt_without_adding() {
         press(&mut app, KeyCode::Char(c));
     }
     press(&mut app, KeyCode::Esc);
-    assert!(!app.ticker_prompt.open);
+    assert!(!app.prompt.open);
     assert_eq!(app.symbols, vec!["AAPL", "MSFT"]);
 }
 
@@ -2765,6 +2767,7 @@ fn config_defaults_seed_startup_state() {
     let (alphai_tx, _alphai_rx) = tokio::sync::mpsc::unbounded_channel();
     let source = make_source("yahoo", &Config::default()).unwrap();
     let mut app = App::new(AppInit {
+        positions: Vec::new(),
         shared_symbols: Arc::new(RwLock::new(vec!["AAPL".into()])),
         symbols: vec!["AAPL".into()],
         sessions: Sessions::Regular,
@@ -2936,19 +2939,19 @@ fn theme_key_cycles_presets_over_explicit_slots() {
         "[ui] borders lost"
     );
 
-    press(&mut app, KeyCode::Char('p'));
+    press(&mut app, KeyCode::Char('}'));
     assert_eq!(app.theme_name, "catppuccin-macchiato");
     assert_eq!(app.theme.accent, Color::Rgb(0xc6, 0xa0, 0xf6));
 
-    // P walks back, so overshooting is one keypress to undo.
-    press(&mut app, KeyCode::Char('P'));
+    // { walks back, so overshooting is one keypress to undo.
+    press(&mut app, KeyCode::Char('{'));
     assert_eq!(app.theme_name, "catppuccin-mocha");
-    press(&mut app, KeyCode::Char('p'));
+    press(&mut app, KeyCode::Char('}'));
 
     // Every preset is reachable from the keyboard, and the cycle wraps
     // back to where it started after a full lap.
     for _ in 0..crate::theme::PRESETS.len() {
-        press(&mut app, KeyCode::Char('p'));
+        press(&mut app, KeyCode::Char('}'));
     }
     assert_eq!(app.theme_name, "catppuccin-macchiato");
     assert_eq!(app.theme.up, Color::Rgb(0x00, 0xc8, 0x53));
@@ -3063,6 +3066,11 @@ fn borders_are_themed() {
 #[test]
 fn settings_save_merge_preserves_file_only_sections() {
     let mut app = fake_app();
+    app.config.positions = vec![Position {
+        symbol: "AAPL".into(),
+        qty: 12.0,
+        avg_price: 182.31,
+    }];
     app.config.theme = Some(std::collections::BTreeMap::from([(
         "accent".to_string(),
         "magenta".to_string(),
@@ -3088,6 +3096,10 @@ fn settings_save_merge_preserves_file_only_sections() {
         merged.watchlist,
         vec!["AAPL".to_string(), "MSFT".to_string()]
     );
+    // Positions are written by their own prompt, so Save has to carry the
+    // loaded ones through untouched rather than drop them.
+    assert_eq!(merged.positions, app.config.positions);
+    assert_eq!(merged.positions.len(), 1);
 }
 
 /// The single-copy guards must hold for every feed kind: the insider tick
@@ -3207,6 +3219,7 @@ fn first_run_opens_settings_with_welcome() {
     let (alphai_tx, _alphai_rx) = tokio::sync::mpsc::unbounded_channel();
     let source = make_source("yahoo", &Config::default()).unwrap();
     let mut app = App::new(AppInit {
+        positions: Vec::new(),
         shared_symbols: Arc::new(RwLock::new(vec!["AAPL".into()])),
         symbols: vec!["AAPL".into()],
         sessions: Sessions::Regular,
@@ -4017,4 +4030,361 @@ fn z_toggles_bare_mode() {
     press(&mut app, KeyCode::Char('z'));
     assert!(!app.bare);
     assert!(render_sized(&mut app, 100, 20).contains("alphai-tui"));
+}
+
+/// `fake_app` with holdings: 10 AAPL bought at 180 (now 214.50, so up
+/// 345.00 and 19.17%) and 3 MSFT bought at 500 (now 414.50, so down
+/// 256.50 and 17.10%). Every figure below is distinct, so an assertion
+/// cannot pass by matching the wrong column.
+fn held_app() -> App {
+    let mut app = fake_app();
+    app.positions = vec![
+        Position {
+            symbol: "AAPL".into(),
+            qty: 10.0,
+            avg_price: 180.0,
+        },
+        Position {
+            symbol: "MSFT".into(),
+            qty: 3.0,
+            avg_price: 500.0,
+        },
+    ];
+    app
+}
+
+fn portfolio_screen(app: &mut App) -> String {
+    app.view_idx = ui::view_index(ui::ViewId::Portfolio);
+    render_sized(app, 120, 20)
+}
+
+#[test]
+fn portfolio_view_values_every_holding_and_totals_them() {
+    let mut app = held_app();
+    let screen = portfolio_screen(&mut app);
+    assert!(screen.contains("Portfolio"), "screen:\n{screen}");
+    assert!(screen.contains("2,145.00"), "AAPL value, screen:\n{screen}");
+    assert!(screen.contains("+345.00"), "AAPL P&L, screen:\n{screen}");
+    assert!(
+        screen.contains("+19.17%"),
+        "AAPL percent, screen:\n{screen}"
+    );
+    assert!(screen.contains("-256.50"), "MSFT P&L, screen:\n{screen}");
+    assert!(
+        screen.contains("-17.10%"),
+        "MSFT percent, screen:\n{screen}"
+    );
+    assert!(screen.contains("Total"), "screen:\n{screen}");
+    assert!(
+        screen.contains("3,388.50"),
+        "total value, screen:\n{screen}"
+    );
+    assert!(screen.contains("+88.50"), "total P&L, screen:\n{screen}");
+    assert!(screen.contains("cost 3,300.00"), "basis, screen:\n{screen}");
+}
+
+fn premarket_holding() -> App {
+    let mut app = empty_app(vec!["CRWV".into()]);
+    app.positions = vec![Position {
+        symbol: "CRWV".into(),
+        qty: 300.0,
+        avg_price: 90.26,
+    }];
+    let mut quote = plain_quote("CRWV", 89.12, Some(94.94), Some("USD"));
+    quote.extended = Some(91.28);
+    app.data.insert(
+        "CRWV".into(),
+        TickerData {
+            quote,
+            candles: vec![],
+        },
+    );
+    app
+}
+
+#[test]
+fn portfolio_prices_premarket_even_with_extended_candles_disabled() {
+    let mut app = premarket_holding();
+    assert_eq!(app.sessions, Sessions::Regular);
+    let now = "2026-09-11T10:30:00Z".parse().unwrap();
+    let mut terminal = Terminal::new(TestBackend::new(120, 20)).unwrap();
+    terminal
+        .draw(|f| ui::portfolio::render_portfolio_at(f, f.area(), &mut app, now))
+        .unwrap();
+    let screen: String = terminal
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect();
+    assert!(screen.contains("91.28*"), "{screen}");
+    assert_eq!(
+        screen.matches("27,384.00").count(),
+        2,
+        "row and total: {screen}"
+    );
+    assert_eq!(
+        screen.matches("+306.00").count(),
+        2,
+        "row and total: {screen}"
+    );
+    assert_eq!(
+        screen.matches("+648.00").count(),
+        2,
+        "premarket day and total: {screen}"
+    );
+    assert!(screen.contains("+1.13%"), "{screen}");
+    assert!(screen.contains("* pre/after-hours"), "{screen}");
+
+    app.data.get_mut("CRWV").unwrap().quote.extended = None;
+    let screen = portfolio_screen(&mut app);
+    assert!(screen.contains("26,736.00"), "{screen}");
+    assert!(screen.contains("-342.00"), "{screen}");
+    assert!(!screen.contains("pre/after-hours"), "{screen}");
+}
+
+#[test]
+fn the_rail_and_watchlist_use_the_portfolios_extended_valuation() {
+    let mut app = premarket_holding();
+    let now = "2026-09-11T10:30:00Z".parse().unwrap();
+    let rail = ui::rail::text(&ui::rail::line(&app, 180, now));
+    assert!(rail.contains("PRE 91.28"), "{rail}");
+    assert!(rail.contains("×300 +306.00 +1.13%"), "{rail}");
+    app.view_idx = ui::view_index(ui::ViewId::Table);
+    let screen = render_sized(&mut app, 180, 20);
+    let body = panels(&screen);
+    assert!(body.contains("89.12"), "regular quote: {body}");
+    assert!(body.contains("27,384.00"), "holding value: {body}");
+    assert!(body.contains("+306.00"), "holding P&L: {body}");
+}
+
+/// The view is in the tab cycle whether or not anything is held, so the
+/// empty screen has to teach both ways of filling it.
+#[test]
+fn portfolio_view_says_how_to_start_when_nothing_is_held() {
+    let mut app = fake_app();
+    let screen = portfolio_screen(&mut app);
+    assert!(screen.contains("Nothing held yet"), "screen:\n{screen}");
+    assert!(screen.contains("[[positions]]"), "screen:\n{screen}");
+    assert!(screen.contains("avg_price"), "screen:\n{screen}");
+}
+
+/// A holding with no price yet is not worth zero. It says so, and the
+/// totals count how many rows they actually cover.
+#[test]
+fn portfolio_marks_the_rows_that_have_no_price_yet() {
+    let mut app = held_app();
+    app.positions.push(Position {
+        symbol: "DDOG".into(),
+        qty: 4.0,
+        avg_price: 100.0,
+    });
+    let screen = portfolio_screen(&mut app);
+    assert!(screen.contains("DDOG"), "screen:\n{screen}");
+    assert!(screen.contains("2/3 priced"), "screen:\n{screen}");
+    // The basis of the unpriced row stays out of the total as well, or the
+    // percentage would read as a 100% loss on money that is fine.
+    assert!(screen.contains("cost 3,300.00"), "screen:\n{screen}");
+}
+
+/// There is no currency conversion in this app, so a total that spans two
+/// of them has to say what it is instead of looking exact.
+#[test]
+fn portfolio_admits_when_the_total_mixes_currencies() {
+    let mut app = held_app();
+    let screen = portfolio_screen(&mut app);
+    assert!(!screen.contains("mixed currencies"), "screen:\n{screen}");
+    app.data.get_mut("MSFT").unwrap().quote.currency = Some("EUR".into());
+    let screen = portfolio_screen(&mut app);
+    assert!(screen.contains("mixed currencies"), "screen:\n{screen}");
+}
+
+/// Narrow terminals lose whole columns, least useful first, and never a
+/// half-printed number.
+#[test]
+fn portfolio_drops_columns_before_it_squeezes_them() {
+    let mut app = held_app();
+    app.view_idx = ui::view_index(ui::ViewId::Portfolio);
+    let wide = render_sized(&mut app, 120, 20);
+    assert!(wide.contains("Wt%"), "screen:\n{wide}");
+    assert!(wide.contains("Avg"), "screen:\n{wide}");
+
+    let narrow = render_sized(&mut app, 46, 20);
+    assert!(narrow.contains("P&L%"), "the percentage stays:\n{narrow}");
+    assert!(narrow.contains("+19.17%"), "screen:\n{narrow}");
+    assert!(!narrow.contains("Wt%"), "weight should be gone:\n{narrow}");
+    assert!(!narrow.contains("Avg"), "average should be gone:\n{narrow}");
+}
+
+/// The rail sits above every view, so the cursor and the rail must quote
+/// the same ticker; moving the portfolio cursor therefore moves the
+/// watchlist cursor with it.
+#[test]
+fn the_portfolio_cursor_pulls_the_watchlist_cursor_along() {
+    let mut app = held_app();
+    app.view_idx = ui::view_index(ui::ViewId::Portfolio);
+    assert_eq!(app.portfolio_selected, 0);
+    press(&mut app, KeyCode::Down);
+    assert_eq!(app.portfolio_selected, 1);
+    assert_eq!(app.selected_symbol(), "MSFT");
+    press(&mut app, KeyCode::Up);
+    assert_eq!(app.portfolio_selected, 0);
+    assert_eq!(app.selected_symbol(), "AAPL");
+}
+
+/// Holdings off the watchlist are polled too: a row that cannot be priced
+/// cannot be valued either.
+#[test]
+fn holdings_off_the_watchlist_are_still_polled() {
+    let mut app = empty_app(vec!["AAPL".into()]);
+    app.positions = vec![Position {
+        symbol: "DDOG".into(),
+        qty: 4.0,
+        avg_price: 100.0,
+    }];
+    assert_eq!(
+        app.polled_symbols(),
+        vec!["AAPL".to_string(), "DDOG".into()]
+    );
+}
+
+/// The watchlist table stays as it was for anyone who holds nothing, and
+/// grows two columns for anyone who does. A watched-only row leaves them
+/// blank rather than printing a dash, like the extended column does.
+#[test]
+fn the_table_prices_holdings_only_when_there_are_any() {
+    let mut app = fake_app();
+    app.view_idx = ui::view_index(ui::ViewId::Table);
+    let screen = render_sized(&mut app, 120, 20);
+    assert!(!screen.contains("Value"), "screen:\n{screen}");
+
+    app.positions = vec![Position {
+        symbol: "AAPL".into(),
+        qty: 10.0,
+        avg_price: 180.0,
+    }];
+    let screen = render_sized(&mut app, 120, 20);
+    assert!(screen.contains("Value"), "screen:\n{screen}");
+    assert!(screen.contains("2,145.00"), "screen:\n{screen}");
+    assert!(screen.contains("+345.00"), "screen:\n{screen}");
+    let msft = screen
+        .lines()
+        .find(|l| l.contains("MSFT"))
+        .expect("a MSFT row");
+    assert!(!msft.contains('—'), "watched-only row dashed: {msft}");
+}
+
+/// The holder's own number, in every view, ahead of the session badge.
+#[test]
+fn the_rail_carries_the_position_of_the_selected_ticker() {
+    let mut app = held_app();
+    app.source_delay = None;
+    let rail = ui::rail::text(&ui::rail::line(&app, 130, market_open_moment()));
+    assert!(rail.contains("×10"), "{rail}");
+    assert!(rail.contains("+345.00"), "{rail}");
+    assert!(rail.contains("+19.17%"), "{rail}");
+
+    app.positions.clear();
+    let rail = ui::rail::text(&ui::rail::line(&app, 130, market_open_moment()));
+    assert!(!rail.contains("+345.00"), "{rail}");
+}
+
+/// A position typed into the prompt is user data, not a display
+/// preference: it reaches the config file on Enter rather than waiting for
+/// Save in the settings screen.
+#[test]
+fn the_position_prompt_writes_the_config_straight_away() {
+    let dir = std::env::temp_dir().join(format!("alphai-tui-positions-{}", std::process::id()));
+    let path = dir.join("config.toml");
+    let _ = std::fs::remove_dir_all(&dir);
+    let mut app = fake_app();
+    app.config_path = Some(path.clone());
+
+    press(&mut app, KeyCode::Char('p'));
+    assert!(app.prompt.open, "the prompt did not open");
+    for c in "10 180".chars() {
+        press(&mut app, KeyCode::Char(c));
+    }
+    press(&mut app, KeyCode::Enter);
+    assert!(!app.prompt.open, "error: {:?}", app.prompt.error);
+    assert_eq!(app.positions.len(), 1);
+    assert_eq!(app.positions[0].symbol, "AAPL");
+    assert_eq!(app.positions[0].qty, 10.0);
+
+    let written = std::fs::read_to_string(&path).unwrap();
+    assert!(written.contains("[[positions]]"), "file:\n{written}");
+    assert!(written.contains("AAPL"), "file:\n{written}");
+    // The live watchlist is the settings screen's business, not this
+    // keypress's: the file keeps the empty list it was loaded with.
+    assert!(written.contains("watchlist = []"), "file:\n{written}");
+    assert!(!written.contains("MSFT"), "file:\n{written}");
+
+    // Reopening prefills what is held, and an emptied line clears it.
+    press(&mut app, KeyCode::Char('p'));
+    assert_eq!(app.prompt.input, "10 180");
+    for _ in 0..app.prompt.input.len() {
+        press(&mut app, KeyCode::Backspace);
+    }
+    press(&mut app, KeyCode::Enter);
+    assert!(app.positions.is_empty(), "the holding was not cleared");
+    let written = std::fs::read_to_string(&path).unwrap();
+    assert!(!written.contains("[[positions]]"), "file:\n{written}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The prompt swallows every key, or a line with a bound letter in it
+/// could not be typed; the numbers a position needs are no different.
+#[test]
+fn the_position_prompt_swallows_the_keys_it_needs() {
+    let mut app = fake_app();
+    press(&mut app, KeyCode::Char('p'));
+    for c in "nvda -2.5 1,204.50".chars() {
+        press(&mut app, KeyCode::Char(c));
+    }
+    assert_eq!(app.prompt.input, "nvda -2.5 1,204.50");
+    press(&mut app, KeyCode::Enter);
+    assert!(!app.prompt.open, "error: {:?}", app.prompt.error);
+    let held = app.position("NVDA").expect("a short position");
+    assert_eq!(held.qty, -2.5);
+    assert_eq!(held.avg_price, 1204.5);
+}
+
+/// A line the parser cannot read keeps the prompt open with the reason,
+/// the way a duplicate ticker does.
+#[test]
+fn the_position_prompt_keeps_a_bad_line_on_screen() {
+    let mut app = fake_app();
+    press(&mut app, KeyCode::Char('p'));
+    for c in "twelve 180".chars() {
+        press(&mut app, KeyCode::Char(c));
+    }
+    press(&mut app, KeyCode::Enter);
+    assert!(app.prompt.open, "the prompt closed on a bad line");
+    assert!(app.prompt.error.is_some());
+    assert!(app.positions.is_empty());
+}
+
+/// A modified key is a gesture, not text: ctrl-h used to arrive as a plain
+/// "h" and land in the middle of a typed quantity. Ctrl-U clears the line,
+/// which the prefilled position prompt needs often.
+#[test]
+fn the_prompt_ignores_modified_keys_and_clears_on_ctrl_u() {
+    use crossterm::event::KeyModifiers;
+
+    let mut app = held_app();
+    press(&mut app, KeyCode::Char('p'));
+    assert_eq!(app.prompt.input, "10 180");
+    app.handle_key(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::CONTROL));
+    assert_eq!(app.prompt.input, "10 180", "a ctrl key was typed in");
+
+    app.handle_key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
+    assert_eq!(app.prompt.input, "");
+    for c in "4 150".chars() {
+        press(&mut app, KeyCode::Char(c));
+    }
+    press(&mut app, KeyCode::Enter);
+    let held = app.position("AAPL").expect("the holding");
+    assert_eq!(held.qty, 4.0);
+    assert_eq!(held.avg_price, 150.0);
 }

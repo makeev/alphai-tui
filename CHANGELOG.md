@@ -5,6 +5,46 @@ the crates.io releases; from 0.7.0 on each one is also a git tag and a
 GitHub release with prebuilt binaries. The Homebrew tap, the AUR and the
 apt repository joined later, and carry every version since.
 
+## 0.22.0 - 2026-09-11
+
+- Portfolio valuations include premarket and after-hours prices whenever
+  the source reports them, independently of the extended-candle toggle.
+  The portfolio, holding columns, quote rail and JSON use the same price;
+  `Last` marks an extended price with `*`, and JSON exposes it as
+  `position.price`. Premarket `Day` is measured from the latest regular
+  close; after hours it includes the regular session's move as well.
+- A Portfolio view, `8`, for what you actually hold: quantity, average
+  price, value, the day's move in money, the profit or loss since you
+  bought and the share of the portfolio each ticker carries, with a total
+  underneath. It was the one thing the widely used tools here are built
+  around and this one had no answer to.
+- `p` sets the holding for the ticker under the cursor, from any view: a
+  quantity and an average price on one line, prefilled with what is held,
+  an empty line clearing it. Unlike every other runtime change, it is
+  written to the config file straight away, because a quantity and a price
+  are your data rather than a display preference.
+- Holdings can be written by hand as `[[positions]]` entries with
+  `symbol`, `qty` and `avg_price`. A fractional quantity is fine, and a
+  negative one is a short, which profits when the price falls.
+- A held ticker that is not on the watchlist is polled all the same, so
+  every row can be valued; the startup warning about a source's request
+  budget counts those tickers too. A row whose first price has not arrived
+  says so instead of being summed in as zero, and the total states how
+  many rows it covers.
+- The watchlist table grows `Value` and `P&L` columns, and the quote rail
+  a zone with the same numbers, but only for tickers you hold. Totals that
+  span several currencies are labelled `mixed currencies`: there is no
+  conversion here, and a sum across currencies should not look exact.
+- `--json` carries a `position` object for a held ticker, with the cost,
+  the value, the profit or loss and its percentage, so a status bar can
+  show the money instead of the price.
+- **The color presets moved from `p` and `P` to `}` and `{`**, which is
+  what freed `p`. The old keys are two lines away in the config:
+  `[keybindings] next_theme = "p"` and `prev_theme = "P"`.
+- The config file is now written to a temporary file and renamed into
+  place. It holds API keys, and it is written on every position edit, so a
+  half-finished write should never be able to replace it.
+
 ## 0.21.0 - 2026-09-11
 
 - The price chart marks the ticker's news on the candles it was published

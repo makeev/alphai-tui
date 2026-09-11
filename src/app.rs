@@ -22,11 +22,12 @@ use tokio::sync::Notify;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
 use crate::alphai::{self, Article};
-use crate::config::{ChartDefaults, Config, UiDefaults};
+use crate::config::{self, ChartDefaults, Config, UiDefaults};
 use crate::domain::{Interval, Range, Sessions, TickerData};
 use crate::indicators::MaType;
 use crate::keymap::{Action, Keymap};
 use crate::poller::{SharedEvery, SharedParams, SharedSource, SharedSymbols, SourceEvent};
+use crate::portfolio::{self, Position};
 use crate::theme::Theme;
 use crate::ui;
 
@@ -91,15 +92,28 @@ pub struct ArticleOverlay {
     pub scroll: u16,
 }
 
-/// State of the add-ticker prompt (a anywhere). A typed symbol is not
+/// Which line the one-line prompt is taking.
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+pub enum PromptKind {
+    /// A ticker for the watchlist (a).
+    #[default]
+    Ticker,
+    /// A holding: quantity and average price, for `Prompt::target` (p).
+    Position,
+}
+
+/// State of the prompt overlay (a and p anywhere). A typed symbol is not
 /// validated here: whether it exists is the source's answer, and the row
 /// carries that answer already, as a price or as an error.
 #[derive(Default)]
-pub struct TickerPrompt {
+pub struct Prompt {
     pub open: bool,
+    pub kind: PromptKind,
     pub input: String,
+    /// The ticker a position line applies to when the line names none.
+    pub target: String,
     /// Set for the cases the prompt itself can rule on, such as a symbol
-    /// already on the list.
+    /// already on the list or a quantity that is not a number.
     pub error: Option<String>,
 }
 
@@ -204,6 +218,8 @@ fn next_preset(
 
 pub struct AppInit {
     pub symbols: Vec<String>,
+    /// Validated `[[positions]]`; empty when the section is absent.
+    pub positions: Vec<Position>,
     pub shared_symbols: SharedSymbols,
     pub source: SharedSource,
     pub source_name: &'static str,
@@ -234,6 +250,9 @@ pub struct AppInit {
 
 pub struct App {
     pub symbols: Vec<String>,
+    /// What the user holds, in config order. Off-watchlist holdings are
+    /// polled too (`polled_symbols`), so every row can be valued.
+    pub positions: Vec<Position>,
     pub data: HashMap<String, TickerData>,
     pub errors: HashMap<String, String>,
     /// When a poll changed a symbol's price: (moment, tick was up). Views
@@ -275,6 +294,10 @@ pub struct App {
     pub sessions: Sessions,
     pub last_update: Option<DateTime<Local>>,
     pub table_state: TableState,
+    /// The portfolio view's own cursor: its rows are the positions, which
+    /// are neither the watchlist nor in its order.
+    pub portfolio_selected: usize,
+    pub portfolio_state: TableState,
     // Chart options: seeded from [chart], then session-only toggles
     pub chart_style: ChartStyle,
     pub show_sma: bool,
@@ -337,7 +360,7 @@ pub struct App {
     pub article_overlay: ArticleOverlay,
     pub help: HelpOverlay,
     pub settings: SettingsState,
-    pub ticker_prompt: TickerPrompt,
+    pub prompt: Prompt,
     /// The watchlist as the price poller sees it; kept in step with
     /// `symbols` by `add_symbol` and `remove_selected_symbol`.
     pub shared_symbols: SharedSymbols,
@@ -370,7 +393,7 @@ impl App {
         let mut app = Self {
             symbols: init.symbols,
             shared_symbols: init.shared_symbols,
-            ticker_prompt: TickerPrompt::default(),
+            prompt: Prompt::default(),
             data: HashMap::new(),
             errors: HashMap::new(),
             price_flash: HashMap::new(),
@@ -414,6 +437,9 @@ impl App {
             alphai_ttl: init.ui.alphai_ttl,
             card_scroll: 0,
             news_table_state: TableState::default(),
+            positions: init.positions,
+            portfolio_selected: 0,
+            portfolio_state: TableState::default(),
             article_overlay: ArticleOverlay::default(),
             help: HelpOverlay::default(),
             settings: SettingsState::default(),
@@ -607,8 +633,8 @@ impl App {
         if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
             return true;
         }
-        if self.ticker_prompt.open {
-            return self.handle_ticker_prompt_key(key);
+        if self.prompt.open {
+            return self.handle_prompt_key(key);
         }
         if self.settings.open {
             return self.handle_settings_key(key);
@@ -642,12 +668,13 @@ impl App {
         match action {
             Action::Quit => return true,
             Action::AddTicker => {
-                self.ticker_prompt = TickerPrompt {
+                self.prompt = Prompt {
                     open: true,
                     ..Default::default()
                 }
             }
             Action::RemoveTicker => self.remove_selected_symbol(),
+            Action::Position => self.open_position_prompt(),
             Action::NextView => self.switch_view((self.view_idx + 1) % ui::VIEWS.len()),
             Action::PrevView => {
                 self.switch_view((self.view_idx + ui::VIEWS.len() - 1) % ui::VIEWS.len())
@@ -761,6 +788,8 @@ impl App {
             Action::ToggleExtended => self.toggle_sessions(),
             Action::NextTheme => self.cycle_theme(1),
             Action::PrevTheme => self.cycle_theme(-1),
+            Action::Up if self.view_id() == ui::ViewId::Portfolio => self.move_portfolio(-1),
+            Action::Down if self.view_id() == ui::ViewId::Portfolio => self.move_portfolio(1),
             Action::Up => self.selected = self.selected.saturating_sub(1),
             Action::Down => self.selected = (self.selected + 1).min(self.symbols.len() - 1),
             _ => {}
@@ -809,29 +838,152 @@ impl App {
     /// Keys while the add-ticker prompt is open. It swallows everything,
     /// the settings pattern, so typing "d" is a letter rather than the
     /// remove action.
-    fn handle_ticker_prompt_key(&mut self, key: KeyEvent) -> bool {
+    fn handle_prompt_key(&mut self, key: KeyEvent) -> bool {
+        // Tickers are short; a position line carries two numbers as well.
+        // The caps are there so a stuck key cannot grow the line past its
+        // box.
+        let cap = match self.prompt.kind {
+            PromptKind::Ticker => 16,
+            PromptKind::Position => 32,
+        };
         match key.code {
-            KeyCode::Esc => self.ticker_prompt = TickerPrompt::default(),
-            KeyCode::Enter => {
-                let typed = self.ticker_prompt.input.trim().to_uppercase();
-                match self.add_symbol(&typed) {
-                    Ok(()) => self.ticker_prompt = TickerPrompt::default(),
-                    Err(msg) => self.ticker_prompt.error = Some(msg),
-                }
-            }
+            KeyCode::Esc => self.prompt = Prompt::default(),
+            KeyCode::Enter => match self.commit_prompt() {
+                Ok(()) => self.prompt = Prompt::default(),
+                Err(msg) => self.prompt.error = Some(msg),
+            },
             KeyCode::Backspace => {
-                self.ticker_prompt.input.pop();
-                self.ticker_prompt.error = None;
+                self.prompt.input.pop();
+                self.prompt.error = None;
             }
-            // Tickers are short; the cap is there so a stuck key cannot
-            // grow the line past its box.
-            KeyCode::Char(c) if self.ticker_prompt.input.chars().count() < 16 => {
-                self.ticker_prompt.input.push(c);
-                self.ticker_prompt.error = None;
+            // The readline gesture for "start over". The position prompt
+            // opens prefilled with what is held, so clearing the line is a
+            // common move rather than an exotic one.
+            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.prompt.input.clear();
+                self.prompt.error = None;
+            }
+            // Modified keys are gestures, not text: ctrl-h used to arrive
+            // as a plain "h" and land in the middle of a quantity.
+            KeyCode::Char(c)
+                if !key
+                    .modifiers
+                    .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+                    && self.prompt.input.chars().count() < cap =>
+            {
+                self.prompt.input.push(c);
+                self.prompt.error = None;
             }
             _ => {}
         }
         false
+    }
+
+    fn commit_prompt(&mut self) -> Result<(), String> {
+        let typed = self.prompt.input.clone();
+        match self.prompt.kind {
+            PromptKind::Ticker => self.add_symbol(typed.trim().to_uppercase().as_str()),
+            PromptKind::Position => {
+                let target = self.prompt.target.clone();
+                let entry = portfolio::parse_entry(&typed, &target)?;
+                self.apply_position(entry)
+            }
+        }
+    }
+
+    /// Opens the position prompt on the ticker in front of the reader: the
+    /// row under the portfolio cursor in that view, the selected ticker
+    /// anywhere else. Prefilled with what is held already, so correcting a
+    /// number is not a retype, and an emptied line clears the holding.
+    fn open_position_prompt(&mut self) {
+        let target = self.position_target();
+        let input = self
+            .position(&target)
+            .map(|p| format!("{} {}", p.qty, p.avg_price))
+            .unwrap_or_default();
+        self.prompt = Prompt {
+            open: true,
+            kind: PromptKind::Position,
+            input,
+            target,
+            error: None,
+        };
+    }
+
+    fn position_target(&self) -> String {
+        if self.view_id() == ui::ViewId::Portfolio
+            && let Some(p) = self.positions.get(self.portfolio_selected)
+        {
+            return p.symbol.clone();
+        }
+        self.selected_symbol().to_string()
+    }
+
+    pub fn position(&self, symbol: &str) -> Option<&Position> {
+        self.positions.iter().find(|p| p.symbol == symbol)
+    }
+
+    /// Moves the portfolio cursor, and the watchlist cursor with it when
+    /// the row's ticker is on the watchlist: the rail sits above every
+    /// view and would otherwise quote a different ticker than the row the
+    /// cursor is on.
+    fn move_portfolio(&mut self, dir: isize) {
+        if self.positions.is_empty() {
+            return;
+        }
+        let last = self.positions.len() as isize - 1;
+        let next = (self.portfolio_selected as isize + dir).clamp(0, last) as usize;
+        self.portfolio_selected = next;
+        let symbol = self.positions[next].symbol.clone();
+        if let Some(at) = self.symbols.iter().position(|s| *s == symbol) {
+            self.select_symbol(at);
+        }
+    }
+
+    /// Writes a position through and saves it. Unlike every other runtime
+    /// change here it does not wait for Save in the settings screen: a
+    /// quantity and a price someone typed are their data, not a display
+    /// preference, and losing them on quit would read as a bug.
+    fn apply_position(&mut self, entry: portfolio::Entry) -> Result<(), String> {
+        match entry {
+            portfolio::Entry::Set {
+                symbol,
+                qty,
+                avg_price,
+            } => {
+                let next = Position {
+                    symbol,
+                    qty,
+                    avg_price,
+                };
+                match self.positions.iter_mut().find(|p| p.symbol == next.symbol) {
+                    Some(slot) => *slot = next,
+                    None => self.positions.push(next),
+                }
+            }
+            portfolio::Entry::Clear { symbol } => self.positions.retain(|p| p.symbol != symbol),
+        }
+        self.portfolio_selected = self
+            .portfolio_selected
+            .min(self.positions.len().saturating_sub(1));
+        // A holding off the watchlist is polled too, and the nudge saves
+        // the new row a full interval of waiting for its first price.
+        self.sync_shared_symbols();
+        self.refresh.notify_one();
+        self.persist_positions()
+    }
+
+    /// Saves the positions into the config file, leaving every other
+    /// section as it was loaded. Deliberately not `settings_merged_config`:
+    /// that one also persists the live watchlist and the settings rows,
+    /// which nobody asked this keypress to do.
+    fn persist_positions(&mut self) -> Result<(), String> {
+        self.config.positions = self.positions.clone();
+        if self.config_path.is_none() {
+            return Ok(());
+        }
+        config::save_at(self.config_path.as_deref(), &self.config)
+            .map_err(|e| format!("kept for this session only: {e}"))
     }
 
     /// Adds a symbol to the live watchlist and selects it. The poller reads
@@ -869,9 +1021,13 @@ impl App {
         self.sync_shared_symbols();
         // Prices are cheap to fetch again; the AlphaAI feeds are not, so
         // their cache survives a removal and a re-add costs no request.
-        self.data.remove(&gone);
-        self.errors.remove(&gone);
-        self.price_flash.remove(&gone);
+        // A holding keeps its price: it is still polled, and blanking the
+        // row would leave the portfolio view showing "…" until the tick.
+        if self.position(&gone).is_none() {
+            self.data.remove(&gone);
+            self.errors.remove(&gone);
+            self.price_flash.remove(&gone);
+        }
         self.select_symbol(self.selected.min(self.symbols.len() - 1));
     }
 
@@ -885,8 +1041,16 @@ impl App {
         self.earnings_scroll = 0;
     }
 
+    /// Every symbol the poller fetches: the watchlist plus anything held
+    /// that is not on it. A holding with no price is a row that cannot be
+    /// valued, so it is worth the request; the budget warning in `main`
+    /// counts this list for the same reason.
+    pub fn polled_symbols(&self) -> Vec<String> {
+        portfolio::polled_symbols(&self.symbols, &self.positions)
+    }
+
     fn sync_shared_symbols(&self) {
-        *self.shared_symbols.write().unwrap() = self.symbols.clone();
+        *self.shared_symbols.write().unwrap() = self.polled_symbols();
     }
 
     fn handle_help_key(&mut self, key: KeyEvent) -> bool {

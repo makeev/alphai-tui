@@ -6,6 +6,7 @@ pub mod insider;
 pub mod insider_chart;
 pub mod news;
 pub mod news_marks;
+pub mod portfolio;
 pub mod prompt;
 pub mod rail;
 pub mod settings;
@@ -19,7 +20,7 @@ use ratatui::style::{Modifier, Style, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
-use crate::app::{App, FeedKind};
+use crate::app::{App, FeedKind, PromptKind};
 use crate::keymap::Action;
 
 /// Stable identity of a display mode, decoupled from its position in the
@@ -33,6 +34,7 @@ pub enum ViewId {
     Insider,
     Earnings,
     Summary,
+    Portfolio,
 }
 
 /// One footer hint: the keys of `actions` (looked up in the live keymap so
@@ -118,7 +120,7 @@ pub trait View: Sync {
 
 /// Register new display modes here. Order defines the tab cycle and the
 /// 1..9 hotkeys.
-pub static VIEWS: [&dyn View; 7] = [
+pub static VIEWS: [&dyn View; 8] = [
     &split::SplitView,
     &news::NewsView,
     &table::TableView,
@@ -129,6 +131,7 @@ pub static VIEWS: [&dyn View; 7] = [
     // tab cycle and the 1-9 hotkeys, so inserting one would renumber every
     // view behind it and break the muscle memory of anyone using them.
     &summary::SummaryView,
+    &portfolio::PortfolioView,
 ];
 
 /// Index of a view in `VIEWS`. Every `ViewId` is registered exactly once
@@ -180,7 +183,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     if app.settings.open {
         settings::render(f, app);
     }
-    if app.ticker_prompt.open {
+    if app.prompt.open {
         prompt::render(f, app);
     }
 }
@@ -275,8 +278,13 @@ fn hints_text(app: &App) -> String {
 }
 
 fn footer_line(app: &App) -> Paragraph<'static> {
-    let hints = if app.ticker_prompt.open {
-        " type a ticker · enter add · esc cancel".to_string()
+    let hints = if app.prompt.open {
+        match app.prompt.kind {
+            PromptKind::Ticker => " type a ticker · enter add · esc cancel".to_string(),
+            PromptKind::Position => {
+                " qty and average price · enter save · empty clears · esc cancel".to_string()
+            }
+        }
     } else if app.settings.open {
         // The settings form is a text input; its keys are not remappable.
         " ↑↓ move · ←→ change · enter edit/save · esc close".to_string()
