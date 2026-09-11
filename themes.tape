@@ -1,8 +1,10 @@
-# Records assets/themes.gif: the p key walking through the color presets
+# Records assets/themes.gif: the } key walking through the color presets
 # live. Run `vhs themes.tape` from the repo root with alphai-tui installed
 # and an AlphaAI key configured; one take costs one price request per ticker
 # (the poll interval is parked at 900s: Yahoo rate-limits by IP) and a
-# couple of AlphaAI requests.
+# couple of AlphaAI requests. It runs against a throwaway config carrying
+# nothing but the key: a watchlist and a position are private, and this
+# recording is published.
 
 Output assets/themes.gif
 
@@ -14,23 +16,43 @@ Set Padding 12
 Set Framerate 12
 Set TypingSpeed 40ms
 
+Hide
+Type `mkdir -p /tmp/alphaishot/alphai-tui`
+Enter
+Type `printf '[keys]\n' > /tmp/alphaishot/alphai-tui/config.toml`
+Enter
+Type `grep -m1 ^alphai.= ~/.config/alphai-tui/config.toml >> /tmp/alphaishot/alphai-tui/config.toml`
+Enter
+Type `export XDG_CONFIG_HOME=/tmp/alphaishot; clear`
+Enter
+Show
+Sleep 500ms
 Type "alphai-tui --theme catppuccin-mocha --source yahoo --every 900 NVDA AVGO AAPL META BTC-USD"
 Enter
 Sleep 6s
 
-# p walks the presets, P walks back; the terminal keeps its own background,
-# so only the app's colors move.
-Type "p"
+# } walks the presets, { walks back; the terminal keeps its own background,
+# so only the app's colors move. (These were p and P until 0.22.0, when p
+# became the position prompt.)
+Type "}"
 Sleep 2.5s
-Type "p"
+Type "}"
 Sleep 2.5s
-Type "p"
+Type "}"
 Sleep 2.5s
-Type "p"
+Type "}"
 Sleep 2.5s
-Type "p"
+Type "}"
 Sleep 2.5s
-Type "P"
+Type "{"
 Sleep 2s
-Type "P"
+Type "{"
 Sleep 3s
+
+# Off camera: quit and take the throwaway config away again.
+Hide
+Type "q"
+Sleep 1s
+Type `rm -rf /tmp/alphaishot`
+Enter
+Sleep 1s

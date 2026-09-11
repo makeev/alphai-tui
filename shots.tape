@@ -32,7 +32,21 @@ Set TypingSpeed 20ms
 Hide
 Type "clear"
 Enter
-Type "alphai-tui --theme catppuccin-mocha --source yahoo --every 900 NVDA AVGO AAPL MSFT META TSLA AMZN GOOGL BTC-USD"
+# The Portfolio view (and the two extra columns in the table) need
+# holdings, which live in the config. The take builds a throwaway one out
+# of the AlphaAI key and three invented holdings, and nothing else: a real
+# watchlist and real positions are private, and these shots are published.
+# Every ticker here is already on the watchlist, so they cost no extra
+# requests.
+Type `printf '[keys]\n' > /tmp/alphaishot.toml`
+Enter
+Type `grep -m1 ^alphai.= ~/.config/alphai-tui/config.toml >> /tmp/alphaishot.toml`
+Enter
+Type `printf '\n[[positions]]\nsymbol = "NVDA"\nqty = 120\navg_price = 118.40\n\n[[positions]]\nsymbol = "AAPL"\nqty = 40\navg_price = 232.10\n\n[[positions]]\nsymbol = "MSFT"\nqty = 12\navg_price = 501.30\n' >> /tmp/alphaishot.toml`
+Enter
+Type `clear`
+Enter
+Type "alphai-tui --config /tmp/alphaishot.toml --theme catppuccin-mocha --source yahoo --every 900 NVDA AVGO AAPL MSFT META TSLA AMZN GOOGL BTC-USD"
 Enter
 Sleep 14s
 Show
@@ -71,7 +85,8 @@ Sleep 5s
 Type "f"
 Sleep 3s
 
-# 3:Table, the whole watchlist with sparklines and the extended column.
+# 3:Table, the whole watchlist with sparklines, the extended column and,
+# for the three held tickers, what they are worth and what they made.
 Type "3"
 Sleep 3s
 Screenshot assets/table.png
@@ -113,6 +128,12 @@ Sleep 4s
 Screenshot assets/summary.png
 Sleep 5s
 
+# 8:Portfolio, the holdings from the throwaway config above.
+Type "8"
+Sleep 3s
+Screenshot assets/portfolio.png
+Sleep 5s
+
 # The help overlay, every action with the keys it is bound to.
 Type "?"
 Sleep 3s
@@ -124,3 +145,6 @@ Sleep 1s
 Hide
 Type "q"
 Sleep 2s
+Type `rm -f /tmp/alphaishot.toml`
+Enter
+Sleep 1s

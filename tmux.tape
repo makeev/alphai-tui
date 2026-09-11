@@ -13,7 +13,9 @@
 # own socket with an empty config ($T), so the shot carries the stock tmux
 # status bar and not whatever the machine doing the shooting wears, and its
 # status-right is replaced with a clock so the hostname stays out of a
-# public image.
+# public image. The panes read a throwaway config holding nothing but the
+# AlphaAI key, for the same reason: a watchlist and a position are private
+# and this shot is published.
 
 Output assets/out.gif
 
@@ -27,6 +29,14 @@ Set TypingSpeed 10ms
 
 Hide
 Type "unset TMUX; clear"
+Enter
+Type `mkdir -p /tmp/alphaishot/alphai-tui`
+Enter
+Type `printf '[keys]\n' > /tmp/alphaishot/alphai-tui/config.toml`
+Enter
+Type `grep -m1 ^alphai.= ~/.config/alphai-tui/config.toml >> /tmp/alphaishot/alphai-tui/config.toml`
+Enter
+Type `export XDG_CONFIG_HOME=/tmp/alphaishot; clear`
 Enter
 Type "T='tmux -L alphaishot -f /dev/null'"
 Enter
@@ -67,5 +77,8 @@ Ctrl+B
 Type "d"
 Sleep 1s
 Type '$T kill-server'
+Enter
+Sleep 1s
+Type `rm -rf /tmp/alphaishot`
 Enter
 Sleep 1s

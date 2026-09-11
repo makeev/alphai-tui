@@ -6,6 +6,12 @@
 # The app wears catppuccin-mocha and the terminal wears the matching
 # theme: the app only paints foreground colors, so the two have to agree.
 # Prices come from the keyless source, which is what a first run gets.
+#
+# The Portfolio scene needs holdings, and those live in the config. The
+# take builds a throwaway one (the AlphaAI key, lifted out of the real
+# config, and three invented holdings) and points XDG_CONFIG_HOME at it.
+# Nothing else is copied on purpose: a watchlist and real positions are
+# private, and this recording ends up in a public README.
 
 Output assets/demo.gif
 
@@ -16,6 +22,20 @@ Set Height 700
 Set Padding 12
 Set Framerate 12
 Set TypingSpeed 40ms
+
+Hide
+Type `mkdir -p /tmp/alphaidemo/alphai-tui`
+Enter
+Type `printf '[keys]\n' > /tmp/alphaidemo/alphai-tui/config.toml`
+Enter
+Type `grep -m1 ^alphai.= ~/.config/alphai-tui/config.toml >> /tmp/alphaidemo/alphai-tui/config.toml`
+Enter
+Type `printf '\n[[positions]]\nsymbol = "NVDA"\nqty = 120\navg_price = 118.40\n\n[[positions]]\nsymbol = "AAPL"\nqty = 40\navg_price = 232.10\n\n[[positions]]\nsymbol = "META"\nqty = 15\navg_price = 702.80\n' >> /tmp/alphaidemo/alphai-tui/config.toml`
+Enter
+Type `export XDG_CONFIG_HOME=/tmp/alphaidemo; clear`
+Enter
+Show
+Sleep 500ms
 
 Type "alphai-tui --theme catppuccin-mocha --source yahoo --every 900 NVDA AVGO AAPL META BTC-USD"
 Enter
@@ -57,6 +77,10 @@ Sleep 3s
 Type "7"
 Sleep 4s
 
+# Portfolio: the holdings, what they are worth and what they made
+Type "8"
+Sleep 4.5s
+
 # Chart: candles with the moving averages, volume and RSI; t cycles ranges
 Type "4"
 Sleep 3s
@@ -67,3 +91,11 @@ Sleep 3.5s
 # the live dashboard, not on an empty shell)
 Type "1"
 Sleep 4s
+
+# Off camera: quit and take the throwaway config away again.
+Hide
+Type "q"
+Sleep 1s
+Type `rm -rf /tmp/alphaidemo`
+Enter
+Sleep 1s
