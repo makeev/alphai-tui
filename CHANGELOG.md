@@ -23,6 +23,22 @@ apt repository joined later, and carry every version since.
   the highest-scoring one, so a busy day stays readable.
 - The Split view's footer drops its `s settings` hint to stay inside 110
   columns, the way the News footer already does. `?` still lists it.
+- A blocked or throttled price source no longer means an empty screen. The
+  last good quotes and candles are kept in the platform cache directory and
+  drawn while the first poll is in flight, labelled `cached 2h ago` on the
+  quote rail until live data lands. Entries older than a week, or taken
+  with a different range and interval, are ignored.
+- Yahoo's `429` now says what it is: an IP block that lasts tens of minutes
+  (measured: 19 minutes after about ten requests, over an hour for the
+  second one that day), with the advice to switch source. It is also no
+  longer retried, since another request only feeds the counter that holds
+  the block open. Alpaca's 429, which is a genuine transient refusal, keeps
+  its retries.
+- When every ticker has been failing for 45 seconds, the app switches to
+  another source that has its credentials, keeps the rows already on
+  screen, and says so in the footer. It never switches back on its own and
+  never returns to a source that failed this session; `source_fallback =
+  false` in the config turns it off.
 - `--json` prints the one-shot quote run as a JSON array instead of a text
   table, for status bars and cron jobs: price, the move from the previous
   close, the extended print with its own move from the regular close, the

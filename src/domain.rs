@@ -1,4 +1,5 @@
 use clap::ValueEnum;
+use serde::{Deserialize, Serialize};
 
 /// History window requested from a data source.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
@@ -150,7 +151,7 @@ impl Sessions {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Quote {
     pub symbol: String,
     /// The regular session's price: the last trade while the exchange was
@@ -206,7 +207,7 @@ impl Quote {
 }
 
 /// One OHLCV bar; `ts` is epoch seconds.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct Candle {
     pub ts: i64,
     pub open: f64,
@@ -217,7 +218,7 @@ pub struct Candle {
 }
 
 /// Everything the UI knows about one ticker: latest quote + recent candles.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TickerData {
     pub quote: Quote,
     pub candles: Vec<Candle>,

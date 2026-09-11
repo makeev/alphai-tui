@@ -69,6 +69,7 @@ fn empty_app_with_cmds(
         keymap: crate::keymap::Keymap::default(),
         alphai_enabled: true,
         first_run: false,
+        source_fallback: true,
     });
     (app, alphai_rx)
 }
@@ -968,6 +969,164 @@ fn footer_hints_fit_110_columns() {
             view.id()
         );
     }
+}
+
+/// A source that has stopped answering is not a screen full of "error":
+/// the last rows stay up, labelled with their age, until something live
+/// replaces them.
+#[test]
+fn cached_rows_open_the_app_and_the_rail_says_how_old_they_are() {
+    let mut app = empty_app(vec!["AAPL".into()]);
+    let entry = crate::cache::Entry {
+        // Two hours old, as an overnight restart would find it.
+        fetched: chrono::Utc::now().timestamp() - 7_200,
+        params: "1d/5m/regular".into(),
+        data: TickerData {
+            quote: plain_quote("AAPL", 214.5, Some(200.0), Some("USD")),
+            candles: vec![
+                Candle {
+                    ts: 1_700_000_000,
+                    open: 200.0,
+                    high: 215.0,
+                    low: 199.0,
+                    close: 214.0,
+                    volume: None,
+                },
+                Candle {
+                    ts: 1_700_000_300,
+                    open: 214.0,
+                    high: 215.0,
+                    low: 213.0,
+                    close: 214.5,
+                    volume: None,
+                },
+            ],
+        },
+    };
+    app.seed_cached("AAPL".into(), entry);
+    let rail = ui::rail::text(&ui::rail::line(&app, 130, market_open_moment()));
+    assert!(rail.contains("214.50"), "cached price missing: {rail}");
+    assert!(rail.contains("cached 2h"), "cached badge missing: {rail}");
+
+    // The first live poll retires the badge, and does not pulse: the move
+    // from a two hour old price is not a tick that just happened.
+    app.apply(SourceEvent::Data {
+        symbol: "AAPL".into(),
+        data: TickerData {
+            quote: plain_quote("AAPL", 216.0, Some(200.0), Some("USD")),
+            candles: vec![Candle {
+                ts: 1_700_000_600,
+                open: 214.5,
+                high: 216.5,
+                low: 214.0,
+                close: 216.0,
+                volume: None,
+            }],
+        },
+    });
+    let rail = ui::rail::text(&ui::rail::line(&app, 130, market_open_moment()));
+    assert!(
+        !rail.contains("cached"),
+        "badge outlived the live poll: {rail}"
+    );
+    assert!(
+        app.price_flash_dir("AAPL").is_none(),
+        "the first live price pulsed as if it were a tick"
+    );
+}
+
+/// Yahoo blocks by IP for tens of minutes and no retry shortens that, so a
+/// source that has stopped answering every symbol is swapped for one that
+/// still works, with the rows left on screen and a line saying what moved.
+#[test]
+fn a_dead_source_is_swapped_for_a_configured_one() {
+    let mut app = fake_app();
+    app.config.keys.insert("finnhub".into(), "test-key".into());
+    for symbol in ["AAPL", "MSFT"] {
+        app.apply(SourceEvent::Error {
+            symbol: symbol.into(),
+            error: crate::source::yahoo::THROTTLE_MSG.into(),
+        });
+    }
+    // One failing ticker is a bad ticker; the clock only starts when the
+    // whole watchlist is down.
+    assert!(app.source_trouble_since.is_some());
+    app.fallback_if_stuck();
+    assert_eq!(app.source_name, "yahoo", "switched before the grace period");
+
+    app.source_trouble_since = Some(Instant::now() - std::time::Duration::from_secs(120));
+    app.fallback_if_stuck();
+    assert_eq!(app.source_name, "finnhub");
+    assert!(app.errors.is_empty(), "errors survived the swap");
+    assert!(
+        app.data.contains_key("AAPL"),
+        "the rows on screen were thrown away"
+    );
+    assert!(
+        app.notice()
+            .is_some_and(|n| n.contains("yahoo stopped answering, switched to finnhub")),
+        "the swap went unexplained"
+    );
+    // Wide enough for the hints and the notice behind them: on a narrow
+    // terminal the header, which names the live source for good, carries it.
+    let screen = render_sized(&mut app, 200, 30);
+    assert!(
+        screen.contains("switched to finnhub"),
+        "notice missing from the footer:\n{screen}"
+    );
+    assert!(screen.contains("· finnhub"), "header still names yahoo");
+
+    // And it never walks back into the source that just failed: with only
+    // those two configured there is nothing left, and the search stops
+    // instead of rebuilding a client on every frame.
+    for symbol in ["AAPL", "MSFT"] {
+        app.apply(SourceEvent::Error {
+            symbol: symbol.into(),
+            error: "finnhub API 500".into(),
+        });
+    }
+    app.source_trouble_since = Some(Instant::now() - std::time::Duration::from_secs(120));
+    app.fallback_if_stuck();
+    assert_eq!(app.source_name, "finnhub", "fell back into the dead source");
+}
+
+/// With no other source configured (the keyless default is all most people
+/// have), the errors stay and nothing is swapped behind the user's back.
+#[test]
+fn nothing_is_swapped_when_there_is_nowhere_to_go() {
+    let mut app = fake_app();
+    for symbol in ["AAPL", "MSFT"] {
+        app.apply(SourceEvent::Error {
+            symbol: symbol.into(),
+            error: "yahoo API 429".into(),
+        });
+    }
+    app.source_trouble_since = Some(Instant::now() - std::time::Duration::from_secs(120));
+    app.fallback_if_stuck();
+    assert_eq!(app.source_name, "yahoo");
+    assert!(app.notice().is_none(), "a notice with nothing to report");
+    assert_eq!(
+        app.errors.len(),
+        2,
+        "errors must stay on the failing source"
+    );
+}
+
+/// `source_fallback = false` keeps the choice of source entirely manual.
+#[test]
+fn the_fallback_can_be_turned_off() {
+    let mut app = fake_app();
+    app.source_fallback = false;
+    app.config.keys.insert("finnhub".into(), "test-key".into());
+    for symbol in ["AAPL", "MSFT"] {
+        app.apply(SourceEvent::Error {
+            symbol: symbol.into(),
+            error: "yahoo API 429".into(),
+        });
+    }
+    app.source_trouble_since = Some(Instant::now() - std::time::Duration::from_secs(120));
+    app.fallback_if_stuck();
+    assert_eq!(app.source_name, "yahoo");
 }
 
 #[test]
@@ -2642,6 +2801,7 @@ fn config_defaults_seed_startup_state() {
         keymap: crate::keymap::Keymap::default(),
         alphai_enabled: false,
         first_run: false,
+        source_fallback: true,
     });
     assert_eq!(app.view_idx, ui::view_index(ui::ViewId::News));
     assert_eq!(app.chart_style, ChartStyle::Line);
@@ -3068,6 +3228,7 @@ fn first_run_opens_settings_with_welcome() {
         keymap: crate::keymap::Keymap::default(),
         alphai_enabled: false,
         first_run: true,
+        source_fallback: true,
     });
     assert!(app.settings.open);
     let screen = render(&mut app);

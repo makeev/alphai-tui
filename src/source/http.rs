@@ -44,6 +44,28 @@ const RETRY_DELAY: Duration = Duration::from_millis(200);
 const RETRY_JITTER: Duration = Duration::from_millis(400);
 const MAX_RETRIES: usize = 2;
 
+/// Which refusals a source wants retried.
+///
+/// `Transient` is the default: a rate limiter that refused a burst plus the
+/// gateway-class blips in front of every one of these APIs. `GatewayOnly`
+/// is for a provider whose 429 is not a burst limiter at all but a block
+/// with a timer on it, where a retry cannot win and each attempt is another
+/// request against the counter that is holding the block open.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Retry {
+    Transient,
+    GatewayOnly,
+}
+
+impl Retry {
+    fn covers(self, status: StatusCode) -> bool {
+        match self {
+            Self::Transient => is_transient(status),
+            Self::GatewayOnly => matches!(status.as_u16(), 502..=504),
+        }
+    }
+}
+
 /// Default client for a source: app UA, shared timeout.
 pub fn client() -> Result<reqwest::Client> {
     client_with(APP_UA, None)
@@ -76,6 +98,19 @@ pub async fn get_json<T: DeserializeOwned>(
     query: &[(&str, &str)],
     err_map: impl Fn(StatusCode, &str) -> String,
 ) -> Result<T> {
+    get_json_retrying(client, api, url, query, err_map, Retry::Transient).await
+}
+
+/// `get_json` for a source that wants a different retry policy; see
+/// `Retry`.
+pub async fn get_json_retrying<T: DeserializeOwned>(
+    client: &reqwest::Client,
+    api: &str,
+    url: &str,
+    query: &[(&str, &str)],
+    err_map: impl Fn(StatusCode, &str) -> String,
+    retry: Retry,
+) -> Result<T> {
     let mut resp = client
         .get(url)
         .query(query)
@@ -83,7 +118,7 @@ pub async fn get_json<T: DeserializeOwned>(
         .await
         .context("request failed")?;
     for _ in 0..MAX_RETRIES {
-        if !is_transient(resp.status()) {
+        if !retry.covers(resp.status()) {
             break;
         }
         tokio::time::sleep(retry_delay()).await;
@@ -212,6 +247,23 @@ mod tests {
     fn snippet_truncates_long_bodies() {
         assert_eq!(snippet("short"), "short");
         assert_eq!(snippet(&"x".repeat(300)).chars().count(), 120);
+    }
+
+    /// Yahoo's 429 is an IP block with a timer on it, not a burst limiter:
+    /// measured 2026-09-10 it held for 19 minutes, and the second block
+    /// that day came after fewer requests and held for over an hour. A
+    /// retry cannot win that and each attempt feeds the counter.
+    #[test]
+    fn gateway_only_leaves_rate_limits_alone() {
+        let status = |code| StatusCode::from_u16(code).unwrap();
+        assert!(!Retry::GatewayOnly.covers(status(429)));
+        assert!(Retry::Transient.covers(status(429)));
+        for code in [502, 503, 504] {
+            assert!(Retry::GatewayOnly.covers(status(code)), "{code}");
+        }
+        for code in [200, 400, 401, 403, 404, 500] {
+            assert!(!Retry::GatewayOnly.covers(status(code)), "{code}");
+        }
     }
 
     #[test]

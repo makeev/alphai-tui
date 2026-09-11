@@ -288,7 +288,15 @@ fn footer_line(app: &App) -> Paragraph<'static> {
         hints_text(app)
     };
     let mut spans = vec![Span::raw(hints).dim()];
-    if let Some((symbol, error)) = app.errors.iter().next() {
+    // What the app did on its own outranks what a source is complaining
+    // about: after a fallback the errors are gone anyway, and the notice is
+    // the only place the swap is explained.
+    if let Some(notice) = app.notice() {
+        spans.push(Span::styled(
+            ellipsize(&format!("  {notice}"), 120),
+            Style::new().fg(app.theme.warn).add_modifier(Modifier::BOLD),
+        ));
+    } else if let Some((symbol, error)) = app.errors.iter().next() {
         let msg = ellipsize(&format!("  {symbol}: {error}"), 120);
         spans.push(Span::styled(
             msg,

@@ -1,5 +1,6 @@
 mod alphai;
 mod app;
+mod cache;
 mod config;
 mod domain;
 mod indicators;
@@ -19,7 +20,7 @@ use clap::Parser;
 use clap::ValueEnum;
 
 use crate::app::{App, AppInit};
-use crate::domain::{Interval, Range, Sessions, fmt_price};
+use crate::domain::{Interval, Range, Sessions, fetch_range, fmt_price};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -150,15 +151,33 @@ fn main() -> Result<()> {
     // The watchlist is shared rather than moved: the add and remove keys
     // edit it live and the poller picks the change up on its next tick.
     let shared_symbols: poller::SharedSymbols = Arc::new(RwLock::new(symbols.clone()));
-    rt.spawn(poller::run(
-        shared.clone(),
-        shared_symbols.clone(),
-        params.clone(),
-        shared_every.clone(),
-        resolved.chart.sma_slow,
-        tx.clone(),
-        refresh.clone(),
-    ));
+    // Last-good prices from the previous run: the screen starts with
+    // numbers on it instead of "loading…", and a source that is blocked
+    // right now has something to be blocked in front of.
+    let cached = cache::Store::load();
+    let window = cache::params_key(
+        fetch_range(range, interval, resolved.chart.sma_slow),
+        interval,
+        sessions,
+    );
+    let seeds: Vec<(String, cache::Entry)> = symbols
+        .iter()
+        .filter_map(|symbol| {
+            cached
+                .get(source.name(), symbol, &window)
+                .map(|entry| (symbol.clone(), entry.clone()))
+        })
+        .collect();
+    rt.spawn(poller::run(poller::Poller {
+        source: shared.clone(),
+        symbols: shared_symbols.clone(),
+        params: params.clone(),
+        every: shared_every.clone(),
+        slow_bars: resolved.chart.sma_slow,
+        tx: tx.clone(),
+        refresh: refresh.clone(),
+        cache: cached,
+    }));
 
     let alphai_key = cfg.alphai_key();
     let (alphai_tx, alphai_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -168,6 +187,9 @@ fn main() -> Result<()> {
     // either way afterwards.
     let mut ui = resolved.ui;
     ui.bare |= args.bare;
+
+    // Read before the config is handed to the app, which takes it whole.
+    let source_fallback = cfg.source_fallback.unwrap_or(true);
 
     let mut terminal = ratatui::init();
     let mut app = App::new(AppInit {
@@ -192,7 +214,11 @@ fn main() -> Result<()> {
         keymap: resolved.keymap,
         alphai_enabled: alphai_key.is_some(),
         first_run: !cfg_existed,
+        source_fallback,
     });
+    for (symbol, entry) in seeds {
+        app.seed_cached(symbol, entry);
+    }
     let result = app.run(&mut terminal);
     ratatui::restore();
     result

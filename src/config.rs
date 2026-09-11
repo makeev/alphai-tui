@@ -48,6 +48,11 @@ pub struct Config {
     pub every: Option<u64>,
     pub range: Option<String>,
     pub interval: Option<String>,
+    /// Whether a source that stops answering is swapped for one that still
+    /// does (default true). Yahoo blocks by IP for tens of minutes and no
+    /// retry can shorten that, so the only repair is another provider; set
+    /// it false to keep the errors and choose by hand.
+    pub source_fallback: Option<bool>,
     /// Where Enter opens a news article: "alphai" (article page on
     /// alphai.io, the default) or "original" (the source site).
     pub news_open: Option<String>,
@@ -612,6 +617,7 @@ mod tests {
             every: Some(30),
             range: Some("5d".into()),
             interval: Some("15m".into()),
+            source_fallback: Some(false),
             news_open: Some("original".into()),
             keys: BTreeMap::from([
                 ("finnhub".to_string(), "fh-key".to_string()),

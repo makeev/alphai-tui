@@ -25,6 +25,29 @@ impl Yahoo {
     }
 }
 
+/// What a 429 from the public chart feed actually means, in the terms a
+/// reader can act on.
+///
+/// It is not the usual "slow down": the feed throttles by IP and holds the
+/// block for a fixed stretch however quietly the client waits. Measured
+/// 2026-09-10 from one address: the first block arrived after about ten
+/// requests and held for 19 minutes, and the second came after eight and
+/// held for over an hour. Nothing the client does shortens it, so the
+/// message points at the one thing that does work, which is a different
+/// source. This is the failure behind the "it just stops working" reports
+/// on every other terminal stock tool.
+pub(crate) const THROTTLE_MSG: &str = "yahoo is rate limiting this IP and blocks last tens of minutes.      Press s to switch source, or wait it out";
+
+fn error_message(status: reqwest::StatusCode, body: &str) -> String {
+    if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+        return THROTTLE_MSG.to_string();
+    }
+    match http::body_message(body) {
+        Some(msg) => format!("yahoo API {status}: {msg}"),
+        None => format!("yahoo API {status}"),
+    }
+}
+
 #[async_trait]
 impl DataSource for Yahoo {
     fn name(&self) -> &'static str {
@@ -49,7 +72,7 @@ impl DataSource for Yahoo {
         // for rather than always taken. The quote fields are unaffected:
         // `fulldayPrice` and the rest arrive either way.
         let pre_post = matches!(sessions, Sessions::Extended);
-        let body: ChartResponse = http::get_json(
+        let body: ChartResponse = http::get_json_retrying(
             &self.client,
             "yahoo",
             &url,
@@ -58,10 +81,10 @@ impl DataSource for Yahoo {
                 ("interval", interval.as_str()),
                 ("includePrePost", if pre_post { "true" } else { "false" }),
             ],
-            |status, body| match http::body_message(body) {
-                Some(msg) => format!("yahoo API {status}: {msg}"),
-                None => format!("yahoo API {status}"),
-            },
+            error_message,
+            // A 429 here is a block with a timer, not a burst limiter; see
+            // `throttle_msg`.
+            http::Retry::GatewayOnly,
         )
         .await?;
 
@@ -308,5 +331,24 @@ mod tests {
         };
         assert_eq!(quote.extended_price(), None);
         assert_eq!(quote.extended_change_pct(), None);
+    }
+
+    /// A 429 here is not "slow down": the feed blocks by IP for tens of
+    /// minutes whatever the client does, so the message names the one
+    /// thing that fixes it now. The generic path keeps the API's own text.
+    #[test]
+    fn a_429_says_it_is_an_ip_block_and_what_to_do() {
+        use reqwest::StatusCode;
+        let msg = error_message(StatusCode::TOO_MANY_REQUESTS, "Too Many Requests");
+        assert_eq!(msg, THROTTLE_MSG);
+        assert!(msg.contains("Press s to switch source"), "{msg}");
+        assert_eq!(
+            error_message(StatusCode::NOT_FOUND, r#"{"message":"No data found"}"#),
+            "yahoo API 404 Not Found: No data found"
+        );
+        assert_eq!(
+            error_message(StatusCode::NOT_FOUND, "<html>nope</html>"),
+            "yahoo API 404 Not Found"
+        );
     }
 }

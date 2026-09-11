@@ -132,6 +132,20 @@ fn optional_zones(app: &App, symbol: &str, now: DateTime<Utc>) -> Vec<Vec<Vec<Sp
             )],
         ]);
     }
+    // Right behind the price it qualifies: these rows are the last ones
+    // that worked, not what the market is doing now.
+    if let Some(age) = app.cached_age(symbol) {
+        zones.push(vec![
+            vec![Span::styled(
+                format!("  cached {age} ago"),
+                Style::new().fg(theme.warn),
+            )],
+            vec![Span::styled(
+                format!("  cached {age}"),
+                Style::new().fg(theme.warn),
+            )],
+        ]);
+    }
     zones.push(extended_zone(quote, now, theme));
     zones.push(session_zone(app, symbol, now));
     if let Some(note) = app.source_delay {

@@ -210,6 +210,7 @@ chain and no position tracking.
 | Positions and P&L | no | quantity and average price | cost-basis lots, groups, currencies |
 | Export for scripts | `--once` text, `--json` | no | CSV and JSON |
 | Price sources | Yahoo, Finnhub, Alpaca | Yahoo | Yahoo, Coinbase |
+| A source that stops answering | cached start, automatic switch | no | no |
 | Add or remove a ticker in the app | yes | yes | no |
 | Rebindable keys | any action, in the config | vim keys | no |
 
@@ -362,6 +363,55 @@ the way a broker screen does. A symbol that failed still gets a row, as
 `{"symbol": "…", "error": "…"}`, so a watchlist of four always prints four.
 Warnings go to stderr, so stdout stays a valid JSON document.
 
+Without symbols it prints the watchlist you saved in the app, and `-s`,
+`-r` and `-i` work the same as for a normal run:
+
+```sh
+alphai-tui --json                    # whatever the config file holds
+alphai-tui --json -s alpaca AAPL     # another source for this one run
+
+# a row per ticker for awk, a spreadsheet or a database
+alphai-tui --json | jq -r '.[] | [.symbol, .price, .change_pct] | @tsv'
+
+# append a snapshot to a log you can chart later; every row carries `fetched`
+alphai-tui --json | jq -c '.[]' >> quotes.jsonl
+
+# report only what broke, since the exit code is 0 either way
+alphai-tui --json | jq -r '.[] | select(.error) | "\(.symbol): \(.error)"'
+
+# watch a level from cron, printing nothing until it breaks
+alphai-tui --json NVDA | jq -e '.[0].price > 200' >/dev/null &&
+  echo 'NVDA above 200'
+```
+
+For a status bar, call a small wrapper instead of inlining the pipeline,
+because a jq filter quoted inside `tmux.conf` or an i3blocks config turns
+unreadable fast:
+
+```sh
+#!/bin/sh
+# ~/bin/quote-bar
+alphai-tui --json AAPL NVDA |
+  jq -r 'map(select(.error | not)
+             | "\(.symbol) \(.price) \(.change_pct * 100 | round / 100)%")
+         | join("  ")'
+```
+
+```tmux
+set -g status-interval 60
+set -g status-right '#(~/bin/quote-bar)'
+```
+
+Dropping the error rows there keeps a dead symbol from writing `null` into
+the bar, and the rounding trims `-6.1302` to the two decimals a bar has
+room for.
+
+One run costs one request per symbol (two on alpaca), so give the loop an
+interval rather than letting the bar refresh as fast as it likes. Yahoo
+throttles by IP address and answers a burst with 429s for several minutes
+afterwards, which is long enough to lose the pane you built. A minute
+between runs is plenty for a status bar; below that, use a keyed source.
+
 CLI arguments win over the config file; the config file wins over built-in
 defaults. API keys can also come from env vars, which win over the config:
 `ALPHAI_API_KEY`, `FINNHUB_API_KEY`, `APCA_API_KEY_ID`, `APCA_API_SECRET_KEY`.
@@ -492,6 +542,34 @@ get a sourced brief without leaving the terminal.
   `ALPACA_FEED=sip` needs a paid data plan; `ALPACA_FEED=delayed_sip` gives
   the full market with a 15 minute delay.
 
+**When a source stops answering**
+
+Every keyless quote feed throttles by IP sooner or later, and Yahoo's
+blocks are long: measured from one address, the first arrived after about
+ten requests and held for 19 minutes, the second came after eight and held
+for over an hour. No client-side retry shortens that, which is why the
+usual report about tools in this category is that they just stop working.
+Three things happen here instead:
+
+- Startup is never empty. The last good quotes and candles of every ticker
+  are kept in `<cache dir>/alphai-tui/quotes.json` (`~/.cache` on Linux,
+  `~/Library/Caches` on macOS), written at most once a minute, and put on
+  screen while the first poll is in flight. The quote rail labels them
+  (`cached 2h ago`) until live data replaces them, so old prices are never
+  passed off as current. Entries older than a week, or taken with a
+  different range and interval, are ignored rather than drawn.
+- A `429` from Yahoo says what it actually is: an IP block that lasts tens
+  of minutes, with the advice to switch source. It is also the one refusal
+  the client does not retry, since another request only feeds the counter
+  holding the block open.
+- If every ticker keeps failing for 45 seconds, the app switches to another
+  source that has its credentials and says so in the footer. It keeps the
+  rows already on screen, never switches back on its own (probing a
+  throttled feed is how a block gets extended) and never returns to a
+  source that failed this session. The header always names the source in
+  use, `s` picks another by hand, and `source_fallback = false` in the
+  config turns the whole thing off.
+
 **News, sentiment, insider**
 
 - [AlphaAI](https://alphai.io?utm_source=alphai-tui&utm_medium=referral): AI-enriched financial news feed. Every
@@ -552,6 +630,7 @@ every = 15
 range = "1d"
 interval = "5m"
 news_open = "alphai"  # where enter opens news: "alphai" or "original"
+source_fallback = true  # switch source when this one stops answering
 
 [keys]
 alphai = "ak_live_..."

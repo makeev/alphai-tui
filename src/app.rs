@@ -35,6 +35,18 @@ use crate::ui;
 /// pulse both appears and clears promptly.
 pub const PRICE_FLASH: Duration = Duration::from_millis(1500);
 
+/// How long every symbol has to be failing before the app looks for another
+/// source. Three cycles at the default 15s poll, which is enough to tell a
+/// blocked provider from one unlucky round of timeouts, and on a long poll
+/// interval it simply means the next cycle.
+const FALLBACK_AFTER: Duration = Duration::from_secs(45);
+
+/// How long a footer notice stays up. Long enough to be read on a glance
+/// back at the terminal, short enough not to sit on top of the key hints
+/// for the rest of the session; the header keeps naming the live source
+/// after it fades.
+const NOTICE: Duration = Duration::from_secs(60);
+
 /// How the price chart draws history: candlesticks or the classic close line.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ChartStyle {
@@ -215,6 +227,9 @@ pub struct AppInit {
     pub keymap: Keymap,
     pub alphai_enabled: bool,
     pub first_run: bool,
+    /// Whether a source that stops answering may be swapped for one that
+    /// still does (`source_fallback` in the config).
+    pub source_fallback: bool,
 }
 
 pub struct App {
@@ -225,6 +240,28 @@ pub struct App {
     /// pulse the price for `PRICE_FLASH` after it via `price_flash_dir`;
     /// the first data a symbol ever gets sets no flash (nothing changed).
     pub price_flash: HashMap<String, (Instant, bool)>,
+    /// Symbols whose rows came off disk (`crate::cache`) rather than from
+    /// this session, with the unix second they were fetched. The rail
+    /// badges them so a blocked source never passes old prices off as live;
+    /// the first real poll of a symbol clears its entry.
+    pub from_cache: HashMap<String, i64>,
+    /// Since when every symbol on the watchlist has been failing. The
+    /// fallback is measured from here; any successful poll clears it.
+    pub(crate) source_trouble_since: Option<Instant>,
+    /// Sources this session has already given up on, so a fallback never
+    /// walks back into the one that just failed.
+    abandoned: Vec<&'static str>,
+    /// Whether an unusable source may be swapped for a working one
+    /// (`source_fallback` in the config).
+    pub(crate) source_fallback: bool,
+    /// Set once there is nothing left to fall back to: without it the app
+    /// would rebuild every source on every frame of a long outage. Cleared
+    /// whenever the user picks a source themselves.
+    fallback_exhausted: bool,
+    /// A short-lived line for the footer: what the app did on its own, such
+    /// as switching source. Errors have their own place; this is for
+    /// actions, and it fades.
+    pub notice: Option<(String, Instant)>,
     pub selected: usize,
     pub view_idx: usize,
     pub source_name: &'static str,
@@ -337,6 +374,12 @@ impl App {
             data: HashMap::new(),
             errors: HashMap::new(),
             price_flash: HashMap::new(),
+            from_cache: HashMap::new(),
+            source_trouble_since: None,
+            abandoned: Vec::new(),
+            source_fallback: init.source_fallback,
+            fallback_exhausted: false,
+            notice: None,
             selected: 0,
             view_idx: init.ui.view_idx,
             source_name: init.source_name,
@@ -398,6 +441,29 @@ impl App {
         &self.symbols[self.selected]
     }
 
+    /// Puts one ticker's last-good rows on screen before the first poll
+    /// lands. Marked as cached until that poll replaces them, so the age of
+    /// what is on screen is never a guess.
+    pub fn seed_cached(&mut self, symbol: String, entry: crate::cache::Entry) {
+        self.from_cache.insert(symbol.clone(), entry.fetched);
+        self.data.insert(symbol, entry.data);
+    }
+
+    /// How old the shown rows are when they came off disk, as a label.
+    pub fn cached_age(&self, symbol: &str) -> Option<String> {
+        self.from_cache
+            .get(symbol)
+            .map(|at| crate::cache::age_label(*at))
+    }
+
+    /// The still-current footer notice, if it has not faded yet.
+    pub fn notice(&self) -> Option<&str> {
+        self.notice
+            .as_ref()
+            .filter(|(_, at)| at.elapsed() < NOTICE)
+            .map(|(text, _)| text.as_str())
+    }
+
     /// The still-active price pulse of a symbol: Some(tick was up) for
     /// `PRICE_FLASH` after a poll changed its price, then None.
     pub fn price_flash_dir(&self, symbol: &str) -> Option<bool> {
@@ -417,6 +483,7 @@ impl App {
             while let Ok(ev) = self.rx.try_recv() {
                 self.apply(ev);
             }
+            self.fallback_if_stuck();
             self.ensure_alphai_data();
             terminal.draw(|f| ui::draw(f, self))?;
             if event::poll(std::time::Duration::from_millis(100))?
@@ -433,8 +500,15 @@ impl App {
         match event {
             SourceEvent::Data { symbol, mut data } => {
                 self.errors.remove(&symbol);
+                // A live answer clears the outage clock and retires the
+                // cached rows this symbol started on.
+                self.source_trouble_since = None;
+                let was_cached = self.from_cache.remove(&symbol).is_some();
                 if let Some(old) = self.data.get(&symbol)
                     && old.quote.price != data.quote.price
+                    // The first real price after a cached one is not a tick:
+                    // pulsing it would report yesterday's move as just now.
+                    && !was_cached
                 {
                     self.price_flash.insert(
                         symbol.clone(),
@@ -456,9 +530,73 @@ impl App {
             SourceEvent::Error { symbol, error } => {
                 self.errors.insert(symbol, error);
                 self.last_update = Some(Local::now());
+                // One failing ticker is a bad symbol; all of them is the
+                // source, and that is what the fallback waits on.
+                if self.source_trouble_since.is_none()
+                    && self.symbols.iter().all(|s| self.errors.contains_key(s))
+                {
+                    self.source_trouble_since = Some(Instant::now());
+                }
             }
             SourceEvent::Alphai(ev) => self.apply_alphai(ev),
         }
+    }
+
+    /// Swaps a source that has stopped answering for one that has not.
+    ///
+    /// Yahoo, the keyless default, blocks by IP for tens of minutes at a
+    /// time and no retry can shorten that, so the only real repair is a
+    /// different provider. The swap waits for every symbol to be failing
+    /// (one bad ticker is a bad ticker) and for `FALLBACK_AFTER` on top of
+    /// that, keeps the rows that are on screen, and says what it did. It
+    /// never switches back on its own: probing a throttled source is how
+    /// the block gets extended, and the header names the source anyway.
+    pub(crate) fn fallback_if_stuck(&mut self) {
+        if !self.source_fallback || self.fallback_exhausted || self.settings.open {
+            return;
+        }
+        let Some(since) = self.source_trouble_since else {
+            return;
+        };
+        if since.elapsed() < FALLBACK_AFTER {
+            return;
+        }
+        let Some((name, src)) = self.working_source() else {
+            // Nothing else is configured: stop looking until the user picks
+            // a source themselves, or this rebuilds a client every frame.
+            self.fallback_exhausted = true;
+            return;
+        };
+        let failed = self.source_name;
+        self.abandoned.push(failed);
+        self.source_name = name;
+        self.source_delay = src.delay_note();
+        *self.source.write().unwrap() = src;
+        // The rows stay: what is on screen is the last thing that worked,
+        // and the rail already says how old it is.
+        self.errors.clear();
+        self.source_trouble_since = None;
+        self.refresh.notify_one();
+        self.notice = Some((
+            format!("{failed} stopped answering, switched to {name} (s to choose another)"),
+            Instant::now(),
+        ));
+    }
+
+    /// The first registered source that is not the current one, has not
+    /// already failed this session, and has the credentials it needs.
+    fn working_source(&self) -> Option<(&'static str, Arc<dyn crate::source::DataSource>)> {
+        crate::source::registry::SOURCES
+            .iter()
+            .filter(|info| {
+                !info.id.eq_ignore_ascii_case(self.source_name)
+                    && !self.abandoned.contains(&info.id)
+            })
+            .find_map(|info| {
+                crate::source::make_source(info.id, &self.config)
+                    .ok()
+                    .map(|src| (info.id, src))
+            })
     }
 
     /// Returns true when the app should quit. Fixed keys resolve first
