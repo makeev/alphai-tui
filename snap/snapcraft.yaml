@@ -1,0 +1,44 @@
+name: alphai-tui
+title: alphai-tui
+summary: Bloomberg-style stock dashboard for the terminal
+description: |
+  An open-source stock dashboard for the terminal that also answers why the
+  price moved. Live quotes and candlestick charts on one side; on the other,
+  for the same ticker, AI-scored news with a full analysis of each story, the
+  SEC Form 4 insider filings and a structured read of the last earnings
+  report. Seven views one keystroke apart, one Rust binary built on ratatui.
+
+  Quotes and charts run keyless on Yahoo, or on Finnhub or Alpaca with their
+  own free keys. The News, Insider and Earnings views use a free AlphAI key
+  that you paste once in the settings screen.
+
+  Usage: alphai-tui NVDA AVGO AAPL MSFT META TSLA AMZN GOOGL BTC-USD
+adopt-info: alphai-tui
+license: MIT
+website: https://alphai.io/tui
+source-code: https://github.com/makeev/alphai-tui
+issues: https://github.com/makeev/alphai-tui/issues
+contact: https://github.com/makeev/alphai-tui/issues
+
+base: core24
+confinement: strict
+grade: stable
+
+platforms:
+  amd64:
+  arm64:
+
+apps:
+  alphai-tui:
+    command: bin/alphai-tui
+    plugs:
+      - network
+      - home
+
+parts:
+  alphai-tui:
+    plugin: rust
+    source: .
+    override-pull: |
+      craftctl default
+      craftctl set version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)"
