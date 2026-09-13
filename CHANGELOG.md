@@ -5,6 +5,12 @@ the crates.io releases; from 0.7.0 on each one is also a git tag and a
 GitHub release with prebuilt binaries. The Homebrew tap, the AUR and the
 apt repository joined later, and carry every version since.
 
+## 0.22.1 - 2026-09-13
+
+- Brand spelling in the interface text and docs is now `AlphAI`, the form on
+  the logo. Nothing functional changed: the binary, the crate and the config
+  keys are untouched.
+
 ## 0.22.0 - 2026-09-11
 
 - Portfolio valuations include premarket and after-hours prices whenever
