@@ -2254,9 +2254,7 @@ mod tests {
         assert!(is_unknown_symbol(
             "AlphAI API 404 Not Found: Unknown symbol 'ZZZQQ'."
         ));
-        assert!(!is_unknown_symbol(
-            "AlphAI API 400 Bad Request: bad cursor"
-        ));
+        assert!(!is_unknown_symbol("AlphAI API 400 Bad Request: bad cursor"));
     }
 
     /// The feed cannot say whether a row has a read, so the client tells the
