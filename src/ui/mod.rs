@@ -80,7 +80,7 @@ pub static DEFAULT_HINTS: &[Hint] = &[
 /// A display mode. Views are stateless renderers: all mutable state
 /// (selection, scroll) lives in `App`, so adding a view is a unit struct, a
 /// `ViewId` variant and one entry in `VIEWS`. The capability methods drive
-/// key handling and the demand-driven AlphaAI fetch centrally in `App`: a
+/// key handling and the demand-driven AlphAI fetch centrally in `App`: a
 /// view declares what it shows and never fetches anything itself.
 pub trait View: Sync {
     fn id(&self) -> ViewId;
@@ -91,7 +91,7 @@ pub trait View: Sync {
         DEFAULT_HINTS
     }
 
-    /// The AlphaAI feed to keep fresh while this view is visible (drives
+    /// The AlphAI feed to keep fresh while this view is visible (drives
     /// the demand-driven fetch, TTL refresh and the r retry). The
     /// request-budget guards stay in `App`.
     fn feed_shown(&self) -> Option<FeedKind> {

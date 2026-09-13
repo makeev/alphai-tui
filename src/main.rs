@@ -68,7 +68,7 @@ struct Args {
     #[arg(long, conflicts_with = "earnings")]
     json: bool,
 
-    /// Print the latest AlphaAI earnings read for one ticker and exit
+    /// Print the latest AlphAI earnings read for one ticker and exit
     /// (no TUI); needs an API key. One request.
     #[arg(long, value_name = "TICKER")]
     earnings: Option<String>,
@@ -236,7 +236,7 @@ fn main() -> Result<()> {
 fn print_earnings(rt: &tokio::runtime::Runtime, key: Option<String>, ticker: &str) -> Result<()> {
     let Some(key) = key else {
         println!(
-            "no AlphaAI API key. Get a free one at https://alphai.io (Account -> API keys),\n             then set ALPHAI_API_KEY or press s in the app to save it."
+            "no AlphAI API key. Get a free one at https://alphai.io (Account -> API keys),\n             then set ALPHAI_API_KEY or press s in the app to save it."
         );
         return Ok(());
     };

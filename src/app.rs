@@ -313,7 +313,7 @@ pub struct App {
     pub ma_type: MaType,
     /// Validated [chart] values: indicator periods and the t/T preset cycle.
     pub chart: ChartDefaults,
-    // AlphaAI feed state: every fetched feed by cache key (news under the
+    // AlphAI feed state: every fetched feed by cache key (news under the
     // symbol/market/trending keys, insider under `ins:SYM`)
     pub feeds: HashMap<String, FeedBundle>,
     /// Uids the reader has had under the cursor, plus the baseline of each
@@ -354,7 +354,7 @@ pub struct App {
     pub calendar: Option<(Vec<alphai::CalendarEvent>, Instant)>,
     /// Scroll of the Earnings view's body; reset when the ticker changes.
     pub earnings_scroll: u16,
-    /// How long a fetched AlphaAI bundle stays fresh. Seeded from
+    /// How long a fetched AlphAI bundle stays fresh. Seeded from
     /// `[ui] alphai_ttl_secs` (default `alphai::CACHE_TTL`), file-only.
     pub alphai_ttl: Duration,
     /// Scroll of the embedded card pane (News view); reset on selection moves.
@@ -1072,7 +1072,7 @@ impl App {
         }
         let gone = self.symbols.remove(self.selected);
         self.sync_shared_symbols();
-        // Prices are cheap to fetch again; the AlphaAI feeds are not, so
+        // Prices are cheap to fetch again; the AlphAI feeds are not, so
         // their cache survives a removal and a re-add costs no request.
         // A holding keeps its price: it is still polled, and blanking the
         // row would leave the portfolio view showing "…" until the tick.
@@ -1169,7 +1169,7 @@ impl App {
 
     /// t / T: jump to the next/previous range/interval preset and wake the
     /// price poller. Only `refresh.notify_one()` here: `manual_refresh()`
-    /// would also drop the visible AlphaAI bundle and burn a request from
+    /// would also drop the visible AlphAI bundle and burn a request from
     /// its budget for what is purely a price-history change.
     fn cycle_range(&mut self, dir: isize) {
         let (range, interval) = next_preset(&self.chart.presets, (self.range, self.interval), dir);
@@ -1180,7 +1180,7 @@ impl App {
 
     /// E: draw the pre and post market candles, or stop. Same shape as the
     /// preset cycle, and the same reason for only nudging the price
-    /// poller: nothing about the AlphaAI feeds changes.
+    /// poller: nothing about the AlphAI feeds changes.
     fn toggle_sessions(&mut self) {
         self.sessions = self.sessions.toggled();
         self.push_params();

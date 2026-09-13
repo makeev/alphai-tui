@@ -222,7 +222,7 @@ pub fn render_panel(f: &mut Frame, area: Rect, app: &mut App) {
 
     if !app.alphai_enabled {
         let line = Line::from(
-            " AI news needs a free AlphaAI key from https://alphai.io, press s to add it",
+            " AI news needs a free AlphAI key from https://alphai.io, press s to add it",
         )
         .dim();
         f.render_widget(Paragraph::new(line).block(block), area);
@@ -431,7 +431,7 @@ pub fn render_gate_with(
     if !app.alphai_enabled {
         let lines = vec![
             Line::from(""),
-            Line::from("  This view shows AI-scored data from the AlphaAI API.").bold(),
+            Line::from("  This view shows AI-scored data from the AlphAI API.").bold(),
             Line::from(""),
             Line::from("  1. Get a free API key at https://alphai.io (Account -> API keys)"),
             Line::from("     Free tier: 20 requests/min, 100/day. No card needed."),

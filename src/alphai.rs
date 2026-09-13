@@ -1,4 +1,4 @@
-//! AlphaAI public REST API client (https://alphai.io).
+//! AlphAI public REST API client (https://alphai.io).
 //!
 //! Powers the News and Insider views: relevance-scored financial news and
 //! SEC Form 4 insider activity. Needs an `ak_live_…` API key (free tier at
@@ -94,7 +94,7 @@ impl Client {
 
         let status = resp.status();
         if status == reqwest::StatusCode::UNAUTHORIZED {
-            bail!("invalid AlphaAI API key, press s to update it (free keys: alphai.io)");
+            bail!("invalid AlphAI API key, press s to update it (free keys: alphai.io)");
         }
         if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
             let wait = resp
@@ -102,7 +102,7 @@ impl Client {
                 .get("retry-after")
                 .and_then(|v| v.to_str().ok())
                 .unwrap_or("60");
-            bail!("AlphaAI rate limit hit, retry in {wait}s (Free tier: 20/min, 100/day)");
+            bail!("AlphAI rate limit hit, retry in {wait}s (Free tier: 20/min, 100/day)");
         }
         if !status.is_success() {
             let body = resp.text().await.unwrap_or_default();
@@ -120,9 +120,9 @@ impl Client {
             let msg = parsed
                 .and_then(|e| e.message.or(e.detail).or(e.error))
                 .unwrap_or_else(|| body.chars().take(120).collect());
-            bail!("AlphaAI API {status}: {msg}");
+            bail!("AlphAI API {status}: {msg}");
         }
-        resp.json().await.context("bad JSON from AlphaAI")
+        resp.json().await.context("bad JSON from AlphAI")
     }
 
     /// One page of enriched news; `symbol: None` = market-wide feed, `cursor`
@@ -531,7 +531,7 @@ pub async fn run(
             } => {
                 let key = news_key(symbol.as_deref());
                 let Some(client) = &client else {
-                    send_error(&tx, key, "no AlphaAI API key configured");
+                    send_error(&tx, key, "no AlphAI API key configured");
                     continue;
                 };
                 let mode = feed_mode(sort, cursor.as_deref());
@@ -582,7 +582,7 @@ pub async fn run(
             Cmd::FetchTrending => {
                 let key = TRENDING_KEY.to_string();
                 let Some(client) = &client else {
-                    send_error(&tx, key, "no AlphaAI API key configured");
+                    send_error(&tx, key, "no AlphAI API key configured");
                     continue;
                 };
                 let event = match client.trending().await {
@@ -612,7 +612,7 @@ pub async fn run(
             } => {
                 let key = insider_key(&symbol);
                 let Some(client) = &client else {
-                    send_error(&tx, key, "no AlphaAI API key configured");
+                    send_error(&tx, key, "no AlphAI API key configured");
                     continue;
                 };
                 let mode = feed_mode(sort, cursor.as_deref());
@@ -660,7 +660,7 @@ pub async fn run(
             Cmd::FetchEarnings { symbol } => {
                 let key = earnings_key(&symbol);
                 let Some(client) = &client else {
-                    send_error(&tx, key, "no AlphaAI API key configured");
+                    send_error(&tx, key, "no AlphAI API key configured");
                     continue;
                 };
                 let event = match client.earnings(&symbol).await {
@@ -1149,7 +1149,7 @@ pub struct TradeEvent {
 }
 
 // ---------------------------------------------------------------------------
-// Earnings reads: AlphaAI's structured analysis of an earnings filing, and
+// Earnings reads: AlphAI's structured analysis of an earnings filing, and
 // the macro calendar. Neither paginates.
 
 /// One ticker's earnings reads plus the date of its next report, from
@@ -1234,7 +1234,7 @@ impl EarningsRead {
     }
 }
 
-/// AlphaAI's structured read of one earnings release. Every figure is a
+/// AlphAI's structured read of one earnings release. Every figure is a
 /// string copied verbatim from the filing (the server checks each one
 /// against the filing text before publishing), so the client shortens units
 /// but never recomputes a number: see `short_metric`.
@@ -1639,7 +1639,7 @@ mod tests {
     #[test]
     fn archive_gate_is_detectable() {
         assert!(is_archive_gate(ARCHIVE_GATE_MSG));
-        assert!(!is_archive_gate("AlphaAI API 400 Bad Request: bad cursor"));
+        assert!(!is_archive_gate("AlphAI API 400 Bad Request: bad cursor"));
     }
 
     /// Published requests must stay byte for byte what they were before delta
@@ -1666,7 +1666,7 @@ mod tests {
     /// keeps a reprime from looping into another reprime.
     #[test]
     fn poll_failures_split_by_what_the_poll_carried() {
-        let bad_cursor = || anyhow::anyhow!("AlphaAI API 400: invalid cursor");
+        let bad_cursor = || anyhow::anyhow!("AlphAI API 400: invalid cursor");
         assert!(matches!(
             error_event("k".into(), bad_cursor(), FeedMode::Merge, Some("d1")),
             Event::PollReprime { .. }
@@ -1687,7 +1687,7 @@ mod tests {
         assert!(matches!(
             error_event(
                 "k".into(),
-                anyhow::anyhow!("AlphaAI API 429: slow down"),
+                anyhow::anyhow!("AlphAI API 429: slow down"),
                 FeedMode::Merge,
                 Some("d1")
             ),
@@ -2252,10 +2252,10 @@ mod tests {
     #[test]
     fn unknown_symbol_is_recognised() {
         assert!(is_unknown_symbol(
-            "AlphaAI API 404 Not Found: Unknown symbol 'ZZZQQ'."
+            "AlphAI API 404 Not Found: Unknown symbol 'ZZZQQ'."
         ));
         assert!(!is_unknown_symbol(
-            "AlphaAI API 400 Bad Request: bad cursor"
+            "AlphAI API 400 Bad Request: bad cursor"
         ));
     }
 

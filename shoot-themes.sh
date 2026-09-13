@@ -2,7 +2,7 @@
 # Shoots one screenshot per Catppuccin flavor, all framed identically, and
 # stitches them into the layered preview the Catppuccin port catalog asks
 # for. Run from the repo root with alphai-tui on PATH (or built in
-# ./target/release) and an AlphaAI key configured:
+# ./target/release) and an AlphAI key configured:
 #
 #   ./shoot-themes.sh              # four shots plus assets/themes.webp
 #   ./shoot-themes.sh --no-preview # shots only, skip catwalk
@@ -10,7 +10,7 @@
 # Needs vhs (brew install vhs) and, for the preview, catwalk
 # (cargo install catppuccin-catwalk).
 #
-# One take costs about three AlphaAI requests per flavor, so twelve in
+# One take costs about three AlphAI requests per flavor, so twelve in
 # total, inside the free 20/min budget. The four runs go back to back on
 # purpose: the news feed is live, and shots taken minutes apart would
 # disagree with each other in the layered preview.

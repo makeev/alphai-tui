@@ -58,7 +58,7 @@ pub enum SettingsRow {
 }
 
 /// Rows of the settings overlay: the source picker, every registered
-/// source's key fields in registry order, the app-level AlphaAI key, the
+/// source's key fields in registry order, the app-level AlphAI key, the
 /// news-open toggle, Save. Derived from the registry, so a new source's key
 /// rows appear (and persist, and mask) with no settings-code changes.
 pub fn settings_rows() -> &'static [SettingsRow] {

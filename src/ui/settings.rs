@@ -30,7 +30,7 @@ pub fn render(f: &mut Frame, app: &App) {
             " Prices work out of the box via Yahoo, no key needed.",
         ));
         lines.push(Line::from(
-            " The News and Insider views use the AlphaAI API: get a free key at",
+            " The News and Insider views use the AlphAI API: get a free key at",
         ));
         lines.push(Line::from(vec![
             Span::raw(" "),
@@ -201,7 +201,7 @@ fn env_hint(var: &str) -> String {
     }
 }
 
-/// Hint beside a credential row: the env override wins; a missing AlphaAI
+/// Hint beside a credential row: the env override wins; a missing AlphAI
 /// key points at where to get one.
 fn key_hint(field: &KeyField, stored: &str) -> String {
     let env = env_hint(field.env_var);

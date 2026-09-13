@@ -1,10 +1,10 @@
 # Shoots every still the README uses, in one run of the app. Run
 # `vhs shots.tape` from the repo root with alphai-tui built in
-# ./target/release (or on PATH) and an AlphaAI key configured.
+# ./target/release (or on PATH) and an AlphAI key configured.
 #
 # One take is one launch, which is one price request per ticker (the poll
 # interval is parked at 900s on purpose: Yahoo rate-limits by IP, and a
-# second poll would double the bill) plus about eight AlphaAI requests for
+# second poll would double the bill) plus about eight AlphAI requests for
 # the feeds, the earnings read and the macro calendar.
 #
 # The app wears catppuccin-mocha and so does the terminal: the app paints
@@ -34,7 +34,7 @@ Type "clear"
 Enter
 # The Portfolio view (and the two extra columns in the table) need
 # holdings, which live in the config. The take builds a throwaway one out
-# of the AlphaAI key and three invented holdings, and nothing else: a real
+# of the AlphAI key and three invented holdings, and nothing else: a real
 # watchlist and real positions are private, and these shots are published.
 # Every ticker here is already on the watchlist, so they cost no extra
 # requests.

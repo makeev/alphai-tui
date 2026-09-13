@@ -1,8 +1,8 @@
 # Records assets/themes.gif: the } key walking through the color presets
 # live. Run `vhs themes.tape` from the repo root with alphai-tui installed
-# and an AlphaAI key configured; one take costs one price request per ticker
+# and an AlphAI key configured; one take costs one price request per ticker
 # (the poll interval is parked at 900s: Yahoo rate-limits by IP) and a
-# couple of AlphaAI requests. It runs against a throwaway config carrying
+# couple of AlphAI requests. It runs against a throwaway config carrying
 # nothing but the key: a watchlist and a position are private, and this
 # recording is published.
 

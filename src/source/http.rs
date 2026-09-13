@@ -5,7 +5,7 @@
 //! style (query token, auth headers), base URLs and their env overrides,
 //! symbol and interval mapping, response shapes, quote fallback chains, and
 //! any API-specific error semantics — those are passed in via `err_map`.
-//! The AlphaAI client in `crate::alphai` is deliberately separate: different
+//! The AlphAI client in `crate::alphai` is deliberately separate: different
 //! timeout, bearer auth and a richer error envelope.
 
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -16,7 +16,7 @@ use reqwest::StatusCode;
 use reqwest::header::HeaderMap;
 use serde::de::DeserializeOwned;
 
-/// App identity for keyed APIs. AlphaAI tracks client adoption by this exact
+/// App identity for keyed APIs. AlphAI tracks client adoption by this exact
 /// format; keep it in sync with the client in `crate::alphai`.
 pub const APP_UA: &str = concat!("alphai-tui/", env!("CARGO_PKG_VERSION"));
 
@@ -89,7 +89,7 @@ pub fn client_with(ua: &str, headers: Option<HeaderMap>) -> Result<reqwest::Clie
 /// `is_transient`). That budget is deliberate: price sources are metered by
 /// the minute, so a couple of extra requests cost nothing, and without them
 /// a single unlucky 429 leaves the ticker showing an error until the next
-/// poll. The AlphaAI client is a separate path on purpose, so its per-day
+/// poll. The AlphAI client is a separate path on purpose, so its per-day
 /// budget never sees these retries.
 pub async fn get_json<T: DeserializeOwned>(
     client: &reqwest::Client,

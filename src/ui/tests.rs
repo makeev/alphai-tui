@@ -40,7 +40,7 @@ fn empty_app(symbols: Vec<String>) -> App {
     app
 }
 
-/// Like `empty_app`, but keeps the AlphaAI command receiver alive so tests
+/// Like `empty_app`, but keeps the AlphAI command receiver alive so tests
 /// can assert which fetches the app requested.
 fn empty_app_with_cmds(
     symbols: Vec<String>,
@@ -1341,7 +1341,7 @@ fn range_keys_cycle_presets_and_update_header() {
 }
 
 /// Budget invariant: a range switch must wake only the price poller. The
-/// visible AlphaAI bundle stays cached (manual_refresh would drop it and
+/// visible AlphAI bundle stays cached (manual_refresh would drop it and
 /// trigger a refetch on the next draw).
 #[test]
 fn range_switch_keeps_news_bundle() {
@@ -1610,10 +1610,10 @@ fn news_view_shows_error_state() {
     let mut app = fake_app();
     app.view_idx = ui::view_index(ui::ViewId::News);
     app.alphai_errors
-        .insert("AAPL".into(), "invalid AlphaAI API key".into());
+        .insert("AAPL".into(), "invalid AlphAI API key".into());
     let screen = render(&mut app);
     assert!(
-        screen.contains("invalid AlphaAI API key"),
+        screen.contains("invalid AlphAI API key"),
         "screen:\n{screen}"
     );
     assert!(screen.contains("press r to retry"), "screen:\n{screen}");
@@ -2324,7 +2324,7 @@ fn uid_article(uid: &str, title: &str) -> Article {
     .unwrap()
 }
 
-/// A head (non-append) news fetch for `key`, as the AlphaAI task delivers it.
+/// A head (non-append) news fetch for `key`, as the AlphAI task delivers it.
 fn head_fetch(app: &mut App, key: &str, articles: Vec<Article>, min_relevance: Option<u8>) {
     app.apply_alphai(alphai::Event::Feed {
         key: key.into(),
@@ -2539,7 +2539,7 @@ fn timed_article(uid: &str, title: &str, published: &str) -> Article {
     .unwrap()
 }
 
-/// A delta poll's page, as the AlphaAI task delivers it.
+/// A delta poll's page, as the AlphAI task delivers it.
 fn delta_page(app: &mut App, key: &str, articles: Vec<Article>, cursor: &str) {
     app.apply_alphai(alphai::Event::Feed {
         key: key.into(),
@@ -2755,7 +2755,7 @@ fn poll_error_keeps_the_feed_and_stops_polling() {
     );
     app.apply_alphai(alphai::Event::PollError {
         key: "AAPL".into(),
-        error: "AlphaAI API 429: slow down".into(),
+        error: "AlphAI API 429: slow down".into(),
     });
     let screen = render(&mut app);
     assert!(

@@ -1,5 +1,5 @@
 //! Full-article card: a modal overlay (v in the News/Insider views) showing
-//! everything the AlphaAI enrichment carries for the selected article. Pure
+//! everything the AlphAI enrichment carries for the selected article. Pure
 //! render — the data was already fetched with the list, so opening the card
 //! costs no API requests.
 

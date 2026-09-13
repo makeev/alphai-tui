@@ -1,4 +1,4 @@
-//! AlphaAI feed state and every request-budget guard, in one place.
+//! AlphAI feed state and every request-budget guard, in one place.
 //!
 //! The free tier allows 20 requests/min and 100/day, so fetching is
 //! demand-driven: only the feed behind the visible view, only when missing
@@ -46,7 +46,7 @@ const EARNINGS_TTL_FACTOR: u32 = 12;
 /// ahead, so one fetch covers a working day.
 const CALENDAR_TTL_FACTOR: u32 = 72;
 
-/// The AlphaAI feeds a view can display (`View::feed_shown`). Trending is
+/// The AlphAI feeds a view can display (`View::feed_shown`). Trending is
 /// not a kind: it is a news scope, a different cache key of the news feed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FeedKind {
@@ -413,7 +413,7 @@ impl App {
         }
     }
 
-    /// Demand-driven AlphaAI fetching: only the data behind the visible view,
+    /// Demand-driven AlphAI fetching: only the data behind the visible view,
     /// only when missing or older than the TTL, never while a fetch for
     /// the same key is in flight, and never on top of an error (manual `r`
     /// clears the error and retries) — the free tier is 100 requests/day.
@@ -574,7 +574,7 @@ impl App {
         }
     }
 
-    /// `r`: immediate price cycle, plus drop the visible AlphaAI bundle (and
+    /// `r`: immediate price cycle, plus drop the visible AlphAI bundle (and
     /// any error) so it refetches — this is also the retry path after 401/429.
     /// `feed_seen` stays: the refetch marks what is actually new.
     pub(super) fn manual_refresh(&mut self) {

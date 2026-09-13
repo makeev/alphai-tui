@@ -121,11 +121,11 @@ Priority: optional
 Homepage: $HOMEPAGE
 Description: terminal stock dashboard with news and insider activity
  Live quotes and interactive charts in the terminal, next to AI scored
- financial news and SEC Form 4 insider transactions from the AlphaAI API.
+ financial news and SEC Form 4 insider transactions from the AlphAI API.
  .
  Quotes and charts need no account at all (Yahoo by default, Finnhub and
  Alpaca optional). The news, sentiment and insider views read a free
- AlphaAI key from the config file or the environment.
+ AlphAI key from the config file or the environment.
 EOF
 
   ( cd "$tree" && find usr -type f -exec md5sum {} + > DEBIAN/md5sums )

@@ -1,8 +1,8 @@
 # Records assets/tmux.png, the four pane workspace in the README. Run
 # `vhs tmux.tape` from the repo root with alphai-tui built in
-# ./target/release (or on PATH), tmux installed and an AlphaAI key
+# ./target/release (or on PATH), tmux installed and an AlphAI key
 # configured. One take is four launches of one ticker each, so four price
-# requests, plus the AlphaAI feed each pane asks for.
+# requests, plus the AlphAI feed each pane asks for.
 #
 # Panes start with --bare because the tmux status bar already carries what
 # the app header would say. The README prints the same session without the
@@ -14,7 +14,7 @@
 # status bar and not whatever the machine doing the shooting wears, and its
 # status-right is replaced with a clock so the hostname stays out of a
 # public image. The panes read a throwaway config holding nothing but the
-# AlphaAI key, for the same reason: a watchlist and a position are private
+# AlphAI key, for the same reason: a watchlist and a position are private
 # and this shot is published.
 
 Output assets/out.gif

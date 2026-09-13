@@ -1,14 +1,14 @@
 # Records assets/demo.gif for the README. Run `vhs demo.tape` from the
-# repo root with alphai-tui installed and an AlphaAI key configured; one
+# repo root with alphai-tui installed and an AlphAI key configured; one
 # take costs one price request per ticker (the poll interval is parked at
-# 900s: Yahoo rate-limits by IP) and about eight AlphaAI requests.
+# 900s: Yahoo rate-limits by IP) and about eight AlphAI requests.
 #
 # The app wears catppuccin-mocha and the terminal wears the matching
 # theme: the app only paints foreground colors, so the two have to agree.
 # Prices come from the keyless source, which is what a first run gets.
 #
 # The Portfolio scene needs holdings, and those live in the config. The
-# take builds a throwaway one (the AlphaAI key, lifted out of the real
+# take builds a throwaway one (the AlphAI key, lifted out of the real
 # config, and three invented holdings) and points XDG_CONFIG_HOME at it.
 # Nothing else is copied on purpose: a watchlist and real positions are
 # private, and this recording ends up in a public README.

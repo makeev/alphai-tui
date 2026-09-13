@@ -31,12 +31,12 @@ pub struct KeyField {
     pub label: &'static str,
 }
 
-/// The AlphaAI news key: app-level rather than a price source, but it lives
+/// The AlphAI news key: app-level rather than a price source, but it lives
 /// in the same `[keys]` table and the same settings list.
 pub const ALPHAI_KEY_FIELD: KeyField = KeyField {
     config_name: "alphai",
     env_var: "ALPHAI_API_KEY",
-    label: "AlphaAI key",
+    label: "AlphAI key",
 };
 
 /// Persisted app settings. Precedence at use time: CLI args > env vars
@@ -122,7 +122,7 @@ pub struct UiConfig {
     /// Startup window of the Insider view's chart panel: "3m" (default),
     /// "12m" or "off"; the g key cycles it live.
     pub insider_chart: Option<String>,
-    /// How long fetched AlphaAI data (news, sentiment, insider) stays fresh
+    /// How long fetched AlphAI data (news, sentiment, insider) stays fresh
     /// before the visible view re-fetches it. Seconds; raw i64 for the same
     /// warning-not-error reason as the scores.
     pub alphai_ttl_secs: Option<i64>,

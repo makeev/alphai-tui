@@ -1,4 +1,4 @@
-//! The Earnings view: AlphaAI's structured read of the selected ticker's
+//! The Earnings view: AlphAI's structured read of the selected ticker's
 //! latest earnings filing, and what is scheduled next.
 //!
 //! The whole body is one scrollable paragraph, built to the pane's width and
@@ -174,7 +174,7 @@ fn body_lines(
     if data.unknown {
         return vec![
             Line::from(""),
-            Line::from(format!("  AlphaAI has no earnings coverage for {symbol}.")).bold(),
+            Line::from(format!("  AlphAI has no earnings coverage for {symbol}.")).bold(),
             Line::from(""),
             Line::from("  Reads are built from a company's own SEC filing, so they exist").dim(),
             Line::from("  for listed companies only.").dim(),
@@ -185,7 +185,7 @@ fn body_lines(
             Line::from(""),
             Line::from(format!("  No earnings read for {symbol} yet.")).bold(),
             Line::from(""),
-            Line::from("  A read is AlphaAI's structured analysis of the company's own").dim(),
+            Line::from("  A read is AlphAI's structured analysis of the company's own").dim(),
             Line::from("  earnings filing, with every figure checked against the filing").dim(),
             Line::from("  text. It lands minutes after the filing reaches SEC EDGAR.").dim(),
             Line::from(""),

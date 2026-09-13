@@ -21,7 +21,7 @@ pub enum SourceEvent {
         symbol: String,
         error: String,
     },
-    /// News / insider / sentiment results from the AlphaAI task.
+    /// News / insider / sentiment results from the AlphAI task.
     Alphai(alphai::Event),
 }
 
