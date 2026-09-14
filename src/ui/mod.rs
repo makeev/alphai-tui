@@ -13,6 +13,7 @@ pub mod settings;
 pub mod split;
 pub mod summary;
 pub mod table;
+mod time_axis;
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
@@ -213,20 +214,36 @@ pub(crate) fn centered(r: Rect, width: u16, height: u16) -> Rect {
     }
 }
 
-/// Columns the header needs outside the view tabs: the name, the source,
-/// the key state, the clock and the interval.
-const STATUS_ROOM: usize = 50;
-
 fn header_line(app: &App, width: u16) -> Paragraph<'static> {
     let mut spans = vec![
         Span::styled(" alphai-tui ", Style::new().bold().fg(app.theme.accent)),
         Span::raw(format!("· {} ", app.source_name)).dim(),
     ];
+    let key = app.keymap.labels(&[Action::NextPreset]);
+    let window = format!("{} / {}", app.range.as_str(), app.interval.as_str());
+    let interval = if key.is_empty() {
+        format!(" · {window}")
+    } else {
+        format!(" · {window} ({key}: change)")
+    };
+    let key_state = if app.alphai_enabled {
+        " · alphai ✓"
+    } else {
+        " · alphai: no key (s)"
+    };
+    let clock = app.last_update.map_or_else(
+        || " · loading…".to_string(),
+        |ts| format!(" · upd {}", ts.format("%H:%M:%S")),
+    );
+    let status_room = spans.iter().map(Span::width).sum::<usize>()
+        + key_state.chars().count()
+        + clock.chars().count()
+        + interval.chars().count();
     // Named tabs take about 60 columns; when the line would not fit, the
     // inactive ones shrink to their hotkey digit so the status at the end
     // (the clock and the chart interval) is not the part that gets cut.
     let named: usize = VIEWS.iter().map(|v| v.title().len() + 4).sum();
-    let compact = named + STATUS_ROOM > width as usize;
+    let compact = named + status_room > width as usize;
     for (i, view) in VIEWS.iter().enumerate() {
         let active = i == app.view_idx;
         let style = if active {
@@ -241,17 +258,17 @@ fn header_line(app: &App, width: u16) -> Paragraph<'static> {
         };
         spans.push(Span::styled(label, style));
     }
-    if app.alphai_enabled {
-        spans.push(Span::raw(" · alphai ✓").dim());
-    } else {
-        spans.push(Span::raw(" · alphai: no key (s)").dim());
+    // Reserve space for the interval control before optional status text.
+    for status in [key_state, clock.as_str()] {
+        if spans.iter().map(Span::width).sum::<usize>()
+            + status.chars().count()
+            + interval.chars().count()
+            <= width as usize
+        {
+            spans.push(Span::raw(status.to_string()).dim());
+        }
     }
-    if let Some(ts) = app.last_update {
-        spans.push(Span::raw(format!(" · upd {}", ts.format("%H:%M:%S"))).dim());
-    } else {
-        spans.push(Span::raw(" · loading…").dim());
-    }
-    spans.push(Span::raw(format!(" · {}", app.interval.as_str())).dim());
+    spans.push(Span::raw(interval).dim());
     Paragraph::new(Line::from(spans))
 }
 

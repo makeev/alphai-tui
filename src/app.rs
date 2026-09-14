@@ -530,11 +530,14 @@ impl App {
     pub(crate) fn apply(&mut self, event: SourceEvent) {
         match event {
             SourceEvent::Data {
+                params,
                 source,
                 symbol,
                 mut data,
             } => {
-                if !self.accepts_price_event(&source, &symbol) {
+                if !self.accepts_price_event(&source, &symbol)
+                    || params.is_some_and(|p| p != (self.range, self.interval, self.sessions))
+                {
                     return;
                 }
                 self.errors.remove(&symbol);
@@ -544,6 +547,19 @@ impl App {
                 // cached rows this symbol started on.
                 self.source_trouble_since = None;
                 let was_cached = self.from_cache.remove(&symbol).is_some();
+                // A successful but partial response must not make a known
+                // current-session print disappear. Its original timestamp
+                // and reference close remain visible; a new session retires it.
+                if let Some(old) = self.data.get(&symbol)
+                    && old.quote.timing.extended.is_some()
+                    && old.quote.extended_price().is_some()
+                    && data.quote.extended_price().is_none()
+                {
+                    data.quote.extended = old.quote.extended;
+                    data.quote.timing.extended = old.quote.timing.extended;
+                    data.quote.timing.extended_feed = old.quote.timing.extended_feed;
+                    data.quote.timing.extended_reference = Some(old.quote.extended_reference());
+                }
                 if let Some(old) = self.data.get(&symbol)
                     && old.quote.price != data.quote.price
                     // The first real price after a cached one is not a tick:
@@ -555,24 +571,19 @@ impl App {
                         (Instant::now(), data.quote.price > old.quote.price),
                     );
                 }
-                // Sources report the quote ahead of the candle series (Yahoo's
-                // meta price and Alpaca's snapshot both lead the bars), so fold
-                // the live price into the in-progress last candle: the candle,
-                // indicators and margin marker then tick together every poll.
-                if let Some(last) = data.candles.last_mut() {
-                    last.close = data.quote.price;
-                    last.high = last.high.max(data.quote.price);
-                    last.low = last.low.min(data.quote.price);
-                }
+                data.update_current_bar(self.interval);
                 self.data.insert(symbol, data);
                 self.last_update = Some(Local::now());
             }
             SourceEvent::Error {
+                params,
                 source,
                 symbol,
                 error,
             } => {
-                if !self.accepts_price_event(&source, &symbol) {
+                if !self.accepts_price_event(&source, &symbol)
+                    || params.is_some_and(|p| p != (self.range, self.interval, self.sessions))
+                {
                     return;
                 }
                 self.errors.insert(symbol, error);
@@ -1183,6 +1194,16 @@ impl App {
     /// poller: nothing about the AlphAI feeds changes.
     fn toggle_sessions(&mut self) {
         self.sessions = self.sessions.toggled();
+        if self.sessions == Sessions::Regular && self.interval != Interval::D1 {
+            for (symbol, data) in &mut self.data {
+                if crate::market::is_us_equity(symbol) {
+                    data.candles.retain(|c| {
+                        crate::market::window_at(c.ts)
+                            .is_some_and(|w| w.session == crate::market::Session::Open)
+                    });
+                }
+            }
+        }
         self.push_params();
     }
 

@@ -24,6 +24,7 @@ use crate::ui;
 /// more of them later does not mean editing every construction site.
 fn plain_quote(symbol: &str, price: f64, prev_close: Option<f64>, currency: Option<&str>) -> Quote {
     Quote {
+        timing: Default::default(),
         symbol: symbol.into(),
         price,
         prev_close,
@@ -80,6 +81,190 @@ fn current_source(app: &App) -> Arc<dyn crate::source::DataSource> {
     app.price_source()
 }
 
+#[test]
+fn late_results_from_an_old_candle_request_are_discarded() {
+    let mut app = fake_app();
+    let source = current_source(&app);
+    let original = app.data["AAPL"].quote.price;
+    let mut data = app.data["AAPL"].clone();
+    data.quote.price = 999.0;
+    app.apply(SourceEvent::Data {
+        params: Some((Range::D1, Interval::M5, Sessions::Extended)),
+        source: source.clone(),
+        symbol: "AAPL".into(),
+        data,
+    });
+    assert_eq!(app.data["AAPL"].quote.price, original);
+    app.apply(SourceEvent::Error {
+        params: Some((Range::D5, Interval::M15, Sessions::Regular)),
+        source,
+        symbol: "AAPL".into(),
+        error: "old request failed".into(),
+    });
+    assert!(!app.errors.contains_key("AAPL"));
+}
+
+#[test]
+fn session_backgrounds_and_time_grid_share_all_three_panels() {
+    use crate::domain::PriceFeed;
+    let mut app = empty_app(vec!["AAPL".into()]);
+    app.sessions = Sessions::Extended;
+    app.view_idx = ui::view_index(ui::ViewId::Chart);
+    app.show_news_markers = false;
+    app.theme = Theme::resolve(None, Some("catppuccin-mocha"), &mut Vec::new()).0;
+    let first = chrono::DateTime::parse_from_rfc3339("2026-09-11T08:00:00Z")
+        .unwrap()
+        .timestamp();
+    let candles: Vec<_> = (0..192)
+        .map(|i| {
+            let price = 100.0 + i as f64 * 0.02 + (i as f64 / 8.0).sin();
+            Candle {
+                ts: first + i * 300,
+                open: price,
+                high: price + 0.3,
+                low: price - 0.2,
+                close: price + (i as f64 / 3.0).sin() * 0.15,
+                volume: Some(100.0 + (i % 13) as f64 * 100.0),
+                feed: if (66..144).contains(&i) {
+                    PriceFeed::Iex
+                } else {
+                    PriceFeed::DelayedSip
+                },
+            }
+        })
+        .collect();
+    app.data.insert(
+        "AAPL".into(),
+        TickerData {
+            quote: plain_quote("AAPL", 103.0, Some(99.5), Some("USD")),
+            candles,
+        },
+    );
+    for style in [ChartStyle::Candles, ChartStyle::Line] {
+        app.chart_style = style;
+        for (width, height) in [(160, 44), (80, 34), (44, 22), (20, 12)] {
+            let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+            terminal.draw(|f| ui::draw(f, &mut app)).unwrap();
+            let buffer = terminal.backend().buffer();
+            if width != 160 {
+                continue;
+            }
+            let lines: Vec<String> = (0..height)
+                .map(|y| (0..width).map(|x| buffer[(x, y)].symbol()).collect())
+                .collect();
+            let text = lines.join("\n");
+            assert!(text.contains("09:30") && text.contains("16:00"), "{text}");
+            assert!(text.contains("SIP · delayed 15m"), "{text}");
+            let vol = lines
+                .iter()
+                .position(|line| line.contains(" Vol "))
+                .unwrap() as u16
+                + 1;
+            let rsi = lines
+                .iter()
+                .position(|line| line.contains(" RSI("))
+                .unwrap() as u16
+                + 1;
+            let price = lines
+                .iter()
+                .position(|line| line.contains("SMA20"))
+                .unwrap() as u16
+                + 1;
+            for color in [app.theme.pre_market_bg, app.theme.post_market_bg] {
+                let cols = |y| {
+                    (0..width)
+                        .filter(|x| buffer[(*x, y)].bg == color)
+                        .collect::<Vec<_>>()
+                };
+                assert!(!cols(price).is_empty(), "session background missing");
+                assert_eq!(cols(price), cols(vol), "volume session columns differ");
+                assert_eq!(cols(price), cols(rsi), "RSI session columns differ");
+            }
+            if let Ok(dir) = std::env::var("ALPHAI_TEST_RENDER_DIR") {
+                let cells: Vec<_> = (0..height).flat_map(|y| (0..width).map(move |x| {
+                    let cell = &buffer[(x, y)];
+                    serde_json::json!({"x":x,"y":y,"text":cell.symbol(),"fg":format!("{:?}",cell.fg),"bg":format!("{:?}",cell.bg)})
+                })).collect();
+                let name = if style == ChartStyle::Candles {
+                    "candles"
+                } else {
+                    "line"
+                };
+                std::fs::create_dir_all(&dir).unwrap();
+                std::fs::write(
+                    std::path::Path::new(&dir).join(format!("{name}.json")),
+                    serde_json::to_vec(
+                        &serde_json::json!({"width":width,"height":height,"cells":cells}),
+                    )
+                    .unwrap(),
+                )
+                .unwrap();
+            }
+        }
+    }
+}
+
+#[test]
+fn short_premarket_charts_use_the_plot_width_at_every_interval() {
+    use crate::domain::PriceFeed;
+    let mut app = empty_app(vec!["AAPL".into()]);
+    app.sessions = Sessions::Extended;
+    app.show_sma = false;
+    app.show_volume = false;
+    app.show_rsi = false;
+    app.show_news_markers = false;
+    let first = chrono::DateTime::parse_from_rfc3339("2026-09-14T08:00:00Z")
+        .unwrap()
+        .timestamp();
+    let mut starts = Vec::new();
+    for interval in [Interval::M15, Interval::M5, Interval::M30] {
+        app.interval = interval;
+        let candles: Vec<_> = (0..7200 / interval.secs())
+            .map(|i| Candle {
+                ts: first + i * interval.secs(),
+                open: 100.0 + i as f64 * 0.1,
+                high: 100.3 + i as f64 * 0.1,
+                low: 99.8 + i as f64 * 0.1,
+                close: 100.2 + i as f64 * 0.1,
+                feed: PriceFeed::Yahoo,
+                ..Default::default()
+            })
+            .collect();
+        app.data.insert(
+            "AAPL".into(),
+            TickerData {
+                quote: plain_quote("AAPL", 100.0, None, Some("USD")),
+                candles,
+            },
+        );
+        for style in [ChartStyle::Candles, ChartStyle::Line] {
+            app.chart_style = style;
+            let mut terminal = Terminal::new(TestBackend::new(160, 24)).unwrap();
+            terminal
+                .draw(|f| ui::chart::render_chart(f, f.area(), &app))
+                .unwrap();
+            let buffer = terminal.backend().buffer();
+            let first_x = (1..159)
+                .find(|&x| {
+                    (1..21).any(|y| {
+                        let cell = &buffer[(x, y)];
+                        let glyph = cell.symbol().chars().next().unwrap_or(' ');
+                        matches!(
+                            glyph,
+                            '█' | '▀' | '▄' | '│' | '╷' | '╵' | '\u{2801}'..='\u{28ff}'
+                        ) && [app.theme.up, app.theme.down, app.theme.flat].contains(&cell.fg)
+                    })
+                })
+                .unwrap();
+            starts.push((interval, style, first_x));
+        }
+    }
+    assert!(
+        starts.iter().all(|(_, _, x)| *x <= 10),
+        "first plotted column: {starts:?}"
+    );
+}
+
 fn press(app: &mut App, code: KeyCode) {
     app.handle_key(KeyEvent::from(code));
 }
@@ -107,6 +292,7 @@ fn fake_app() -> App {
             .map(|i| {
                 let close = base + i as f64 * 0.5;
                 Candle {
+                    feed: Default::default(),
                     ts: 1_700_000_000 + i * 300,
                     open: close - 0.2,
                     high: close + 0.3,
@@ -421,6 +607,7 @@ fn the_rail_day_range_comes_from_the_source_not_the_candles() {
         data.quote.day_range = Some((200.0, 220.0));
         // A candle from an extended session, well outside it.
         data.candles.push(Candle {
+            feed: Default::default(),
             ts: data.candles.last().unwrap().ts + 300,
             open: 214.5,
             high: 260.0,
@@ -530,6 +717,7 @@ fn price_flash_tracks_update_direction() {
     let mut app = empty_app(vec!["AAPL".into()]);
     let source = current_source(&app);
     let data = |price: f64| SourceEvent::Data {
+        params: None,
         source: source.clone(),
         symbol: "AAPL".into(),
         data: TickerData {
@@ -564,13 +752,22 @@ fn live_quote_updates_the_last_candle() {
     let mut app = empty_app(vec!["AAPL".into()]);
     let source = current_source(&app);
     let data = |price: f64| SourceEvent::Data {
+        params: None,
         source: source.clone(),
         symbol: "AAPL".into(),
         data: TickerData {
-            quote: plain_quote("AAPL", price, Some(100.0), None),
+            quote: Quote {
+                timing: crate::domain::QuoteTiming {
+                    regular: Some(1_783_698_320),
+                    regular_feed: crate::domain::PriceFeed::Iex,
+                    ..Default::default()
+                },
+                ..plain_quote("AAPL", price, Some(100.0), None)
+            },
             candles: vec![
                 Candle {
-                    ts: 0,
+                    feed: crate::domain::PriceFeed::Iex,
+                    ts: 1_783_697_700,
                     open: 99.0,
                     high: 100.0,
                     low: 98.0,
@@ -578,7 +775,8 @@ fn live_quote_updates_the_last_candle() {
                     volume: None,
                 },
                 Candle {
-                    ts: 300,
+                    feed: crate::domain::PriceFeed::Iex,
+                    ts: 1_783_698_300,
                     open: 100.0,
                     high: 101.0,
                     low: 99.5,
@@ -700,6 +898,7 @@ fn sma_slow_appears_with_warmup_history() {
         .map(|i| {
             let close = 200.0 + (i % 40) as f64 * 0.5;
             Candle {
+                feed: Default::default(),
                 ts: 1_700_000_000 + i * 300,
                 open: close - 0.2,
                 high: close + 0.3,
@@ -995,6 +1194,7 @@ fn cached_rows_open_the_app_and_the_rail_says_how_old_they_are() {
             quote: plain_quote("AAPL", 214.5, Some(200.0), Some("USD")),
             candles: vec![
                 Candle {
+                    feed: Default::default(),
                     ts: 1_700_000_000,
                     open: 200.0,
                     high: 215.0,
@@ -1003,6 +1203,7 @@ fn cached_rows_open_the_app_and_the_rail_says_how_old_they_are() {
                     volume: None,
                 },
                 Candle {
+                    feed: Default::default(),
                     ts: 1_700_000_300,
                     open: 214.0,
                     high: 215.0,
@@ -1027,11 +1228,13 @@ fn cached_rows_open_the_app_and_the_rail_says_how_old_they_are() {
     // The first live poll retires the badge, and does not pulse: the move
     // from a two hour old price is not a tick that just happened.
     app.apply(SourceEvent::Data {
+        params: None,
         source: current_source(&app),
         symbol: "AAPL".into(),
         data: TickerData {
             quote: plain_quote("AAPL", 216.0, Some(200.0), Some("USD")),
             candles: vec![Candle {
+                feed: Default::default(),
                 ts: 1_700_000_600,
                 open: 214.5,
                 high: 216.5,
@@ -1061,6 +1264,7 @@ fn a_dead_source_is_swapped_for_a_configured_one() {
     app.config.keys.insert("finnhub".into(), "test-key".into());
     for symbol in ["AAPL", "MSFT"] {
         app.apply(SourceEvent::Error {
+            params: None,
             source: current_source(&app),
             symbol: symbol.into(),
             error: crate::source::yahoo::THROTTLE_MSG.into(),
@@ -1099,6 +1303,7 @@ fn a_dead_source_is_swapped_for_a_configured_one() {
     // instead of rebuilding a client on every frame.
     for symbol in ["AAPL", "MSFT"] {
         app.apply(SourceEvent::Error {
+            params: None,
             source: current_source(&app),
             symbol: symbol.into(),
             error: "finnhub API 500".into(),
@@ -1116,6 +1321,7 @@ fn nothing_is_swapped_when_there_is_nowhere_to_go() {
     let mut app = fake_app();
     for symbol in ["AAPL", "MSFT"] {
         app.apply(SourceEvent::Error {
+            params: None,
             source: current_source(&app),
             symbol: symbol.into(),
             error: "yahoo API 429".into(),
@@ -1140,6 +1346,7 @@ fn the_fallback_can_be_turned_off() {
     app.config.keys.insert("finnhub".into(), "test-key".into());
     for symbol in ["AAPL", "MSFT"] {
         app.apply(SourceEvent::Error {
+            params: None,
             source: current_source(&app),
             symbol: symbol.into(),
             error: "yahoo API 429".into(),
@@ -1156,6 +1363,7 @@ fn a_manual_source_change_starts_a_fresh_fallback_grace_period() {
     app.config.keys.insert("finnhub".into(), "test-key".into());
     for symbol in ["AAPL", "MSFT"] {
         app.apply(SourceEvent::Error {
+            params: None,
             source: current_source(&app),
             symbol: symbol.into(),
             error: "unavailable".into(),
@@ -1194,6 +1402,7 @@ fn saving_an_alternative_key_reenables_an_exhausted_fallback() {
     let mut app = fake_app();
     for symbol in ["AAPL", "MSFT"] {
         app.apply(SourceEvent::Error {
+            params: None,
             source: current_source(&app),
             symbol: symbol.into(),
             error: "unavailable".into(),
@@ -1226,12 +1435,14 @@ fn fallback_keeps_prices_labelled_and_rejects_late_responses() {
     let old_source = current_source(&app);
     let data = app.data["AAPL"].clone();
     app.apply(SourceEvent::Data {
+        params: None,
         source: old_source.clone(),
         symbol: "AAPL".into(),
         data: data.clone(),
     });
     for symbol in ["AAPL", "MSFT"] {
         app.apply(SourceEvent::Error {
+            params: None,
             source: old_source.clone(),
             symbol: symbol.into(),
             error: "unavailable".into(),
@@ -1247,11 +1458,13 @@ fn fallback_keeps_prices_labelled_and_rejects_late_responses() {
     let mut late = data.clone();
     late.quote.price = 1.0;
     app.apply(SourceEvent::Data {
+        params: None,
         source: old_source.clone(),
         symbol: "AAPL".into(),
         data: late,
     });
     app.apply(SourceEvent::Error {
+        params: None,
         source: old_source,
         symbol: "AAPL".into(),
         error: "late failure".into(),
@@ -1260,6 +1473,7 @@ fn fallback_keeps_prices_labelled_and_rejects_late_responses() {
     assert!(app.errors.is_empty());
     assert!(app.cached_age("AAPL").is_some());
     app.apply(SourceEvent::Data {
+        params: None,
         source: current_source(&app),
         symbol: "AAPL".into(),
         data,
@@ -1294,6 +1508,7 @@ fn replacing_credentials_rejects_the_same_providers_old_responses() {
     press(&mut app, KeyCode::Esc);
     assert_eq!(app.source_name, old_source.name());
     app.apply(SourceEvent::Error {
+        params: None,
         source: old_source,
         symbol: "AAPL".into(),
         error: "old key rejected".into(),
@@ -1307,6 +1522,7 @@ fn a_new_symbol_gets_a_chance_before_fallback() {
     app.config.keys.insert("finnhub".into(), "test-key".into());
     for symbol in ["AAPL", "MSFT"] {
         app.apply(SourceEvent::Error {
+            params: None,
             source: current_source(&app),
             symbol: symbol.into(),
             error: "unavailable".into(),
@@ -1330,12 +1546,12 @@ fn range_keys_cycle_presets_and_update_header() {
     press(&mut app, KeyCode::Char('t'));
     assert_eq!((app.range, app.interval), (Range::D5, Interval::M15));
     let screen = render(&mut app);
-    assert!(screen.contains("· 15m"), "screen:\n{screen}");
+    assert!(screen.contains("5d / 15m (t: change)"), "screen:\n{screen}");
     // Wrap backwards past the first preset.
     press(&mut app, KeyCode::Char('T'));
     press(&mut app, KeyCode::Char('T'));
     assert_eq!((app.range, app.interval), (Range::Y1, Interval::D1));
-    assert!(render(&mut app).contains("· 1d"));
+    assert!(render(&mut app).contains("1y / 1d (t: change)"));
     // Old data stays on screen until the poller answers.
     assert!(app.data.contains_key("AAPL"));
 }
@@ -4026,7 +4242,7 @@ fn quote_rail_drops_zones_as_the_terminal_narrows() {
         "+14.50",
         "+7.25%",
         "● live",
-        "delayed 15m",
+        "timing varies",
         "199.60",
         "214.80",
         "MSFT",
@@ -4071,6 +4287,7 @@ fn quote_rail_badges_crypto_and_realtime_sources() {
         TickerData {
             quote: plain_quote("BTC-USD", 64_000.0, Some(63_000.0), Some("USD")),
             candles: vec![Candle {
+                feed: Default::default(),
                 ts: 1_700_000_000,
                 open: 63_500.0,
                 high: 64_200.0,
@@ -4100,6 +4317,7 @@ fn quote_rail_shows_the_after_hours_print() {
         TickerData {
             quote,
             candles: vec![Candle {
+                feed: Default::default(),
                 ts: 1_700_000_000,
                 open: 315.0,
                 high: 319.15,

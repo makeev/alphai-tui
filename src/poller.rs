@@ -12,11 +12,13 @@ use crate::source::DataSource;
 
 pub enum SourceEvent {
     Data {
+        params: Option<(Range, Interval, Sessions)>,
         source: Arc<dyn DataSource>,
         symbol: String,
         data: TickerData,
     },
     Error {
+        params: Option<(Range, Interval, Sessions)>,
         source: Arc<dyn DataSource>,
         symbol: String,
         error: String,
@@ -76,6 +78,7 @@ pub async fn run(poller: Poller) {
         let current = source.read().unwrap().clone();
         let symbols = symbols.read().unwrap().clone();
         let (range, interval, sessions) = *params.read().unwrap();
+        let request_params = (range, interval, sessions);
         // Fetch wider than the visible range so indicators have their warm-up
         // history; the chart trims rendering back to `range`.
         let range = fetch_range(range, interval, slow_bars);
@@ -99,12 +102,14 @@ pub async fn run(poller: Poller) {
                     // store is never read to answer a fetch.
                     cache.put(source_name, &symbol, &window, &data);
                     SourceEvent::Data {
+                        params: Some(request_params),
                         source: current.clone(),
                         symbol,
                         data,
                     }
                 }
                 Err(e) => SourceEvent::Error {
+                    params: Some(request_params),
                     source: current.clone(),
                     symbol,
                     error: format!("{e:#}"),

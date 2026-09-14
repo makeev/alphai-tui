@@ -43,11 +43,11 @@ struct Args {
     #[arg(short, long)]
     every: Option<u64>,
 
-    /// History window for charts [default: 1d]
+    /// History window for charts [default: 5d]
     #[arg(short, long, value_enum)]
     range: Option<Range>,
 
-    /// Candle granularity for charts [default: 5m]
+    /// Candle granularity for charts [default: 15m]
     #[arg(short, long, value_enum)]
     interval: Option<Interval>,
 
@@ -117,14 +117,7 @@ fn main() -> Result<()> {
     {
         eprintln!("warning: {msg}");
     }
-    let range = args
-        .range
-        .or_else(|| parse_enum::<Range>(cfg.range.as_deref()))
-        .unwrap_or(Range::D1);
-    let interval = args
-        .interval
-        .or_else(|| parse_enum::<Interval>(cfg.interval.as_deref()))
-        .unwrap_or(Interval::M5);
+    let (range, interval) = chart_window(&args, &cfg);
 
     let rt = tokio::runtime::Runtime::new()?;
     if args.once || args.json {
@@ -423,6 +416,17 @@ fn print_earnings(rt: &tokio::runtime::Runtime, key: Option<String>, ticker: &st
     Ok(())
 }
 
+fn chart_window(args: &Args, cfg: &config::Config) -> (Range, Interval) {
+    (
+        args.range
+            .or_else(|| parse_enum::<Range>(cfg.range.as_deref()))
+            .unwrap_or(Range::D5),
+        args.interval
+            .or_else(|| parse_enum::<Interval>(cfg.interval.as_deref()))
+            .unwrap_or(Interval::M15),
+    )
+}
+
 fn parse_enum<T: ValueEnum>(value: Option<&str>) -> Option<T> {
     T::from_str(value?, true).ok()
 }
@@ -526,21 +530,38 @@ fn quote_json_at(
     // The extended print is its own object: its move is measured from the
     // regular close, not from the previous one, so putting the two moves
     // side by side under one set of keys would invite reading them alike.
-    if let Some(price) = q.extended_price() {
+    if let Some(price) = q.extended_price_at(now) {
         let mut ext = json!({ "price": price });
         let ext_map = ext.as_object_mut().expect("object");
-        if let Some(c) = q.extended_change() {
-            ext_map.insert("change".into(), json!(trimmed(c, 6)));
+        let change = price - q.extended_reference();
+        ext_map.insert("change".into(), json!(trimmed(change, 6)));
+        if q.extended_reference() != 0.0 {
+            ext_map.insert(
+                "change_pct".into(),
+                json!(trimmed(change / q.extended_reference() * 100.0, 4)),
+            );
         }
-        if let Some(p) = q.extended_change_pct() {
-            ext_map.insert("change_pct".into(), json!(trimmed(p, 4)));
+        if let Some(ts) = q.timing.extended {
+            ext_map.insert("timestamp".into(), json!(ts));
+            ext_map.insert("source".into(), json!(q.timing.extended_feed));
+            ext_map.insert("reference_close".into(), json!(q.extended_reference()));
+            if let Some(window) = market::window_at(ts) {
+                ext_map.insert(
+                    "session".into(),
+                    json!(if window.session == market::Session::Pre {
+                        "pre"
+                    } else {
+                        "post"
+                    }),
+                );
+            }
         }
         map.insert("extended".into(), ext);
     }
     // Only for a ticker the config holds: a status bar that asks for a
     // price gets a price, and one that tracks a holding gets the money.
     if let Some(held) = position {
-        let price = portfolio::price(q);
+        let price = portfolio::price_at(q, now);
         let mut pos = json!({
             "qty": held.qty,
             "avg_price": held.avg_price,
@@ -574,10 +595,31 @@ mod tests {
     use super::*;
     use crate::domain::{Candle, Quote, TickerData};
 
+    #[test]
+    fn startup_uses_the_full_fifteen_minute_preset_and_respects_overrides() {
+        let args = Args::parse_from(["alphai-tui"]);
+        let defaults = chart_window(&args, &config::Config::default());
+        assert_eq!(defaults, (Range::D5, Interval::M15));
+        let fifteen: Vec<_> = app::RANGE_PRESETS
+            .into_iter()
+            .filter(|(_, interval)| *interval == Interval::M15)
+            .collect();
+        assert_eq!(fifteen, vec![defaults]);
+        let cfg = config::Config {
+            range: Some("1d".into()),
+            interval: Some("5m".into()),
+            ..Default::default()
+        };
+        assert_eq!(chart_window(&args, &cfg), (Range::D1, Interval::M5));
+        let args = Args::parse_from(["alphai-tui", "--range", "1mo", "--interval", "60m"]);
+        assert_eq!(chart_window(&args, &cfg), (Range::Mo1, Interval::M60));
+    }
+
     fn data(quote: Quote) -> TickerData {
         TickerData {
             quote,
             candles: vec![Candle {
+                feed: Default::default(),
                 ts: 1_700_000_000,
                 open: 1.0,
                 high: 2.0,
@@ -590,6 +632,7 @@ mod tests {
 
     fn plain(price: f64, prev_close: Option<f64>) -> Quote {
         Quote {
+            timing: Default::default(),
             symbol: "AAPL".into(),
             price,
             prev_close,

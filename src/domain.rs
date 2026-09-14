@@ -130,11 +130,7 @@ pub fn fetch_range(display: Range, interval: Interval, slow_bars: usize) -> Rang
 
 /// Which trading sessions a fetch should bring back candles for.
 ///
-/// An enum rather than a bool so the call sites say which they mean.
-/// Only yahoo can answer `Extended`: alpaca's free IEX feed carries no
-/// pre or post market prints at all (measured 2026-09-09: zero bars in
-/// the post session), and finnhub builds its candles from quotes taken
-/// while the app runs.
+/// Yahoo and Alpaca support both; Finnhub synthesizes its history.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Sessions {
     #[default]
@@ -151,7 +147,48 @@ impl Sessions {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+/// Provenance travels with a price/bar, including through caches and mixed
+/// feeds. Unknown is reserved for old caches and synthetic test fixtures.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PriceFeed {
+    #[default]
+    Unknown,
+    Iex,
+    Sip,
+    DelayedSip,
+    Yahoo,
+    Finnhub,
+    Crypto,
+}
+
+impl PriceFeed {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Unknown => "",
+            Self::Iex => "IEX",
+            Self::Sip => "SIP",
+            Self::DelayedSip => "SIP · delayed 15m",
+            Self::Yahoo => "Yahoo",
+            Self::Finnhub => "Finnhub",
+            Self::Crypto => "Alpaca crypto",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
+pub struct QuoteTiming {
+    pub regular: Option<i64>,
+    pub regular_feed: PriceFeed,
+    /// Provider timestamp; the bar start when only an OHLC close is known.
+    pub extended: Option<i64>,
+    pub extended_feed: PriceFeed,
+    /// The extended source's regular close: IEX and consolidated closes
+    /// can differ, so a hybrid must not manufacture a percentage at the join.
+    pub extended_reference: Option<f64>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Quote {
     pub symbol: String,
     /// The regular session's price: the last trade while the exchange was
@@ -163,6 +200,8 @@ pub struct Quote {
     /// Sources differ in what they can answer here, so it stays optional
     /// everywhere and a view omits its zone when it is None.
     pub extended: Option<f64>,
+    #[serde(default)]
+    pub timing: QuoteTiming,
     /// 52 week range as (low, high).
     pub fifty_two_week: Option<(f64, f64)>,
     /// The regular session's own (low, high), when the source states it.
@@ -184,30 +223,60 @@ impl Quote {
             .map(|pc| (self.price - pc) / pc * 100.0)
     }
 
-    /// The extended price, but only when it is genuinely a separate number.
-    /// A source that has no extended data at all, and one asked during the
-    /// regular session (when the two are the same trade), both answer None,
-    /// so a caller never has to ask what time it is to decide.
+    /// A timestamped extended trade remains valid at 0%. Older cache rows
+    /// without timing keep their legacy interpretation until a fresh fetch.
     pub fn extended_price(&self) -> Option<f64> {
-        self.extended.filter(|e| *e != self.price)
+        self.extended_price_at(chrono::Utc::now())
+    }
+
+    pub fn extended_price_at(&self, now: chrono::DateTime<chrono::Utc>) -> Option<f64> {
+        let price = self.extended.filter(|p| p.is_finite() && *p > 0.0)?;
+        match self.timing.extended {
+            Some(ts) => crate::market::extended_window(now)
+                .or_else(|| {
+                    // During SIP's 15-minute lag after the opening bell,
+                    // its latest trade can still belong to today's PRE.
+                    let open = crate::market::window_at(now.timestamp())?;
+                    if self.timing.extended_feed != PriceFeed::DelayedSip
+                        || open.session != crate::market::Session::Open
+                        || now.timestamp() >= open.start + 15 * 60
+                        || self.timing.regular.is_some_and(|t| t >= open.start)
+                    {
+                        return None;
+                    }
+                    crate::market::windows(crate::market::et_date(ts)?)
+                        .into_iter()
+                        .find(|w| w.session == crate::market::Session::Pre && w.end == open.start)
+                })
+                .filter(|w| w.start <= ts && ts < w.end && ts <= now.timestamp())
+                .map(|_| price),
+            None => (price != self.price).then_some(price),
+        }
+    }
+
+    pub fn extended_reference(&self) -> f64 {
+        self.timing.extended_reference.unwrap_or(self.price)
     }
 
     /// Extended move measured against the regular close, not the previous
     /// one: after hours a reader is asking what the stock did *since* the
     /// bell, which is the convention every broker screen follows.
     pub fn extended_change(&self) -> Option<f64> {
-        self.extended_price().map(|e| e - self.price)
+        self.extended_price().map(|e| e - self.extended_reference())
     }
 
     pub fn extended_change_pct(&self) -> Option<f64> {
-        (self.price != 0.0)
-            .then(|| self.extended_change().map(|c| c / self.price * 100.0))
+        (self.extended_reference() != 0.0)
+            .then(|| {
+                self.extended_change()
+                    .map(|c| c / self.extended_reference() * 100.0)
+            })
             .flatten()
     }
 }
 
 /// One OHLCV bar; `ts` is epoch seconds.
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
 pub struct Candle {
     pub ts: i64,
     pub open: f64,
@@ -215,6 +284,8 @@ pub struct Candle {
     pub low: f64,
     pub close: f64,
     pub volume: Option<f64>,
+    #[serde(default)]
+    pub feed: PriceFeed,
 }
 
 /// Everything the UI knows about one ticker: latest quote + recent candles.
@@ -222,6 +293,48 @@ pub struct Candle {
 pub struct TickerData {
     pub quote: Quote,
     pub candles: Vec<Candle>,
+}
+
+impl TickerData {
+    /// Only a timestamped trade from the bar's own feed and interval may
+    /// update it. A regular close must never overwrite a PRE/AH bar, or a
+    /// current IEX quote rewrite a delayed consolidated bar.
+    pub fn update_current_bar(&mut self, interval: Interval) {
+        let Some(bar) = self.candles.last_mut() else {
+            return;
+        };
+        let q = &self.quote;
+        let extended = crate::market::window_at(bar.ts)
+            .is_some_and(|w| w.session != crate::market::Session::Open)
+            && crate::market::is_us_equity(&q.symbol)
+            && interval != Interval::D1;
+        let (price, ts, feed) = if extended {
+            (q.extended, q.timing.extended, q.timing.extended_feed)
+        } else {
+            (Some(q.price), q.timing.regular, q.timing.regular_feed)
+        };
+        let (Some(price), Some(ts)) = (price, ts) else {
+            return;
+        };
+        if feed == PriceFeed::Unknown || feed != bar.feed || !price.is_finite() {
+            return;
+        }
+        let same_bar = if interval == Interval::D1 {
+            crate::market::et_date(ts) == crate::market::et_date(bar.ts)
+                && crate::market::window_at(ts)
+                    .is_some_and(|w| w.session == crate::market::Session::Open)
+        } else {
+            ts >= bar.ts
+                && ts < bar.ts + interval.secs()
+                && (!crate::market::is_us_equity(&q.symbol)
+                    || crate::market::window_at(ts) == crate::market::window_at(bar.ts))
+        };
+        if same_bar {
+            bar.close = price;
+            bar.high = bar.high.max(price);
+            bar.low = bar.low.min(price);
+        }
+    }
 }
 
 pub fn fmt_price(p: f64) -> String {
@@ -252,6 +365,100 @@ pub fn fmt_volume(v: f64) -> String {
 mod tests {
     use super::*;
     use crate::indicators::SMA_SLOW;
+
+    fn instant(s: &str) -> chrono::DateTime<chrono::Utc> {
+        chrono::DateTime::parse_from_rfc3339(s).unwrap().to_utc()
+    }
+
+    #[test]
+    fn timestamped_zero_move_is_valid_and_last_friday_is_not_monday_premarket() {
+        let mut q = Quote {
+            symbol: "AAPL".into(),
+            price: 100.0,
+            extended: Some(100.0),
+            ..Default::default()
+        };
+        q.timing.extended = Some(instant("2026-09-11T20:41:00Z").timestamp());
+        assert_eq!(
+            q.extended_price_at(instant("2026-09-12T10:00:00Z")),
+            Some(100.0)
+        );
+        assert_eq!(q.extended_price_at(instant("2026-09-14T08:05:00Z")), None);
+        q.timing.extended = Some(instant("2026-09-14T08:01:00Z").timestamp());
+        assert_eq!(
+            q.extended_price_at(instant("2026-09-14T08:05:00Z")),
+            Some(100.0)
+        );
+        assert_eq!(q.extended_price_at(instant("2026-09-14T13:30:00Z")), None);
+        assert_eq!(q.extended_price_at(instant("2026-09-14T08:00:00Z")), None);
+    }
+
+    #[test]
+    fn delayed_premarket_survives_the_bell_until_regular_data_arrives() {
+        let mut q = Quote {
+            symbol: "AAPL".into(),
+            price: 100.0,
+            extended: Some(102.0),
+            timing: QuoteTiming {
+                extended: Some(instant("2026-09-14T13:20:00Z").timestamp()),
+                extended_feed: PriceFeed::DelayedSip,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let now = instant("2026-09-14T13:35:00Z");
+        assert_eq!(q.extended_price_at(now), Some(102.0));
+        assert_eq!(q.extended_price_at(instant("2026-09-14T13:45:00Z")), None);
+        q.timing.regular = Some(instant("2026-09-14T13:30:01Z").timestamp());
+        assert_eq!(q.extended_price_at(now), None);
+        q.timing.regular = None;
+        q.timing.extended = Some(instant("2026-09-11T13:20:00Z").timestamp());
+        assert_eq!(q.extended_price_at(now), None);
+    }
+
+    #[test]
+    fn only_same_feed_and_same_interval_trades_update_a_bar() {
+        let ts = instant("2026-09-14T08:00:00Z").timestamp();
+        let mut data = TickerData {
+            quote: Quote {
+                symbol: "AAPL".into(),
+                price: 110.0,
+                extended: Some(102.0),
+                timing: QuoteTiming {
+                    regular: Some(ts - 3 * 86400),
+                    extended: Some(ts + 30),
+                    regular_feed: PriceFeed::Iex,
+                    extended_feed: PriceFeed::Iex,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            candles: vec![Candle {
+                ts,
+                open: 100.0,
+                high: 101.0,
+                low: 99.0,
+                close: 100.5,
+                feed: PriceFeed::DelayedSip,
+                volume: Some(100.0),
+            }],
+        };
+        data.update_current_bar(Interval::M5);
+        assert_eq!(data.candles[0].close, 100.5, "IEX must not rewrite SIP");
+        data.quote.timing.extended_feed = PriceFeed::DelayedSip;
+        data.update_current_bar(Interval::M5);
+        assert_eq!(
+            data.candles[0].close, 102.0,
+            "the PRE trade updates PRE, not the regular close"
+        );
+        data.quote.extended = Some(105.0);
+        data.quote.timing.extended = Some(ts + 301);
+        data.update_current_bar(Interval::M5);
+        assert_eq!(
+            data.candles[0].close, 102.0,
+            "a newer bucket must not revise the old one"
+        );
+    }
 
     /// Short enough for the price gutter at every magnitude a share count
     /// reaches, and never wider than a price label.

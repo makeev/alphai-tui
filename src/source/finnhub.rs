@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use reqwest::StatusCode;
 use serde::Deserialize;
 
-use crate::domain::{Candle, Interval, Quote, Range, Sessions, TickerData};
+use crate::domain::{Candle, Interval, PriceFeed, Quote, QuoteTiming, Range, Sessions, TickerData};
 use crate::source::{DataSource, http};
 
 /// Cap on the per-symbol synthetic history (~2.5h at 15s polls).
@@ -70,6 +70,7 @@ impl DataSource for Finnhub {
         }
 
         let candle = Candle {
+            feed: PriceFeed::Finnhub,
             ts: q.t,
             open: q.c,
             high: q.c,
@@ -86,6 +87,11 @@ impl DataSource for Finnhub {
 
         Ok(TickerData {
             quote: Quote {
+                timing: QuoteTiming {
+                    regular: Some(q.t),
+                    regular_feed: PriceFeed::Finnhub,
+                    ..Default::default()
+                },
                 symbol: symbol.to_string(),
                 price: q.c,
                 prev_close: Some(q.pc),
@@ -135,6 +141,7 @@ mod tests {
 
     fn tick(ts: i64, close: f64) -> Candle {
         Candle {
+            feed: Default::default(),
             ts,
             open: close,
             high: close,

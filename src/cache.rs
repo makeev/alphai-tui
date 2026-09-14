@@ -31,7 +31,7 @@ const WRITE_EVERY: Duration = Duration::from_secs(60);
 
 /// Bumped when the entry shape changes; a file from another version is
 /// dropped rather than migrated.
-const VERSION: u32 = 1;
+const VERSION: u32 = 2;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Entry {
@@ -207,6 +207,7 @@ mod tests {
     fn data(price: f64) -> TickerData {
         TickerData {
             quote: Quote {
+                timing: Default::default(),
                 symbol: "AAPL".into(),
                 price,
                 prev_close: Some(1.0),
@@ -217,6 +218,7 @@ mod tests {
                 volume: None,
             },
             candles: vec![Candle {
+                feed: Default::default(),
                 ts: 1_700_000_000,
                 open: 1.0,
                 high: 2.0,

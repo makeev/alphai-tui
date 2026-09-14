@@ -1,4 +1,5 @@
 pub mod alpaca;
+mod extended;
 pub mod finnhub;
 pub mod http;
 pub mod registry;
@@ -81,6 +82,7 @@ pub fn candle_from_ohlc(
         low: low.unwrap_or(close),
         close,
         volume,
+        feed: Default::default(),
     })
 }
 
@@ -90,9 +92,80 @@ pub fn sort_ascending(candles: &mut [Candle]) {
     candles.sort_by_key(|c| c.ts);
 }
 
+/// Filter US intraday bars and align larger buckets to each session's own
+/// opening. Callers fetch 30m rather than 60m to preserve the 09:30 boundary.
+pub fn normalize_sessions(
+    candles: Vec<Candle>,
+    symbol: &str,
+    interval: Interval,
+    sessions: Sessions,
+) -> Vec<Candle> {
+    use crate::market::{self, Session};
+    if interval == Interval::D1 || !market::is_us_equity(symbol) {
+        return candles;
+    }
+    let mut out: Vec<Candle> = Vec::new();
+    for mut c in candles {
+        let Some(w) = market::window_at(c.ts) else {
+            continue;
+        };
+        if sessions == Sessions::Regular && w.session != Session::Open {
+            continue;
+        }
+        c.ts = w.start + (c.ts - w.start) / interval.secs() * interval.secs();
+        if let Some(last) = out.last_mut()
+            && last.ts == c.ts
+            && last.feed == c.feed
+        {
+            last.high = last.high.max(c.high);
+            last.low = last.low.min(c.low);
+            last.close = c.close;
+            last.volume = match (last.volume, c.volume) {
+                (None, None) => None,
+                (a, b) => Some(a.unwrap_or(0.0) + b.unwrap_or(0.0)),
+            };
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hourly_bars_do_not_mix_premarket_with_the_open() {
+        let ts = chrono::DateTime::parse_from_rfc3339("2026-09-14T13:00:00Z")
+            .unwrap()
+            .timestamp();
+        let bars: Vec<_> = (0..4)
+            .map(|i| Candle {
+                ts: ts + i * 1800,
+                open: 100.0 + i as f64,
+                high: 101.0 + i as f64,
+                low: 99.0 + i as f64,
+                close: 100.5 + i as f64,
+                volume: Some(10.0),
+                ..Default::default()
+            })
+            .collect();
+        let extended = normalize_sessions(bars.clone(), "AAPL", Interval::M60, Sessions::Extended);
+        assert_eq!(extended.len(), 3);
+        assert_eq!(extended[0].volume, Some(10.0));
+        assert_eq!(extended[1].ts, ts + 1800);
+        assert_eq!(extended[1].open, 101.0);
+        assert_eq!(extended[1].close, 102.5);
+        assert_eq!(extended[1].volume, Some(20.0));
+        let regular = normalize_sessions(bars.clone(), "AAPL", Interval::M60, Sessions::Regular);
+        assert_eq!(regular.len(), 2);
+        assert_eq!(regular[0].ts, ts + 1800, "09:30 must not be dropped");
+        assert_eq!(
+            normalize_sessions(bars, "BTC-USD", Interval::M60, Sessions::Regular).len(),
+            4
+        );
+    }
 
     #[test]
     fn candle_requires_close_and_fills_ohlc_from_it() {

@@ -5,15 +5,13 @@
 //! timezone database in for one badge, the offset comes from the US
 //! daylight-saving rule (second Sunday of March to first Sunday of
 //! November) and the closures from the NYSE holiday rules, Good Friday
-//! included. Half days are deliberately not modelled: on the three
-//! afternoons a year the exchange closes at 13:00 (the day after
-//! Thanksgiving, and the eves of Independence Day and Christmas) the badge
-//! reads "live" until 16:00.
+//! included. Scheduled half days close at 13:00; extraordinary closures
+//! are not predicted by these calendar rules.
 
 use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveDateTime, Utc, Weekday};
 
 /// What the US equity market is doing at a given moment.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Session {
     /// 04:00 to 09:30 ET.
     Pre,
@@ -68,6 +66,122 @@ const OPEN: i64 = 9 * 60 + 30;
 const CLOSE: i64 = 16 * 60;
 const POST_CLOSE: i64 = 20 * 60;
 
+/// Scheduled NYSE early closes. July 2 is a full day when July 3 is the
+/// observed holiday; Christmas Eve only closes early when it trades.
+pub fn close_minutes(date: NaiveDate) -> i64 {
+    let thanksgiving_friday = nth_weekday(date.year(), 11, Weekday::Thu, 4) + Duration::days(1);
+    if trading_day(date)
+        && (date == thanksgiving_friday
+            || (date.month() == 7 && date.day() == 3)
+            || (date.month() == 12 && date.day() == 24))
+    {
+        13 * 60
+    } else {
+        CLOSE
+    }
+}
+
+fn post_close_minutes(date: NaiveDate) -> i64 {
+    if close_minutes(date) < CLOSE {
+        17 * 60
+    } else {
+        POST_CLOSE
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct SessionWindow {
+    pub session: Session,
+    pub start: i64,
+    pub end: i64,
+}
+
+/// Convert an unambiguous trading-hours New York wall time into UTC.
+fn et_timestamp(date: NaiveDate, minutes: i64) -> i64 {
+    let wall = date.and_hms_opt(0, 0, 0).unwrap() + Duration::minutes(minutes);
+    let candidate = wall + Duration::hours(5);
+    (wall + Duration::hours(et_offset_hours(candidate)))
+        .and_utc()
+        .timestamp()
+}
+
+pub fn windows(date: NaiveDate) -> Vec<SessionWindow> {
+    if !trading_day(date) {
+        return Vec::new();
+    }
+    let close = close_minutes(date);
+    [
+        (Session::Pre, PRE_OPEN, OPEN),
+        (Session::Open, OPEN, close),
+        (Session::Post, close, post_close_minutes(date)),
+    ]
+    .into_iter()
+    .map(|(session, start, end)| SessionWindow {
+        session,
+        start: et_timestamp(date, start),
+        end: et_timestamp(date, end),
+    })
+    .collect()
+}
+
+pub fn window_at(ts: i64) -> Option<SessionWindow> {
+    windows(et_date(ts)?)
+        .into_iter()
+        .find(|w| w.start <= ts && ts < w.end)
+}
+
+/// The extended print relevant now. A new premarket retires the previous
+/// after-hours print even before its first trade. During regular hours no
+/// extended quote is current. Overnight/weekends retain the latest AH.
+pub fn extended_window(now: DateTime<Utc>) -> Option<SessionWindow> {
+    let ts = now.timestamp();
+    let mut date = et_time(now).date();
+    for _ in 0..14 {
+        for w in windows(date).into_iter().rev() {
+            if w.start <= ts {
+                return (w.session != Session::Open).then_some(w);
+            }
+        }
+        date = date.pred_opt()?;
+    }
+    None
+}
+
+/// Future axis positions advance through trading time, skipping nights,
+/// holidays and weekends (including DST changes between sessions).
+pub fn advance_trading_time(ts: i64, mut seconds: i64, extended: bool) -> i64 {
+    let Some(mut date) = et_date(ts) else {
+        return ts;
+    };
+    let mut cursor = ts;
+    for _ in 0..1100 {
+        for w in windows(date) {
+            if (!extended && w.session != Session::Open) || w.end <= cursor {
+                continue;
+            }
+            let start = cursor.max(w.start);
+            if seconds < w.end - start {
+                return start + seconds;
+            }
+            seconds -= w.end - start;
+            cursor = w.end;
+        }
+        let Some(next) = date.succ_opt() else {
+            return cursor;
+        };
+        date = next;
+    }
+    cursor
+}
+
+/// US stock ticker forms supported by the session overlay. Crypto, FX,
+/// indices and exchange-suffixed international listings keep their own time.
+pub fn is_us_equity(symbol: &str) -> bool {
+    !is_crypto(symbol)
+        && !symbol.contains(['=', '^', ':'])
+        && (!symbol.contains('.') || symbol.ends_with(".A") || symbol.ends_with(".B"))
+}
+
 /// The New York wall clock at a UTC instant.
 pub fn et_time(now: DateTime<Utc>) -> NaiveDateTime {
     let utc = now.naive_utc();
@@ -88,11 +202,12 @@ pub fn clock_at(now: DateTime<Utc>) -> MarketClock {
     let mins = minute.num_minutes();
 
     if trading_day(date) {
+        let close = close_minutes(date);
         let (session, until_mins) = match mins {
             m if m < PRE_OPEN => (Session::Closed, Some(OPEN - m)),
             m if m < OPEN => (Session::Pre, Some(OPEN - m)),
-            m if m < CLOSE => (Session::Open, Some(CLOSE - m)),
-            m if m < POST_CLOSE => (Session::Post, None),
+            m if m < close => (Session::Open, Some(close - m)),
+            m if m < post_close_minutes(date) => (Session::Post, None),
             _ => (Session::Closed, None),
         };
         if let Some(mins) = until_mins {
@@ -110,19 +225,17 @@ pub fn clock_at(now: DateTime<Utc>) -> MarketClock {
         }
         return MarketClock {
             session,
-            until: until_next_open(et, date),
+            until: until_next_open(now, date),
         };
     }
     MarketClock {
         session: Session::Closed,
-        until: until_next_open(et, date),
+        until: until_next_open(now, date),
     }
 }
 
-/// Time from `et` to the next opening bell. Across a DST change the answer
-/// is an hour off, which no countdown shown in whole minutes is worth a
-/// timezone database to fix.
-fn until_next_open(et: NaiveDateTime, from: NaiveDate) -> Duration {
+/// Time to the next opening bell, measured in UTC across DST changes.
+fn until_next_open(now: DateTime<Utc>, from: NaiveDate) -> Duration {
     let mut day = from;
     for _ in 0..10 {
         day = day.succ_opt().unwrap_or(day);
@@ -130,10 +243,7 @@ fn until_next_open(et: NaiveDateTime, from: NaiveDate) -> Duration {
             break;
         }
     }
-    let open = day
-        .and_hms_opt(9, 30, 0)
-        .expect("09:30 exists")
-        .signed_duration_since(et);
+    let open = Duration::seconds(et_timestamp(day, OPEN) - now.timestamp());
     open.max(Duration::zero())
 }
 
@@ -270,6 +380,24 @@ mod tests {
         assert_eq!(et_offset_hours(utc(2026, 3, 8, 7, 0).naive_utc()), 4);
         assert_eq!(et_offset_hours(utc(2026, 11, 1, 5, 59).naive_utc()), 4);
         assert_eq!(et_offset_hours(utc(2026, 11, 1, 6, 0).naive_utc()), 5);
+    }
+
+    #[test]
+    fn short_sessions_and_future_axis_respect_the_calendar() {
+        assert_eq!(close_minutes(ymd(2026, 7, 2)), 960);
+        assert!(windows(ymd(2026, 7, 3)).is_empty());
+        assert_eq!(close_minutes(ymd(2028, 7, 3)), 780);
+        assert_eq!(clock_at(utc(2026, 11, 27, 18, 0)).session, Session::Post);
+        assert_eq!(clock_at(utc(2026, 11, 27, 22, 0)).session, Session::Closed);
+        assert_eq!(clock_at(utc(2026, 12, 24, 18, 0)).session, Session::Post);
+        assert_eq!(
+            advance_trading_time(utc(2026, 10, 30, 19, 55).timestamp(), 600, false),
+            utc(2026, 11, 2, 14, 35).timestamp()
+        );
+        assert_eq!(
+            clock_at(utc(2026, 11, 1, 18, 0)).until,
+            Duration::minutes(1230)
+        );
     }
 
     #[test]

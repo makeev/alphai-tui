@@ -19,26 +19,33 @@ use crate::market::{self, Session};
 /// extended-candle toggle. A missing or invalid extended print falls back
 /// to the regular-session quote.
 pub fn price(quote: &Quote) -> f64 {
-    extended_price(quote).unwrap_or(quote.price)
+    price_at(quote, Utc::now())
 }
 
-fn extended_price(quote: &Quote) -> Option<f64> {
-    quote.extended.filter(|p| p.is_finite() && *p > 0.0)
+pub fn price_at(quote: &Quote, now: DateTime<Utc>) -> f64 {
+    quote.extended_price_at(now).unwrap_or(quote.price)
 }
 
 /// During premarket the regular quote is yesterday's close; the source's
 /// previous close still belongs to the session before that. After hours,
 /// include both the regular day's move and the extended move.
 pub fn day_change(quote: &Quote, now: DateTime<Utc>) -> Option<f64> {
-    let previous = if extended_price(quote).is_some()
+    let extended = quote.extended_price_at(now);
+    let previous = if extended.is_some()
         && !market::is_crypto(&quote.symbol)
-        && market::clock_at(now).session == Session::Pre
+        && quote
+            .timing
+            .extended
+            .and_then(market::window_at)
+            .map(|window| window.session)
+            .unwrap_or_else(|| market::clock_at(now).session)
+            == Session::Pre
     {
-        Some(quote.price)
+        Some(quote.extended_reference())
     } else {
         quote.prev_close
     };
-    previous.map(|previous| price(quote) - previous)
+    previous.map(|previous| extended.unwrap_or(quote.price) - previous)
 }
 
 /// One holding. `qty` may be negative (a short), in which case a rising
@@ -113,7 +120,7 @@ pub fn totals<'a>(
         t.total += 1;
         let Some(quote) = quote else { continue };
         t.priced += 1;
-        let price = price(quote);
+        let price = price_at(quote, now);
         t.value += pos.value(price);
         t.cost += pos.cost();
         t.pnl += pos.pnl(price);
@@ -255,6 +262,7 @@ mod tests {
 
     fn quote(price: f64, prev_close: Option<f64>) -> Quote {
         Quote {
+            timing: Default::default(),
             symbol: "AAPL".to_string(),
             price,
             prev_close,
@@ -361,6 +369,7 @@ mod tests {
         assert!((p.day_pnl(&q, at(10)).unwrap() - 648.0).abs() < 1e-8);
         assert_eq!(p.day_pnl(&q, at(21)), None);
         q.extended = Some(q.price);
+        q.timing.extended = Some(at(10).timestamp());
         assert_eq!(p.day_pnl(&q, at(10)), Some(0.0));
     }
 

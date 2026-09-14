@@ -199,7 +199,7 @@ fn row(
     total_value: f64,
     now: DateTime<Utc>,
 ) -> Row<'static> {
-    let price = portfolio::price(quote);
+    let price = portfolio::price_at(quote, now);
     let pnl = position.pnl(price);
     let pnl_color = move_color(Some(pnl), &app.theme);
     let mut cells = vec![Cell::from(position.symbol.clone()).bold()];

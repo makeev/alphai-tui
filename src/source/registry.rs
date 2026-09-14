@@ -99,14 +99,28 @@ pub static SOURCES: &[SourceInfo] = &[
 pub fn rate_warning(info: &SourceInfo, symbols: usize, every_secs: u64) -> Option<String> {
     let limit = info.rate_limit_per_min?;
     let every_secs = every_secs.max(1);
-    let per_min = symbols as u64 * info.reqs_per_symbol as u64 * 60 / every_secs;
+    // IEX may supplement each symbol once a minute with a SIP snapshot and
+    // bars. Reserve that allowance so the suggested interval also fits ETH.
+    let extra = if info.id == "alpaca" {
+        symbols as u64 * 2
+    } else {
+        0
+    };
+    let per_min = symbols as u64 * info.reqs_per_symbol as u64 * 60 / every_secs + extra;
     if per_min <= limit as u64 {
         return None;
     }
     // The shortest interval that fits, rounded up.
-    let fits = (symbols as u64 * info.reqs_per_symbol as u64 * 60).div_ceil(limit as u64);
+    let available = (limit as u64).saturating_sub(extra);
+    if available == 0 {
+        return Some(format!(
+            "{symbols} symbols exceed the {} request/min allowance on {} with extended data: trim the watchlist",
+            limit, info.id
+        ));
+    }
+    let fits = (symbols as u64 * info.reqs_per_symbol as u64 * 60).div_ceil(available);
     Some(format!(
-        "{} symbols every {}s is {} requests a minute on {}, over the {} its plan allows: poll every {}s or trim the watchlist",
+        "{} symbols every {}s is up to {} requests a minute on {}, over the {} its plan allows: poll every {}s or trim the watchlist",
         symbols, every_secs, per_min, info.id, limit, fits
     ))
 }
@@ -241,11 +255,11 @@ mod tests {
         let alpaca = find("alpaca").unwrap();
         // Five symbols at two requests each, every 2s: 300 a minute.
         let msg = rate_warning(alpaca, 5, 2).expect("300 req/min is over 200");
-        assert!(msg.contains("300"), "{msg}");
+        assert!(msg.contains("310"), "{msg}");
         assert!(msg.contains("alpaca"), "{msg}");
-        assert!(msg.contains("poll every 3s"), "{msg}");
+        assert!(msg.contains("poll every 4s"), "{msg}");
         // The interval it suggests has to clear the limit.
-        assert!(rate_warning(alpaca, 5, 3).is_none());
+        assert!(rate_warning(alpaca, 5, 4).is_none());
         assert!(rate_warning(alpaca, 5, 15).is_none());
         // Finnhub spends one request per symbol against a lower ceiling.
         assert!(rate_warning(find("finnhub").unwrap(), 5, 2).is_some());

@@ -6,7 +6,7 @@ description: |
   price moved. Live quotes and candlestick charts on one side; on the other,
   for the same ticker, AI-scored news with a full analysis of each story, the
   SEC Form 4 insider filings and a structured read of the last earnings
-  report. Seven views one keystroke apart, one Rust binary built on ratatui.
+  report. Eight views one keystroke apart, one Rust binary built on ratatui.
 
   Quotes and charts run keyless on Yahoo, or on Finnhub or Alpaca with their
   own free keys. The News, Insider and Earnings views use a free AlphAI key

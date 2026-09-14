@@ -108,8 +108,13 @@ braille lines, a volume panel whose bars sit in their candles' own columns
 and take their color, and an RSI(14) panel. `c` switches to a Braille line
 chart, `m`, `i` and `b` toggle the overlays and the panels, `e` averages
 simple or exponential, `t` cycles interval presets, and `E` draws the pre
-and post market candles too (on Yahoo, the one source here that reports
-them).
+and post market candles too (Yahoo and Alpaca), enabled by default. The
+chart title keeps the switch beside the source: `EXT: Yahoo (Shift+E: off)`
+or `EXT: off (Shift+E: on)` when hidden. The hint follows custom keybindings.
+Charts start with five days of `15m` candles; set the top-level `range` and
+`interval` in the config to choose another window or size. The header shows
+both values, `5d / 15m (t: change)`, because `t` and `T` cycle forward and
+backward through presets that change the window as well as the candle size.
 
 The ticker's news is marked on the candles it was published in: `▲` and
 `▼` for the AI sentiment call, `◆` when it is neutral, brighter for a
@@ -120,12 +125,28 @@ app already holds for that ticker, which the Split and News views keep
 fresh, so they never cost an API request and they are simply absent until
 one of those views has loaded that ticker's feed.
 
-The client quietly fetches more history than the window shows, so the
-average and RSI lines are fully drawn from the first candle on screen
-instead of warming up over the next hundred. Like a trading terminal, the
-chart keeps a margin right of the newest candle with a last-price marker in
-it, and every time a poll moves the price the marker pulses in the tick's
-color.
+The client fetches extra history for indicator warm-up. Pre-market has a
+quiet warm background, after-hours a cool one, and regular trading keeps
+the terminal background. Price, volume and RSI share the same session
+columns and vertical grid in both candle and line mode. Aggregation never
+combines different sessions or feeds into one candle. These session rules
+apply to US stocks on intraday intervals, including scheduled 13:00 closes
+and 17:00 after-hours closes on half days; crypto remains 24/7.
+
+The time axis adapts its label spacing to the terminal width, gives the
+opening and closing bells priority, and puts dates on a second row. US
+stocks use New York time (`ET`) by default; `[chart] timezone = "local"`
+or `"utc"` changes the labels. Other instruments use local time under the
+`"exchange"` default. Future labels in the right margin skip closed US
+sessions, weekends and holidays, including daylight-saving changes.
+`session_shading = false` and `time_grid = false` disable those layers.
+
+The right margin carries the latest relevant price. A timestamped quote
+only updates a candle from the same source, interval and session: the
+regular close cannot overwrite a pre-market candle, and an IEX quote cannot
+rewrite a delayed SIP bar. Extended quotes at 0% still appear. The rail
+shows their source, timestamp and age; a new premarket retires the previous
+after-hours quote even if the first new trade has not arrived yet.
 
 ### 5 Insider: what the people inside the company did
 
@@ -343,8 +364,8 @@ alphai-tui -s finnhub NVDA  # explicit source for one run
 |------|---------|---------|
 | `-s, --source` | `yahoo` | Price source: `yahoo`, `finnhub` or `alpaca` |
 | `-e, --every` | `15` | Poll interval, seconds (also a settings row, applied live) |
-| `-r, --range` | `1d` | History window: `1d 5d 1mo 3mo 6mo 1y 2y` |
-| `-i, --interval` | `5m` | Candle size: `1m 2m 5m 15m 30m 60m 1d` |
+| `-r, --range` | `5d` | History window: `1d 5d 1mo 3mo 6mo 1y 2y` |
+| `-i, --interval` | `15m` | Candle size: `1m 2m 5m 15m 30m 60m 1d` |
 | `--theme` | `default` | Color preset, e.g. `catppuccin-mocha` (also a key and a settings row) |
 | `--bare` | off | Start without the header and footer, for a tmux pane (`z` toggles it live) |
 | `--once` | | Print quotes to stdout and exit |
@@ -472,7 +493,7 @@ defaults. API keys can also come from env vars, which win over the config:
 | `Enter` / `o` | news, insider | open article in browser |
 | `Enter` / `o` | earnings | open the read on alphai.io |
 | `v` | news, insider | fullscreen article card; scroll with `↑` `↓`, `Esc` closes |
-| `E` | everywhere | draw pre and post market candles too (yahoo only) |
+| `E` | everywhere | draw pre and post market candles too (Yahoo and Alpaca) |
 | `x` | news | flip the list/card layout: side-by-side or stacked |
 | `PgUp` `PgDn` | news | scroll the article card pane |
 | `PgUp` `PgDn` | earnings | page through the read |
@@ -542,11 +563,12 @@ get a sourced brief without leaving the terminal.
 
 **Prices**
 
-- `yahoo`: no API key, quote and candle history in one request, roughly
-  15 minutes delayed. Crypto and FX tickers work as `BTC-USD`, `EURUSD=X`.
-  The only source here that reports extended-hours prices and candles, the
-  52 week range and full market volume, all in the same request as the
-  price. `E` and `[chart] extended_hours` apply to this source alone.
+- `yahoo`: no API key, intraday quote and history in one request. Timing
+  varies by exchange; extended quotes use the source's timestamps, never
+  the time a response was fetched. Crypto and FX tickers work as `BTC-USD`,
+  `EURUSD=X`. Includes extended hours, 52-week range and full market volume.
+  A daily chart may make an additional cached intraday request to timestamp
+  its extended quote. `E` controls which candles are drawn.
 - `finnhub`: needs a key (free at [finnhub.io](https://finnhub.io)).
   Real-time-ish quotes; historical candles are premium-only there, so charts
   build up from quotes collected during the session and reset on restart.
@@ -562,10 +584,29 @@ get a sourced brief without leaving the terminal.
   [alpaca.markets](https://alpaca.markets)). Realtime quotes from the IEX
   feed plus real historical bars, so charts are complete right after start
   instead of growing over the session. Crypto works in the usual `BTC-USD`
-  form. IEX is one exchange rather than the whole tape, so on the free feed
-  there are no pre or post market prints and no volume figure: a few
-  percent of the day's shares would read as the day's volume. Both appear
-  on `ALPACA_FEED=sip` or `delayed_sip`. Getting free keys:
+  form. IEX covers one exchange, with sparse pre-market trading from
+  08:00 ET and after-hours until 17:00 ET on normal days. The default IEX
+  mode supplements extended quotes and candles with consolidated SIP data
+  delayed 15 minutes, then Yahoo if SIP is unavailable or missing the
+  relevant session. Regular candles and the headline quote remain IEX.
+  The chart labels the extended feed, and the rail labels the quote's own
+  source and age. Volume bars from different feeds are not consolidated
+  into a single session; IEX's total is not presented as whole-market volume.
+
+  Supplemental results are cached for 60 seconds per symbol/window. Empty
+  or failed refreshes retain prior session data. A Yahoo IP block pauses
+  supplemental Yahoo requests across the watchlist for 30 minutes; it does
+  not fail an otherwise successful Alpaca poll. Extended quotes remain
+  available with `E` off, independently of the candle setting.
+
+  `ALPACA_FEED=delayed_sip` uses consolidated data for both regular and
+  extended sessions with a 15-minute delay. `ALPACA_FEED=sip` uses realtime
+  SIP and requires a paid subscription. The delayed mode uses
+  `feed=delayed_sip` for snapshots and `feed=sip` for historical bars; the
+  client sets the historical end to 15 minutes ago on every subscription.
+  During that lag after the opening bell, today's delayed pre-market quote
+  remains visible until regular data arrives, with its PRE label and age.
+  Getting free keys:
   1. Sign up at [alpaca.markets](https://alpaca.markets). Email is enough;
      market data and paper trading need no KYC.
   2. The free Basic data plan is enabled by default.
@@ -577,12 +618,10 @@ get a sourced brief without leaving the terminal.
 
   Free plan notes: the IEX feed is realtime but thin (roughly 2 to 3 percent
   of market volume, so charts of illiquid names can be sparse), and the API
-  allows 200 requests/min. The app makes 2 requests per ticker per poll and
-  warns, on startup and under the interval in the settings screen, when the
-  watchlist and the interval together go over the ceiling, naming an
-  interval that fits (going over turns tickers into `error` rows).
-  `ALPACA_FEED=sip` needs a paid data plan; `ALPACA_FEED=delayed_sip` gives
-  the full market with a 15 minute delay.
+  allows 200 requests/min. The app makes 2 requests per ticker per poll,
+  plus up to 2 per minute for cached SIP supplementation. The startup and
+  settings warnings include that supplemental allowance when suggesting
+  a polling interval. Changing candle presets can trigger a fresh cache fill.
 
 **When a source stops answering**
 
@@ -669,8 +708,8 @@ still change everything live without persisting it:
 source = "yahoo"
 watchlist = ["AAPL", "MSFT", "NVDA", "BTC-USD"]
 every = 15
-range = "1d"
-interval = "5m"
+range = "5d"         # startup history window
+interval = "15m"     # startup candle size; t cycles the chart presets live
 news_open = "alphai"  # where enter opens news: "alphai" or "original"
 source_fallback = true  # switch source when this one stops answering
 
@@ -698,7 +737,10 @@ sma = true                # moving average overlays visible at start
 ma_type = "sma"           # sma | ema, both using the periods below
 rsi = true                # RSI panel visible at start
 volume = true             # volume panel visible at start
-extended_hours = false    # draw pre and post market candles (yahoo only)
+extended_hours = true     # draw pre and post market candles; Shift+E toggles live
+timezone = "exchange"    # exchange (ET for US stocks), local, utc
+session_shading = true   # warm pre-market / cool after-hours backgrounds
+time_grid = true         # vertical grid shared by price, volume and RSI
 news_markers = true       # mark the ticker's cached news on the candles
 sma_fast = 20             # 2 to 250
 sma_slow = 100            # 2 to 250; also sizes the history warm-up
@@ -750,11 +792,16 @@ both: `←` `→` cycle it with a live preview, Save writes it here.
 Available: `default`, `catppuccin-mocha`, `catppuccin-macchiato`,
 `catppuccin-frappe`, `catppuccin-latte`, `dracula`, `gruvbox-dark`,
 `gruvbox-light`, `nord`. Presets are written in hex, so they want a
-terminal with 24-bit color; `default` uses ANSI names and follows whatever
-palette the terminal itself is set to. They only set foreground colors,
-which leaves a transparent or blurred terminal background alone. The two
+terminal with 24-bit color. Regular-session backgrounds remain the
+terminal's own background; the extended-session tints follow the palette.
+`default` uses ANSI foregrounds and subtle RGB session backgrounds;
+`session_shading = false` preserves a fully transparent chart background. The two
 light ones (`catppuccin-latte`, `gruvbox-light`) expect a light terminal
 background.
+
+`pre_market_bg` and `post_market_bg` are the session background slots;
+each accepts the same color formats as the foreground slots. Setting either
+to `"reset"` uses the terminal background for that session.
 
 Every color the views draw comes from a named slot, and the optional
 `[theme]` table recolors any of them, over the preset when there is one.

@@ -1,4 +1,6 @@
 use std::collections::HashMap;
+use std::sync::Mutex;
+use std::time::Instant;
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -8,9 +10,11 @@ use reqwest::header::{HeaderMap, HeaderValue};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 
-use crate::domain::{Candle, Interval, Quote, Range, Sessions, TickerData};
+use crate::domain::{Candle, Interval, PriceFeed, Quote, QuoteTiming, Range, Sessions, TickerData};
 use crate::market;
-use crate::source::{DataSource, candle_from_ohlc, http, sort_ascending};
+use crate::source::{
+    DataSource, candle_from_ohlc, extended, http, normalize_sessions, sort_ascending, yahoo::Yahoo,
+};
 
 pub const DEFAULT_DATA_URL: &str = "https://data.alpaca.markets";
 
@@ -24,6 +28,8 @@ pub struct Alpaca {
     client: reqwest::Client,
     base: String,
     feed: String,
+    extended: Mutex<extended::Cache>,
+    yahoo: Yahoo,
 }
 
 impl Alpaca {
@@ -48,7 +54,13 @@ impl Alpaca {
             .ok()
             .filter(|f| !f.trim().is_empty())
             .unwrap_or_else(|| "iex".to_string());
-        Ok(Self { client, base, feed })
+        Ok(Self {
+            client,
+            base,
+            feed,
+            extended: Mutex::new(extended::Cache::default()),
+            yahoo: Yahoo::new()?,
+        })
     }
 
     async fn get_json<T: DeserializeOwned>(&self, path: &str, query: &[(&str, &str)]) -> Result<T> {
@@ -56,30 +68,180 @@ impl Alpaca {
         http::get_json(&self.client, "alpaca", &url, query, error_message).await
     }
 
-    async fn fetch_stock(&self, symbol: &str, timeframe: &str, start: &str) -> Result<TickerData> {
+    async fn stock_parts(
+        &self,
+        symbol: &str,
+        interval: Interval,
+        start: &str,
+        feed: &str,
+    ) -> (Result<Quote>, Result<Vec<Candle>>) {
         let snapshot_path = format!("/v2/stocks/{symbol}/snapshot");
-        let snapshot_query = [("feed", self.feed.as_str())];
-        // `end` is deliberately omitted: its default is the latest moment the
-        // plan allows, so free-tier requests never trip a 422 on bars.
-        // `sort=desc` keeps the NEWEST bars when a long range/interval combo
-        // exceeds the 10000 limit; candles_from_desc restores ascending order.
+        let snapshot_query = [("feed", feed)];
+        // The historical endpoint calls delayed SIP `sip`. Set its end
+        // explicitly so paid accounts also match the delayed snapshot.
+        let bars_feed = if feed == "delayed_sip" { "sip" } else { feed };
         let bars_path = format!("/v2/stocks/{symbol}/bars");
-        let bars_query = [
-            ("timeframe", timeframe),
+        // An API hour straddles 09:30. Fetch halves and aggregate inside
+        // sessions, preserving the opening half hour in regular-only mode.
+        let raw_interval = if interval == Interval::M60 {
+            Interval::M30
+        } else {
+            interval
+        };
+        let mut bars_query = vec![
+            ("timeframe", timeframe(raw_interval)),
             ("start", start),
             ("limit", "10000"),
             ("sort", "desc"),
             ("adjustment", "split"),
-            ("feed", self.feed.as_str()),
+            ("feed", bars_feed),
         ];
+        let delayed_end = (Utc::now() - chrono::Duration::minutes(15))
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        if feed == "delayed_sip" {
+            bars_query.push(("end", delayed_end.as_str()));
+        }
         let (snapshot, bars) = tokio::join!(
             self.get_json::<Snapshot>(&snapshot_path, &snapshot_query),
             self.get_json::<StockBars>(&bars_path, &bars_query),
         );
-        Ok(TickerData {
-            quote: quote_from_snapshot(symbol, &snapshot?, self.feed != "iex")?,
-            candles: candles_from_desc(bars?.bars.unwrap_or_default()),
-        })
+        let provenance = match feed {
+            "iex" => PriceFeed::Iex,
+            "delayed_sip" => PriceFeed::DelayedSip,
+            _ => PriceFeed::Sip,
+        };
+        let quote = snapshot.and_then(|snap| {
+            let mut q = quote_from_snapshot(symbol, &snap, feed != "iex")?;
+            q.timing.regular_feed = provenance;
+            q.timing.extended_feed = provenance;
+            Ok(q)
+        });
+        let candles = bars.map(|bars| {
+            let mut candles = candles_from_desc(bars.bars.unwrap_or_default());
+            for c in &mut candles {
+                c.feed = provenance;
+            }
+            normalize_sessions(candles, symbol, interval, Sessions::Extended)
+        });
+        (quote, candles)
+    }
+
+    async fn fetch_stock(
+        &self,
+        symbol: &str,
+        range: Range,
+        interval: Interval,
+        sessions: Sessions,
+        start: &str,
+    ) -> Result<TickerData> {
+        let (quote, candles) = self.stock_parts(symbol, interval, start, &self.feed).await;
+        let mut data = TickerData {
+            quote: quote?,
+            candles: candles?,
+        };
+        let now = Utc::now();
+        let draw_extended = sessions == Sessions::Extended && interval != Interval::D1;
+        if self.feed == "iex"
+            && market::is_us_equity(symbol)
+            && (draw_extended || market::extended_window(now).is_some())
+        {
+            let extra = self
+                .supplement(symbol, range, interval, draw_extended, now)
+                .await;
+            // Daily candles stay regular-only, while the extended quote is
+            // still useful to the rail and portfolio.
+            if interval == Interval::D1 || !draw_extended {
+                extended::apply(
+                    &mut data,
+                    &extended::Supplement {
+                        quote: extra.quote,
+                        candles: Vec::new(),
+                    },
+                    now,
+                );
+            } else {
+                extended::apply(&mut data, &extra, now);
+            }
+        }
+        data.candles = normalize_sessions(data.candles, symbol, interval, sessions);
+        Ok(data)
+    }
+
+    async fn supplement(
+        &self,
+        symbol: &str,
+        range: Range,
+        interval: Interval,
+        history: bool,
+        now: chrono::DateTime<Utc>,
+    ) -> extended::Supplement {
+        let (range, interval) = if history {
+            (range, interval)
+        } else {
+            (Range::D1, Interval::M5)
+        };
+        let key = format!("{symbol}:{}:{}", range.as_str(), interval.as_str());
+        let (mut cached, due) = self.extended.lock().unwrap().begin(&key, Instant::now());
+        if !due {
+            return cached;
+        }
+        let start = (now - chrono::Duration::seconds(range.secs()))
+            .to_rfc3339_opts(SecondsFormat::Secs, true);
+        let (quote, bars) = self
+            .stock_parts(symbol, interval, &start, "delayed_sip")
+            .await;
+        let sip_failed = quote.is_err() || (history && bars.is_err());
+        extended::merge_quote(&mut cached.quote, quote.ok());
+        if let Ok(bars) = bars {
+            cached.candles = extended::merge_history(&cached.candles, &bars);
+        }
+        // At 04:00 the delayed tape naturally cannot yet have today's PRE.
+        // Empty responses during those first 15 minutes are not failures.
+        let missing_current = market::extended_window(now).is_some_and(|w| {
+            now.timestamp() >= w.start + 16 * 60
+                && (cached
+                    .quote
+                    .as_ref()
+                    .and_then(|q| q.extended_price_at(now))
+                    .is_none()
+                    || (now.timestamp() < w.end
+                        && cached
+                            .quote
+                            .as_ref()
+                            .and_then(|q| q.timing.extended)
+                            .is_some_and(|ts| ts < now.timestamp() - 30 * 60))
+                    || (history
+                        && !cached
+                            .candles
+                            .iter()
+                            .any(|c| c.ts >= w.start && c.ts < w.end)))
+        });
+        let missing_history = history && cached.candles.is_empty();
+        if (sip_failed || missing_current || missing_history)
+            && self.extended.lock().unwrap().claim_yahoo(Instant::now())
+        {
+            match self
+                .yahoo
+                .fetch(symbol, range, interval, Sessions::Extended)
+                .await
+            {
+                Ok(yahoo) => {
+                    extended::merge_quote(&mut cached.quote, Some(yahoo.quote));
+                    cached.candles = extended::merge_history(&cached.candles, &yahoo.candles);
+                }
+                Err(error) => {
+                    let blocked = error.to_string().contains("rate limiting");
+                    self.extended
+                        .lock()
+                        .unwrap()
+                        .yahoo_failed(Instant::now(), blocked);
+                }
+            }
+        }
+        let cutoff = now.timestamp() - range.secs();
+        cached.candles.retain(|c| c.ts >= cutoff);
+        self.extended.lock().unwrap().finish(&key, cached.clone());
+        cached
     }
 
     async fn fetch_crypto(
@@ -111,10 +273,13 @@ impl Alpaca {
             .unwrap_or_default()
             .remove(pair)
             .unwrap_or_default();
-        Ok(TickerData {
-            quote: quote_from_snapshot(symbol, &snap, false)?,
-            candles: candles_from_desc(bars),
-        })
+        let mut quote = quote_from_snapshot(symbol, &snap, false)?;
+        quote.timing.regular_feed = PriceFeed::Crypto;
+        let mut candles = candles_from_desc(bars);
+        for c in &mut candles {
+            c.feed = PriceFeed::Crypto;
+        }
+        Ok(TickerData { quote, candles })
     }
 }
 
@@ -130,22 +295,22 @@ impl DataSource for Alpaca {
         (self.feed == "delayed_sip").then_some("delayed 15m")
     }
 
-    /// `sessions` is ignored: the free IEX feed carries no pre or post
-    /// market bars to include (measured 2026-09-09: zero bars between the
-    /// closing bell and midnight), so there is nothing to ask for.
     async fn fetch(
         &self,
         symbol: &str,
         range: Range,
         interval: Interval,
-        _sessions: Sessions,
+        sessions: Sessions,
     ) -> Result<TickerData> {
         let timeframe = timeframe(interval);
         let start = (Utc::now() - chrono::Duration::seconds(range.secs()))
             .to_rfc3339_opts(SecondsFormat::Secs, true);
         match crypto_pair(symbol) {
             Some(pair) => self.fetch_crypto(symbol, &pair, timeframe, &start).await,
-            None => self.fetch_stock(symbol, timeframe, &start).await,
+            None => {
+                self.fetch_stock(symbol, range, interval, sessions, &start)
+                    .await
+            }
         }
     }
 }
@@ -191,16 +356,16 @@ fn timeframe(interval: Interval) -> &'static str {
 fn quote_from_snapshot(symbol: &str, snap: &Snapshot, whole_market_volume: bool) -> Result<Quote> {
     let close = |bar: &Option<AlpacaBar>| bar.as_ref().and_then(|b| b.c);
     let latest = snap.latest_trade.as_ref().and_then(|t| t.p);
-    let latest_session = snap
+    let latest_ts = snap
         .latest_trade
         .as_ref()
         .and_then(|t| t.t.as_deref())
         .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
-        .map(|t| market::clock_at(t.into()).session);
-    let extended_now = matches!(
-        latest_session,
-        Some(market::Session::Pre) | Some(market::Session::Post)
-    );
+        .map(|t| t.timestamp());
+    let extended_now = market::is_us_equity(symbol)
+        && latest_ts
+            .and_then(market::window_at)
+            .is_some_and(|w| matches!(w.session, market::Session::Pre | market::Session::Post));
 
     // Outside the regular session the daily bar is the session's own close,
     // which is exactly the headline number; the late print becomes the
@@ -223,10 +388,15 @@ fn quote_from_snapshot(symbol: &str, snap: &Snapshot, whole_market_volume: bool)
         // Both endpoint families quote in USD; the API reports no currency.
         currency: Some("USD".into()),
         extended: extended_now.then_some(latest).flatten(),
+        timing: QuoteTiming {
+            regular: if extended_now { None } else { latest_ts },
+            extended: extended_now.then_some(latest_ts).flatten(),
+            extended_reference: extended_now.then_some(price),
+            ..Default::default()
+        },
         // The snapshot carries no 52 week range.
         fifty_two_week: None,
-        // The daily bar IS the regular session on this feed, which has no
-        // extended-hours prints to widen it.
+        // Daily price OHLC excludes extended-hours trades on SIP and IEX.
         day_range: snap.daily_bar.as_ref().and_then(|b| b.l.zip(b.h)),
         volume: whole_market_volume
             .then(|| snap.daily_bar.as_ref().and_then(|b| b.v))
@@ -325,6 +495,131 @@ struct CryptoBars {
 mod tests {
     use super::*;
 
+    async fn supplemental_http_case(sip_fails: bool) {
+        use serde_json::json;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let now = Utc::now();
+        let mut date = market::et_date(now.timestamp()).unwrap();
+        while market::windows(date).is_empty() {
+            date = date.pred_opt().unwrap();
+        }
+        let windows = market::windows(date);
+        let ext = market::extended_window(now).unwrap_or(windows[0]);
+        let ext_ts = (now.timestamp() - 1).min(ext.end - 1).max(ext.start);
+        let format_ts = |ts| {
+            chrono::DateTime::from_timestamp(ts, 0)
+                .unwrap()
+                .to_rfc3339()
+        };
+        let regular_ts = format_ts(windows[1].start);
+        let extra_ts = format_ts(ext_ts);
+        let first = format_ts(ext.start);
+        let requests = if sip_fails { 7 } else { 6 };
+        let server = tokio::spawn(async move {
+            let mut paths = Vec::new();
+            for _ in 0..requests {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut request = Vec::new();
+                let mut byte = [0; 1];
+                while !request.ends_with(b"\r\n\r\n") {
+                    stream.read_exact(&mut byte).await.unwrap();
+                    request.push(byte[0]);
+                }
+                let text = String::from_utf8(request).unwrap();
+                let path = text.split_whitespace().nth(1).unwrap().to_string();
+                let supplemental = path.contains("feed=sip") || path.contains("feed=delayed_sip");
+                let (status, body) = if sip_fails && supplemental {
+                    ("403 Forbidden", json!({"message":"test SIP unavailable"}))
+                } else if path.starts_with("/yahoo/") {
+                    (
+                        "200 OK",
+                        json!({"chart":{"result":[{"meta":{"symbol":"AAPL", "regularMarketPrice":100.0},
+                        "timestamp":[ext.start, ext.start+60], "indicators":{"quote":[{"open":[101.0,102.0],
+                        "high":[101.0,102.0],"low":[101.0,102.0],"close":[101.0,102.0],"volume":[10.0,20.0]}]}}]}}),
+                    )
+                } else if path.contains("/snapshot") {
+                    (
+                        "200 OK",
+                        json!({"latestTrade":{"t":if supplemental {&extra_ts} else {&regular_ts},"p":if supplemental {101.0} else {100.0}},
+                        "dailyBar":{"t":regular_ts,"c":100.0},"prevDailyBar":{"t":regular_ts,"c":99.0}}),
+                    )
+                } else {
+                    assert!(!path.contains("feed=delayed_sip"), "bars must use feed=sip");
+                    if supplemental {
+                        let url = reqwest::Url::parse(&format!("http://localhost{path}")).unwrap();
+                        let end = url.query_pairs().find(|(key, _)| key == "end").unwrap().1;
+                        let end = chrono::DateTime::parse_from_rfc3339(&end).unwrap();
+                        let delay = Utc::now().signed_duration_since(end).num_seconds();
+                        assert!((900..930).contains(&delay), "SIP bars must lag by 15m");
+                    }
+                    (
+                        "200 OK",
+                        json!({"bars":[{"t":if supplemental {&first} else {&regular_ts},"o":100.0,"h":102.0,"l":99.0,"c":101.0,"v":10.0}]}),
+                    )
+                };
+                paths.push(path);
+                let body = body.to_string();
+                let response = format!(
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                stream.write_all(response.as_bytes()).await.unwrap();
+            }
+            paths
+        });
+        let source = Alpaca {
+            client: http::client().unwrap(),
+            base: base.clone(),
+            feed: "iex".into(),
+            extended: Mutex::new(extended::Cache::default()),
+            yahoo: Yahoo::test_at(format!("{base}/yahoo")),
+        };
+        for _ in 0..2 {
+            let data = source
+                .fetch("AAPL", Range::D5, Interval::M5, Sessions::Extended)
+                .await
+                .unwrap();
+            assert_eq!(data.quote.price, 100.0);
+            let expected = if sip_fails {
+                PriceFeed::Yahoo
+            } else {
+                PriceFeed::DelayedSip
+            };
+            assert!(data.candles.iter().any(|c| c.feed == expected));
+            assert!(data.candles.iter().any(|c| c.feed == PriceFeed::Iex));
+        }
+        let paths = tokio::time::timeout(std::time::Duration::from_secs(2), server)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            paths
+                .iter()
+                .filter(|p| p.contains("feed=delayed_sip"))
+                .count(),
+            1
+        );
+        assert_eq!(paths.iter().filter(|p| p.contains("feed=sip")).count(), 1);
+        assert_eq!(
+            paths.iter().filter(|p| p.starts_with("/yahoo")).count(),
+            usize::from(sip_fails)
+        );
+    }
+
+    #[tokio::test]
+    async fn sip_uses_distinct_endpoint_parameters_and_is_cached() {
+        supplemental_http_case(false).await;
+    }
+
+    #[tokio::test]
+    async fn yahoo_fills_extended_history_when_sip_fails_without_changing_iex() {
+        supplemental_http_case(true).await;
+    }
+
     #[test]
     fn interval_to_timeframe() {
         assert_eq!(timeframe(Interval::M1), "1Min");
@@ -380,7 +675,10 @@ mod tests {
         // 22:30 UTC is 18:30 in New York: inside the post session.
         assert_eq!(q.price, 214.5, "headline price stays the regular close");
         assert_eq!(q.extended, Some(216.9));
-        assert!((q.extended_change().unwrap() - 2.4).abs() < 1e-9);
+        let at = chrono::DateTime::parse_from_rfc3339("2026-07-10T22:31:00Z")
+            .unwrap()
+            .to_utc();
+        assert!((q.extended_price_at(at).unwrap() - q.extended_reference() - 2.4).abs() < 1e-9);
     }
 
     /// One venue's share count is not the market's, and IEX carries a few

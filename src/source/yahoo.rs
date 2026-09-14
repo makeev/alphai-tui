@@ -1,26 +1,41 @@
+use std::collections::HashMap;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
+
 use anyhow::{Result, anyhow, bail};
 use async_trait::async_trait;
 use serde::Deserialize;
 
-use crate::domain::{Candle, Interval, Quote, Range, Sessions, TickerData};
-use crate::source::{DataSource, candle_from_ohlc, http};
+use crate::domain::{Candle, Interval, PriceFeed, Quote, QuoteTiming, Range, Sessions, TickerData};
+use crate::market;
+use crate::source::{DataSource, candle_from_ohlc, http, normalize_sessions};
 
 /// Yahoo blocks obvious non-browser agents, so this client masquerades as
 /// Chrome. Do not swap in `http::APP_UA`.
 const BROWSER_UA: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 \
                           (KHTML, like Gecko) Chrome/124.0 Safari/537.36";
 
-/// Yahoo Finance v8 chart endpoint: no API key, ~15 min delayed quotes.
+/// Yahoo Finance v8 chart endpoint: no API key; timing varies by exchange.
 /// One request per symbol returns both the latest price and the candle
-/// history, so polling stays at one HTTP call per ticker per cycle.
+/// history. Daily charts may use a cached intraday request to time PRE/AH.
 pub struct Yahoo {
     client: reqwest::Client,
+    base: String,
+    extended: Mutex<HashMap<String, CachedPrint>>,
+}
+
+#[derive(Clone, Copy)]
+struct CachedPrint {
+    until: Instant,
+    value: Option<(f64, i64)>,
 }
 
 impl Yahoo {
     pub fn new() -> Result<Self> {
         Ok(Self {
             client: http::client_with(BROWSER_UA, None)?,
+            base: "https://query1.finance.yahoo.com/v8/finance/chart".into(),
+            extended: Mutex::new(HashMap::new()),
         })
     }
 }
@@ -54,9 +69,8 @@ impl DataSource for Yahoo {
         "yahoo"
     }
 
-    /// The public chart feed runs on the exchanges' free delayed data.
     fn delay_note(&self) -> Option<&'static str> {
-        Some("delayed 15m")
+        Some("timing varies")
     }
 
     async fn fetch(
@@ -66,12 +80,113 @@ impl DataSource for Yahoo {
         interval: Interval,
         sessions: Sessions,
     ) -> Result<TickerData> {
-        let url = format!("https://query1.finance.yahoo.com/v8/finance/chart/{symbol}");
-        // The extended sessions roughly triple a 1d/5m series (measured
-        // 2026-09-10: 193 candles against 79), which is why they are asked
-        // for rather than always taken. The quote fields are unaffected:
-        // `fulldayPrice` and the rest arrive either way.
-        let pre_post = matches!(sessions, Sessions::Extended);
+        let us = market::is_us_equity(symbol);
+        let raw_interval = if us && interval == Interval::M60 {
+            Interval::M30
+        } else {
+            interval
+        };
+        // Intraday extended bars also timestamp the PRE/AH quote when Yahoo
+        // omits the optional metadata timestamps. E controls local filtering.
+        let result = self
+            .chart(
+                symbol,
+                range,
+                raw_interval,
+                us || sessions == Sessions::Extended,
+            )
+            .await?;
+        let mut candles = build_candles(&result);
+        let now = chrono::Utc::now();
+        let mut extended = extended_print(&result, &candles, now);
+        if us
+            && interval == Interval::D1
+            && market::extended_window(now).is_some()
+            && extended.is_none()
+        {
+            let cached = self.extended.lock().unwrap().get(symbol).copied();
+            if let Some(cached) = cached.filter(|cached| Instant::now() < cached.until) {
+                extended = cached.value;
+            } else {
+                let value = match self.chart(symbol, Range::D1, Interval::M5, true).await {
+                    Ok(short) => extended_print(&short, &build_candles(&short), now),
+                    Err(_) => cached.and_then(|cached| cached.value),
+                };
+                let mut cache = self.extended.lock().unwrap();
+                if cache.len() > 128 {
+                    cache.clear();
+                }
+                cache.insert(
+                    symbol.into(),
+                    CachedPrint {
+                        until: Instant::now() + Duration::from_secs(60),
+                        value,
+                    },
+                );
+                extended = value;
+            }
+        }
+        let meta = &result.meta;
+        let price = meta
+            .regular_market_price
+            .or_else(|| {
+                candles
+                    .iter()
+                    .rev()
+                    .find(|c| {
+                        !us || interval == Interval::D1
+                            || market::window_at(c.ts)
+                                .is_some_and(|w| w.session == market::Session::Open)
+                    })
+                    .map(|c| c.close)
+            })
+            .ok_or_else(|| anyhow!("no regular price data"))?;
+        let daily_prev = (interval == Interval::D1 && candles.len() >= 2)
+            .then(|| candles[candles.len() - 2].close);
+        candles = normalize_sessions(candles, symbol, interval, sessions);
+        Ok(TickerData {
+            quote: Quote {
+                symbol: meta.symbol.clone(),
+                price,
+                prev_close: meta
+                    .previous_close
+                    .or(daily_prev)
+                    .or(meta.chart_previous_close),
+                currency: meta.currency.clone(),
+                extended: extended.map(|(price, _)| price),
+                timing: QuoteTiming {
+                    regular: meta.regular_market_time,
+                    regular_feed: PriceFeed::Yahoo,
+                    extended: extended.map(|(_, ts)| ts),
+                    extended_feed: PriceFeed::Yahoo,
+                    extended_reference: Some(price),
+                },
+                fifty_two_week: meta.fifty_two_week_low.zip(meta.fifty_two_week_high),
+                volume: meta.regular_market_volume,
+                day_range: meta
+                    .regular_market_day_low
+                    .zip(meta.regular_market_day_high),
+            },
+            candles,
+        })
+    }
+}
+
+impl Yahoo {
+    #[cfg(test)]
+    pub(super) fn test_at(base: String) -> Self {
+        let mut yahoo = Self::new().unwrap();
+        yahoo.base = base;
+        yahoo
+    }
+    async fn chart(
+        &self,
+        symbol: &str,
+        range: Range,
+        interval: Interval,
+        pre_post: bool,
+    ) -> Result<ChartResult> {
+        let url = format!("{}/{symbol}", self.base);
         let body: ChartResponse = http::get_json_retrying(
             &self.client,
             "yahoo",
@@ -82,12 +197,9 @@ impl DataSource for Yahoo {
                 ("includePrePost", if pre_post { "true" } else { "false" }),
             ],
             error_message,
-            // A 429 here is a block with a timer, not a burst limiter; see
-            // `throttle_msg`.
             http::Retry::GatewayOnly,
         )
         .await?;
-
         if let Some(err) = body.chart.error {
             bail!(
                 "{}: {}",
@@ -95,65 +207,37 @@ impl DataSource for Yahoo {
                 err.description.unwrap_or_default()
             );
         }
-        let result = body
-            .chart
+        body.chart
             .result
-            .and_then(|mut r| {
-                if r.is_empty() {
-                    None
-                } else {
-                    Some(r.remove(0))
-                }
-            })
-            .ok_or_else(|| anyhow!("empty chart result"))?;
-
-        let candles = build_candles(&result);
-        let last_close = candles.last().map(|c| c.close);
-        let price = result
-            .meta
-            .regular_market_price
-            .or(last_close)
-            .ok_or_else(|| anyhow!("no price data"))?;
-
-        // Daily responses never carry `previousClose`, and the
-        // `chartPreviousClose` fallback is the close before the fetched
-        // window, which the indicator warm-up over-fetch pushes months into
-        // the past. The bar before the last one is the real previous close.
-        let daily_prev = (interval == Interval::D1 && candles.len() >= 2)
-            .then(|| candles[candles.len() - 2].close);
-
-        Ok(TickerData {
-            quote: Quote {
-                symbol: result.meta.symbol.clone(),
-                price,
-                prev_close: result
-                    .meta
-                    .previous_close
-                    .or(daily_prev)
-                    .or(result.meta.chart_previous_close),
-                currency: result.meta.currency.clone(),
-                // Only when the regular price came from the meta block: the
-                // pair means "regular versus extended" solely when both
-                // sides are the API's own numbers. Fall back to a candle
-                // close for one side and the difference stops being a
-                // session boundary and starts being a rounding artefact.
-                extended: result
-                    .meta
-                    .regular_market_price
-                    .and(result.meta.fullday_price),
-                fifty_two_week: result
-                    .meta
-                    .fifty_two_week_low
-                    .zip(result.meta.fifty_two_week_high),
-                volume: result.meta.regular_market_volume,
-                day_range: result
-                    .meta
-                    .regular_market_day_low
-                    .zip(result.meta.regular_market_day_high),
-            },
-            candles,
-        })
+            .and_then(|r| r.into_iter().next())
+            .ok_or_else(|| anyhow!("empty chart result"))
     }
+}
+
+fn extended_print(
+    result: &ChartResult,
+    candles: &[Candle],
+    now: chrono::DateTime<chrono::Utc>,
+) -> Option<(f64, i64)> {
+    if !market::is_us_equity(&result.meta.symbol) {
+        return None;
+    }
+    let w = market::extended_window(now)?;
+    let m = &result.meta;
+    let explicit = [
+        m.pre_market_price.zip(m.pre_market_time),
+        m.post_market_price.zip(m.post_market_time),
+        m.fullday_price
+            .zip(m.fullday_market_time.or(m.fullday_time)),
+    ];
+    explicit
+        .into_iter()
+        .flatten()
+        .chain(candles.iter().map(|c| (c.close, c.ts)))
+        .filter(|(p, ts)| {
+            p.is_finite() && *p > 0.0 && *ts >= w.start && *ts < w.end && *ts <= now.timestamp()
+        })
+        .max_by_key(|(_, ts)| *ts)
 }
 
 fn build_candles(result: &ChartResult) -> Vec<Candle> {
@@ -174,14 +258,16 @@ fn build_candles(result: &ChartResult) -> Vec<Candle> {
         .enumerate()
         .filter_map(|(i, &ts)| {
             // Halted/empty minutes come back as null closes and are dropped.
-            candle_from_ohlc(
+            let mut candle = candle_from_ohlc(
                 ts,
                 series(&quote.open, i),
                 series(&quote.high, i),
                 series(&quote.low, i),
                 series(&quote.close, i),
                 series(&quote.volume, i),
-            )
+            )?;
+            candle.feed = PriceFeed::Yahoo;
+            Some(candle)
         })
         .collect()
 }
@@ -216,6 +302,13 @@ struct Meta {
     symbol: String,
     currency: Option<String>,
     regular_market_price: Option<f64>,
+    regular_market_time: Option<i64>,
+    pre_market_price: Option<f64>,
+    pre_market_time: Option<i64>,
+    post_market_price: Option<f64>,
+    post_market_time: Option<i64>,
+    fullday_market_time: Option<i64>,
+    fullday_time: Option<i64>,
     previous_close: Option<f64>,
     chart_previous_close: Option<f64>,
     /// Last trade of the *whole* day, extended sessions included. Verified
@@ -248,6 +341,25 @@ struct QuoteBlock {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_unstamped_fullday_price_cannot_become_todays_premarket() {
+        let now = chrono::DateTime::parse_from_rfc3339("2026-09-14T09:00:00Z")
+            .unwrap()
+            .to_utc();
+        let result = parse(CHART_AFTER_HOURS);
+        assert_eq!(extended_print(&result, &build_candles(&result), now), None);
+        let bars = vec![Candle {
+            ts: now.timestamp() - 300,
+            close: 315.34,
+            ..Default::default()
+        }];
+        assert_eq!(
+            extended_print(&result, &bars, now),
+            Some((315.34, now.timestamp() - 300)),
+            "zero movement is a valid timestamped quote"
+        );
+    }
 
     /// Trimmed from a live response (AAPL, 2026-09-10, after the bell). The
     /// meta values are verbatim: `fulldayPrice` above `regularMarketPrice`
@@ -297,6 +409,7 @@ mod tests {
     fn the_quote_keeps_the_two_prices_apart() {
         let meta = parse(CHART_AFTER_HOURS).meta;
         let quote = Quote {
+            timing: Default::default(),
             symbol: meta.symbol.clone(),
             price: meta.regular_market_price.unwrap(),
             prev_close: meta.previous_close,
@@ -320,6 +433,7 @@ mod tests {
         let raw = CHART_AFTER_HOURS.replace("\"fulldayPrice\": 317.47", "\"fulldayPrice\": 315.34");
         let meta = parse(&raw).meta;
         let quote = Quote {
+            timing: Default::default(),
             symbol: meta.symbol.clone(),
             price: meta.regular_market_price.unwrap(),
             prev_close: meta.previous_close,

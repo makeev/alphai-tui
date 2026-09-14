@@ -19,14 +19,25 @@ const fn rgb(hex: u32) -> Color {
     Color::Rgb((hex >> 16) as u8, (hex >> 8) as u8, hex as u8)
 }
 
+const fn tint(base: Color, accent: Color) -> Color {
+    match (base, accent) {
+        (Color::Rgb(r, g, b), Color::Rgb(ar, ag, ab)) => Color::Rgb(
+            ((r as u16 * 9 + ar as u16) / 10) as u8,
+            ((g as u16 * 9 + ag as u16) / 10) as u8,
+            ((b as u16 * 9 + ab as u16) / 10) as u8,
+        ),
+        _ => base,
+    }
+}
+
 /// The vocabulary shared by the palettes: enough names to fill every slot,
 /// few enough that any family maps onto it.
 #[derive(Clone, Copy)]
 struct Palette {
     /// The family's signature color: headings, the active tab, breaking rows.
     accent: Color,
-    /// The background the palette was drawn for. Only used as the text
-    /// color on top of `accent`, since the app never paints a background.
+    /// The background the palette was drawn for: accent text and the base
+    /// of the subtle pre-market and after-hours tints.
     base: Color,
     green: Color,
     red: Color,
@@ -60,6 +71,8 @@ const fn theme_from(p: Palette) -> Theme {
         sma_slow: p.violet,
         rsi_line: p.cyan,
         ref_line: p.dim,
+        pre_market_bg: tint(p.base, p.yellow),
+        post_market_bg: tint(p.base, p.violet),
         border: p.dim,
         // Frames are shaped by `[ui] borders`, which `config::resolve`
         // stamps on afterwards; a preset never decides that.
@@ -265,6 +278,8 @@ mod tests {
             ref_line,
             border,
             border_type: _,
+            pre_market_bg,
+            post_market_bg,
         } = theme;
         vec![
             ("accent", accent),
@@ -281,6 +296,8 @@ mod tests {
             ("sma_slow", sma_slow),
             ("rsi_line", rsi_line),
             ("ref_line", ref_line),
+            ("pre_market_bg", pre_market_bg),
+            ("post_market_bg", post_market_bg),
             ("border", border),
         ]
     }

@@ -143,7 +143,7 @@ fn optional_zones(app: &App, symbol: &str, now: DateTime<Utc>) -> Vec<Vec<Vec<Sp
     zones.push(position_zone(
         app,
         symbol,
-        crate::portfolio::price(quote),
+        crate::portfolio::price_at(quote, now),
         theme,
     ));
     zones.push(session_zone(app, symbol, now));
@@ -218,34 +218,83 @@ fn position_zone(app: &App, symbol: &str, price: f64, theme: &Theme) -> Vec<Vec<
 /// badge because it is the newer fact, and it disappears by itself during
 /// the regular session, when there is no separate print to show.
 fn extended_zone(quote: &Quote, now: DateTime<Utc>, theme: &Theme) -> Vec<Vec<Span<'static>>> {
-    let (Some(price), Some(change), Some(pct)) = (
-        quote.extended_price(),
-        quote.extended_change(),
-        quote.extended_change_pct(),
-    ) else {
+    let session = market::clock_at(now).session;
+    let Some(price) = quote.extended_price_at(now) else {
+        if market::is_us_equity(&quote.symbol) && matches!(session, Session::Pre | Session::Post) {
+            let name = if session == Session::Pre { "PRE" } else { "AH" };
+            return vec![vec![Span::styled(
+                format!("  {name} no data"),
+                Style::new().fg(theme.flat),
+            )]];
+        }
         return Vec::new();
     };
-    // The print's own timestamp does not reach the quote, so the label is
-    // inferred from the session running now. That lands right at every
-    // hour worth labelling: only the pre-market window produces pre-market
-    // prints, and every other moment a late print exists in (the post
-    // session, and overnight after it) wants "AH".
-    let label = if market::clock_at(now).session == Session::Pre {
+    let reference = quote.extended_reference();
+    let change = price - reference;
+    let pct = if reference != 0.0 {
+        change / reference * 100.0
+    } else {
+        0.0
+    };
+    let print_session = quote
+        .timing
+        .extended
+        .and_then(market::window_at)
+        .map(|w| w.session)
+        .unwrap_or(session);
+    let label = if print_session == Session::Pre {
         "PRE"
     } else {
         "AH"
     };
+    let detail = quote
+        .timing
+        .extended
+        .map(|ts| {
+            let age = now.timestamp().saturating_sub(ts).max(0) / 60;
+            let time = chrono::DateTime::from_timestamp(ts, 0)
+                .map(|t| {
+                    market::et_time(t)
+                        .format(if market::et_date(ts) == market::et_date(now.timestamp()) {
+                            "%H:%M ET"
+                        } else {
+                            "%d %b %H:%M ET"
+                        })
+                        .to_string()
+                })
+                .unwrap_or_default();
+            format!(
+                " · {} · {time} · {} old",
+                quote.timing.extended_feed.label(),
+                if age >= 1440 {
+                    format!("{}d{}h", age / 1440, age % 1440 / 60)
+                } else if age >= 60 {
+                    format!("{}h{}m", age / 60, age % 60)
+                } else {
+                    format!("{age}m")
+                }
+            )
+        })
+        .unwrap_or_default();
+    let source = if quote.timing.extended.is_some() {
+        format!(" · {}", quote.timing.extended_feed.label())
+    } else {
+        String::new()
+    };
     let style = Style::new().fg(move_color(Some(change), theme));
     vec![
         vec![Span::styled(
-            format!("  {label} {} {change:+.2} {pct:+.2}%", fmt_price(price)),
+            format!(
+                "  {label} {} {change:+.2} {pct:+.2}%{detail}",
+                fmt_price(price)
+            ),
             style,
         )],
         vec![Span::styled(
-            format!("  {label} {} {pct:+.2}%", fmt_price(price)),
+            format!("  {label} {} {pct:+.2}%{source}", fmt_price(price)),
             style,
         )],
-        vec![Span::styled(format!("  {label} {pct:+.2}%"), style)],
+        vec![Span::styled(format!("  {label} {pct:+.2}%{source}"), style)],
     ]
 }
 
@@ -383,6 +432,7 @@ mod tests {
     fn candles(day_ts: i64) -> Vec<Candle> {
         (0..6)
             .map(|i| Candle {
+                feed: Default::default(),
                 ts: day_ts + i * 300,
                 open: 100.0 + i as f64,
                 high: 101.0 + i as f64,
@@ -407,6 +457,7 @@ mod tests {
         series.insert(
             0,
             Candle {
+                feed: Default::default(),
                 ts: day - 86_400,
                 open: 50.0,
                 high: 300.0,

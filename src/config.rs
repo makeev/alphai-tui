@@ -131,12 +131,15 @@ pub struct UiConfig {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ChartConfig {
+    pub timezone: Option<String>,
+    pub session_shading: Option<bool>,
+    pub time_grid: Option<bool>,
     pub style: Option<String>,
     pub sma: Option<bool>,
     pub ma_type: Option<String>,
     pub rsi: Option<bool>,
     pub volume: Option<bool>,
-    /// Draw pre and post market candles too (yahoo only).
+    /// Draw pre and post market candles too (Yahoo and Alpaca).
     pub extended_hours: Option<bool>,
     /// Mark the ticker's news on the price chart.
     pub news_markers: Option<bool>,
@@ -171,14 +174,16 @@ pub struct Resolved {
 /// the startup state and the indicator math.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ChartDefaults {
+    pub timezone: ChartTimezone,
+    pub session_shading: bool,
+    pub time_grid: bool,
     pub style: ChartStyle,
     pub sma: bool,
     /// Simple or exponential; the periods below serve whichever is picked.
     pub ma_type: MaType,
     pub rsi: bool,
     pub volume: bool,
-    /// Start with the extended sessions drawn. Only yahoo can answer it;
-    /// the other sources have no pre or post market candles to draw.
+    /// Start with premarket and after-hours candles drawn.
     pub extended_hours: bool,
     /// Start with the news marks on the price chart. They are drawn from
     /// the news the app already holds for the ticker, so this costs no
@@ -195,12 +200,15 @@ pub struct ChartDefaults {
 impl Default for ChartDefaults {
     fn default() -> Self {
         Self {
+            timezone: ChartTimezone::Exchange,
+            session_shading: true,
+            time_grid: true,
             style: ChartStyle::Candles,
             sma: true,
             ma_type: MaType::Sma,
             rsi: true,
             volume: true,
-            extended_hours: false,
+            extended_hours: true,
             news_markers: true,
             sma_fast: indicators::SMA_FAST,
             sma_slow: indicators::SMA_SLOW,
@@ -209,6 +217,13 @@ impl Default for ChartDefaults {
             presets: RANGE_PRESETS.to_vec(),
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChartTimezone {
+    Exchange,
+    Local,
+    Utc,
 }
 
 /// Startup default of `[chart] right_margin_pct`: a fifth of the plot stays
@@ -357,6 +372,22 @@ fn resolve_borders(raw: Option<&str>, warnings: &mut Vec<String>) -> BorderType 
 fn resolve_chart(raw: Option<&ChartConfig>, warnings: &mut Vec<String>) -> ChartDefaults {
     let mut out = ChartDefaults::default();
     let Some(raw) = raw else { return out };
+    if let Some(zone) = &raw.timezone {
+        match zone.to_lowercase().as_str() {
+            "exchange" | "et" => out.timezone = ChartTimezone::Exchange,
+            "local" => out.timezone = ChartTimezone::Local,
+            "utc" => out.timezone = ChartTimezone::Utc,
+            _ => warnings.push(format!(
+                "[chart] timezone: unknown \"{zone}\" (exchange, local or utc), keeping exchange"
+            )),
+        }
+    }
+    if let Some(v) = raw.session_shading {
+        out.session_shading = v;
+    }
+    if let Some(v) = raw.time_grid {
+        out.time_grid = v;
+    }
     if let Some(style) = &raw.style {
         match style.to_lowercase().as_str() {
             "candles" => out.style = ChartStyle::Candles,

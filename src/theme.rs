@@ -41,6 +41,8 @@ pub struct Theme {
     pub rsi_line: Color,
     /// Reference lines: previous close, RSI 30/70.
     pub ref_line: Color,
+    pub pre_market_bg: Color,
+    pub post_market_bg: Color,
     /// Panel frames. `Reset` keeps the terminal's own foreground, which is
     /// what the app looked like before this slot existed; themes dim it.
     pub border: Color,
@@ -69,6 +71,8 @@ impl Theme {
         sma_slow: Color::Magenta,
         rsi_line: Color::Cyan,
         ref_line: Color::DarkGray,
+        pre_market_bg: Color::Rgb(38, 33, 24),
+        post_market_bg: Color::Rgb(25, 28, 42),
         border: Color::Reset,
         border_type: BorderType::Rounded,
     };
@@ -150,6 +154,8 @@ impl Theme {
                 "sma_slow" => &mut theme.sma_slow,
                 "rsi_line" => &mut theme.rsi_line,
                 "ref_line" => &mut theme.ref_line,
+                "pre_market_bg" => &mut theme.pre_market_bg,
+                "post_market_bg" => &mut theme.post_market_bg,
                 "border" => &mut theme.border,
                 _ => {
                     warnings.push(format!(

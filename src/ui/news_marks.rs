@@ -167,6 +167,7 @@ mod tests {
     fn candles(start: i64, step: i64, n: usize) -> Vec<Candle> {
         (0..n as i64)
             .map(|i| Candle {
+                feed: Default::default(),
                 ts: start + i * step,
                 open: 100.0,
                 high: 101.0,

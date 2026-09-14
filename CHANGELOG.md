@@ -5,6 +5,38 @@ the crates.io releases; from 0.7.0 on each one is also a git tag and a
 GitHub release with prebuilt binaries. The Homebrew tap, the AUR and the
 apt repository joined later, and carry every version since.
 
+## 0.23.0 - 2026-09-14
+
+- Premarket and after-hours candles are enabled by default. Warm and cool
+  backgrounds distinguish them from regular trading across price, volume
+  and RSI, in both candle and line charts. `Shift+E` toggles them, with a
+  hint beside `EXT` that remains visible when the sessions are hidden and
+  follows custom keybindings.
+- Alpaca's IEX mode supplements extended trading with consolidated SIP
+  data delayed by 15 minutes, then Yahoo when SIP is unavailable or missing
+  the relevant session. Supplemental results are cached; failed refreshes
+  retain known data, and Yahoo rate limits pause its fallback requests.
+  The regular quote and regular candles retain their original feed.
+- Extended quotes carry their source, timestamp, age and reference close.
+  A zero-percent move remains visible, and a new premarket retires the
+  previous after-hours quote. Portfolio valuations and JSON use the same
+  validated price and reference; JSON includes the extended feed and session.
+- Charts now start at `5d / 15m`, the same full-history preset available
+  through `t` and `T`. The header shows both the history window and candle
+  size alongside the switch hint. Short intraday histories fill the plot
+  width instead of leaving a large empty area on the left. Explicit
+  `range`, `interval` and `[chart] extended_hours` settings still apply.
+- A shared time axis adds more clock labels, dates, opening and closing
+  markers and aligned vertical grid lines across all three chart panels.
+  US stocks default to New York time, with `local` and `utc` alternatives
+  under `[chart] timezone`. Session shading and the grid are configurable.
+- Session boundaries account for holidays, half days and daylight-saving
+  changes. Hourly and display aggregation keep different sessions and feeds
+  apart, and future time labels skip closed US sessions.
+- A live quote updates only its own candle interval, session and feed.
+  Late poll responses from an old chart selection are ignored, preventing
+  a regular close or an outdated fetch from overwriting extended history.
+
 ## 0.22.1 - 2026-09-13
 
 - Brand spelling in the interface text and docs is now `AlphAI`, the form on
