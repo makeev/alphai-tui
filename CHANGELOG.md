@@ -5,6 +5,29 @@ the crates.io releases; from 0.7.0 on each one is also a git tag and a
 GitHub release with prebuilt binaries. The Homebrew tap, the AUR and the
 apt repository joined later, and carry every version since.
 
+## 0.23.1 - 2026-09-17
+
+- Volume on Alpaca's IEX mode sits on one scale. Once consolidated
+  extended-hours candles are on the chart, the regular IEX candles take the
+  consolidated count of the same bar instead of IEX's own few percent of
+  the tape, which had made the regular session read as the quietest part
+  of the day next to the closing auction. The newest 15 minutes wait for
+  the delayed feed. With extended hours off the panel keeps IEX's counts
+  and says `IEX only`.
+- Consolidated history is paged back to the start of the IEX series once
+  per chart window. Alpaca sizes a bars page by the minute bars behind it,
+  about two weeks of extended hours, so a month-long window used to get
+  consolidated candles and volume for its newest two weeks only.
+- Volume bars are drawn in eighths of a row, so a regular session next to
+  a closing auction no longer collapses to the minimum height.
+- Narrow charts merge bars into larger candles on clock boundaries: 10m,
+  15m, 30m, 1h and so on from the session's opening, then whole sessions,
+  and daily bars into weeks, months, quarters and years. The title names
+  the size, such as `30m candles`. The same window draws the same candles
+  in the split and chart views, and a new bar changes only the newest
+  candle; before, groups of equal count shifted with every bar and the
+  two views disagreed on what a candle was.
+
 ## 0.23.0 - 2026-09-14
 
 - Premarket and after-hours candles are enabled by default. Warm and cool

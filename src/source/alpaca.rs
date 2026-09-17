@@ -68,12 +68,53 @@ impl Alpaca {
         http::get_json(&self.client, "alpaca", &url, query, error_message).await
     }
 
+    /// One bars request, newest first, followed through its pages while the
+    /// oldest bar is still newer than `until`. Alpaca sizes a page by the
+    /// minute bars behind it (about 10,000, so two weeks of a liquid name's
+    /// extended hours or four of its regular sessions) and `limit` cannot
+    /// raise that; the token is the only way further back. A page failing
+    /// after the first keeps what came before it.
+    async fn bars_pages(
+        &self,
+        path: &str,
+        query: &[(&str, &str)],
+        until: Option<i64>,
+    ) -> Result<Vec<AlpacaBar>> {
+        let mut all = Vec::new();
+        let mut token: Option<String> = None;
+        for _ in 0..MAX_BARS_PAGES {
+            let page_token = token.take();
+            let mut query = query.to_vec();
+            if let Some(t) = page_token.as_deref() {
+                query.push(("page_token", t));
+            }
+            let page = match self.get_json::<StockBars>(path, &query).await {
+                Ok(page) => page,
+                Err(e) if all.is_empty() => return Err(e),
+                Err(_) => break,
+            };
+            let bars = page.bars.unwrap_or_default();
+            let oldest = bars
+                .last()
+                .and_then(|b| chrono::DateTime::parse_from_rfc3339(&b.t).ok())
+                .map(|t| t.timestamp());
+            all.extend(bars);
+            token = page.next_page_token.filter(|t| !t.is_empty());
+            match (&token, until, oldest) {
+                (Some(_), Some(until), Some(oldest)) if oldest > until => {}
+                _ => break,
+            }
+        }
+        Ok(all)
+    }
+
     async fn stock_parts(
         &self,
         symbol: &str,
         interval: Interval,
         start: &str,
         feed: &str,
+        until: Option<i64>,
     ) -> (Result<Quote>, Result<Vec<Candle>>) {
         let snapshot_path = format!("/v2/stocks/{symbol}/snapshot");
         let snapshot_query = [("feed", feed)];
@@ -103,7 +144,7 @@ impl Alpaca {
         }
         let (snapshot, bars) = tokio::join!(
             self.get_json::<Snapshot>(&snapshot_path, &snapshot_query),
-            self.get_json::<StockBars>(&bars_path, &bars_query),
+            self.bars_pages(&bars_path, &bars_query, until),
         );
         let provenance = match feed {
             "iex" => PriceFeed::Iex,
@@ -117,7 +158,7 @@ impl Alpaca {
             Ok(q)
         });
         let candles = bars.map(|bars| {
-            let mut candles = candles_from_desc(bars.bars.unwrap_or_default());
+            let mut candles = candles_from_desc(bars);
             for c in &mut candles {
                 c.feed = provenance;
             }
@@ -134,7 +175,11 @@ impl Alpaca {
         sessions: Sessions,
         start: &str,
     ) -> Result<TickerData> {
-        let (quote, candles) = self.stock_parts(symbol, interval, start, &self.feed).await;
+        // The IEX series stays one page: it is fetched every poll, and its
+        // page already outlasts the chart's history window.
+        let (quote, candles) = self
+            .stock_parts(symbol, interval, start, &self.feed, None)
+            .await;
         let mut data = TickerData {
             quote: quote?,
             candles: candles?,
@@ -145,8 +190,9 @@ impl Alpaca {
             && market::is_us_equity(symbol)
             && (draw_extended || market::extended_window(now).is_some())
         {
+            let earliest = data.candles.first().map(|c| c.ts);
             let extra = self
-                .supplement(symbol, range, interval, draw_extended, now)
+                .supplement(symbol, range, interval, draw_extended, earliest, now)
                 .await;
             // Daily candles stay regular-only, while the extended quote is
             // still useful to the rail and portfolio.
@@ -155,7 +201,7 @@ impl Alpaca {
                     &mut data,
                     &extended::Supplement {
                         quote: extra.quote,
-                        candles: Vec::new(),
+                        ..Default::default()
                     },
                     now,
                 );
@@ -173,6 +219,7 @@ impl Alpaca {
         range: Range,
         interval: Interval,
         history: bool,
+        earliest: Option<i64>,
         now: chrono::DateTime<Utc>,
     ) -> extended::Supplement {
         let (range, interval) = if history {
@@ -187,13 +234,20 @@ impl Alpaca {
         }
         let start = (now - chrono::Duration::seconds(range.secs()))
             .to_rfc3339_opts(SecondsFormat::Secs, true);
+        // Consolidated history is paged back to the start of the IEX series
+        // once per window, so the two cover the same span; later refreshes
+        // take the newest page only, the rest waits in the cache until it
+        // ages out of the range.
+        let until = earliest.filter(|_| history && !cached.paged);
         let (quote, bars) = self
-            .stock_parts(symbol, interval, &start, "delayed_sip")
+            .stock_parts(symbol, interval, &start, "delayed_sip", until)
             .await;
         let sip_failed = quote.is_err() || (history && bars.is_err());
         extended::merge_quote(&mut cached.quote, quote.ok());
         if let Ok(bars) = bars {
             cached.candles = extended::merge_history(&cached.candles, &bars);
+            cached.record_volumes(&bars);
+            cached.paged |= until.is_some();
         }
         // At 04:00 the delayed tape naturally cannot yet have today's PRE.
         // Empty responses during those first 15 minutes are not failures.
@@ -228,6 +282,7 @@ impl Alpaca {
                 Ok(yahoo) => {
                     extended::merge_quote(&mut cached.quote, Some(yahoo.quote));
                     cached.candles = extended::merge_history(&cached.candles, &yahoo.candles);
+                    cached.record_volumes(&yahoo.candles);
                 }
                 Err(error) => {
                     let blocked = error.to_string().contains("rate limiting");
@@ -240,6 +295,7 @@ impl Alpaca {
         }
         let cutoff = now.timestamp() - range.secs();
         cached.candles.retain(|c| c.ts >= cutoff);
+        cached.volumes = cached.volumes.split_off(&cutoff);
         self.extended.lock().unwrap().finish(&key, cached.clone());
         cached
     }
@@ -477,7 +533,12 @@ struct AlpacaBar {
 #[serde(default)]
 struct StockBars {
     bars: Option<Vec<AlpacaBar>>,
+    next_page_token: Option<String>,
 }
+
+/// Pages one bars request may follow (see `Alpaca::bars_pages`). Three
+/// reach the four regular weeks an IEX page spans for a liquid name.
+const MAX_BARS_PAGES: usize = 4;
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
@@ -556,10 +617,15 @@ mod tests {
                         let delay = Utc::now().signed_duration_since(end).num_seconds();
                         assert!((900..930).contains(&delay), "SIP bars must lag by 15m");
                     }
-                    (
-                        "200 OK",
-                        json!({"bars":[{"t":if supplemental {&first} else {&regular_ts},"o":100.0,"h":102.0,"l":99.0,"c":101.0,"v":10.0}]}),
-                    )
+                    let bar = |t: &str, v: f64| json!({"t":t,"o":100.0,"h":102.0,"l":99.0,"c":101.0,"v":v});
+                    // Consolidated bars cover the regular session too, with
+                    // the market's (much larger) count.
+                    let bars = if supplemental {
+                        json!([bar(&first, 10.0), bar(&regular_ts, 900.0)])
+                    } else {
+                        json!([bar(&regular_ts, 10.0)])
+                    };
+                    ("200 OK", json!({ "bars": bars }))
                 };
                 paths.push(path);
                 let body = body.to_string();
@@ -590,7 +656,13 @@ mod tests {
                 PriceFeed::DelayedSip
             };
             assert!(data.candles.iter().any(|c| c.feed == expected));
-            assert!(data.candles.iter().any(|c| c.feed == PriceFeed::Iex));
+            let iex = data.candles.iter().find(|c| c.feed == PriceFeed::Iex);
+            // The IEX bar never keeps its single-venue count beside
+            // consolidated bars; Yahoo's answer here has no regular bar.
+            assert_eq!(
+                iex.expect("regular IEX candle").volume,
+                if sip_fails { None } else { Some(900.0) }
+            );
         }
         let paths = tokio::time::timeout(std::time::Duration::from_secs(2), server)
             .await
@@ -618,6 +690,81 @@ mod tests {
     #[tokio::test]
     async fn yahoo_fills_extended_history_when_sip_fails_without_changing_iex() {
         supplemental_http_case(true).await;
+    }
+
+    /// The bars pages follow `next_page_token` only as far back as asked:
+    /// a target inside the first page costs one request, an older one
+    /// follows the token, and no target means the newest page alone.
+    #[tokio::test]
+    async fn bars_pages_follow_the_token_back_to_the_target() {
+        use serde_json::json;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let mut paths = Vec::new();
+            for _ in 0..4 {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut request = Vec::new();
+                let mut byte = [0; 1];
+                while !request.ends_with(b"\r\n\r\n") {
+                    stream.read_exact(&mut byte).await.unwrap();
+                    request.push(byte[0]);
+                }
+                let text = String::from_utf8(request).unwrap();
+                let path = text.split_whitespace().nth(1).unwrap().to_string();
+                let body = if path.contains("page_token=p2") {
+                    json!({"bars":[{"t":"2026-09-10T13:30:00Z","c":1.0}],"next_page_token":null})
+                } else {
+                    json!({"bars":[{"t":"2026-09-16T13:30:00Z","c":2.0},{"t":"2026-09-15T13:30:00Z","c":1.5}],
+                           "next_page_token":"p2"})
+                }
+                .to_string();
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                stream.write_all(response.as_bytes()).await.unwrap();
+                paths.push(path);
+            }
+            paths
+        });
+        let source = Alpaca {
+            client: http::client().unwrap(),
+            base: base.clone(),
+            feed: "iex".into(),
+            extended: Mutex::new(extended::Cache::default()),
+            yahoo: Yahoo::test_at(format!("{base}/yahoo")),
+        };
+        let at = |s: &str| chrono::DateTime::parse_from_rfc3339(s).unwrap().timestamp();
+        let path = "/v2/stocks/AAPL/bars";
+        let query = [("timeframe", "5Min"), ("sort", "desc")];
+        let newest = source.bars_pages(path, &query, None).await.unwrap();
+        assert_eq!(newest.len(), 2);
+        let covered = source
+            .bars_pages(path, &query, Some(at("2026-09-15T13:30:00Z")))
+            .await
+            .unwrap();
+        assert_eq!(covered.len(), 2);
+        let deeper = source
+            .bars_pages(path, &query, Some(at("2026-09-12T13:30:00Z")))
+            .await
+            .unwrap();
+        assert_eq!(deeper.len(), 3);
+        assert_eq!(deeper[2].t, "2026-09-10T13:30:00Z");
+        let paths = tokio::time::timeout(std::time::Duration::from_secs(2), server)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(paths.len(), 4);
+        assert!(
+            paths[..3].iter().all(|p| !p.contains("page_token")),
+            "{paths:?}"
+        );
+        assert!(paths[3].contains("page_token=p2"), "{paths:?}");
+        assert!(paths[3].contains("sort=desc"), "the page keeps the query");
     }
 
     #[test]

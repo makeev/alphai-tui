@@ -1124,6 +1124,38 @@ fn volume_panel_absent_without_data() {
     assert!(has_candles(&screen), "screen:\n{screen}");
 }
 
+/// IEX is one exchange: a chart whose only counts come from it says so
+/// instead of passing them off as the market's volume.
+#[test]
+fn single_venue_volume_is_labelled() {
+    use crate::domain::PriceFeed;
+    let mut app = fake_app();
+    app.view_idx = ui::view_index(ui::ViewId::Chart);
+    let screen = render_sized(&mut app, 100, 40);
+    assert!(!screen.contains("IEX only"), "screen:\n{screen}");
+    for data in app.data.values_mut() {
+        for candle in &mut data.candles {
+            candle.feed = PriceFeed::Iex;
+        }
+    }
+    let screen = render_sized(&mut app, 100, 40);
+    assert!(screen.contains("IEX only"), "screen:\n{screen}");
+}
+
+/// A plot too narrow for every bar merges them into larger candles and
+/// names their size, so two widths of one chart explain why they differ.
+#[test]
+fn chart_title_names_the_merged_candle_size() {
+    let mut app = fake_app();
+    app.view_idx = ui::view_index(ui::ViewId::Chart);
+    let screen = render_sized(&mut app, 120, 40);
+    assert!(!screen.contains(" candles "), "screen:\n{screen}");
+    assert!(has_candles(&screen), "screen:\n{screen}");
+    let screen = render_sized(&mut app, 50, 40);
+    assert!(screen.contains("m candles "), "screen:\n{screen}");
+    assert!(has_candles(&screen), "screen:\n{screen}");
+}
+
 /// Every bar sits under its candle: both panels end in the same column, and
 /// the right margin stays clear in both.
 #[test]
@@ -1140,12 +1172,13 @@ fn volume_bars_share_the_candle_columns() {
         .iter()
         .position(|l| l.contains("RSI("))
         .expect("rsi panel");
+    // Candle bodies are half blocks; volume bars end in any eighth.
     let max_body_x = |rows: &[&str]| {
         rows.iter()
             .flat_map(|l| {
                 l.chars()
                     .enumerate()
-                    .filter(|(_, c)| matches!(c, '█' | '▀' | '▄'))
+                    .filter(|(_, c)| matches!(c, '▀' | '▁'..='█'))
                     .map(|(i, _)| i)
             })
             .max()

@@ -4,7 +4,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::time::{Duration, Instant};
 
-use crate::domain::{Candle, Quote, TickerData};
+use crate::domain::{Candle, PriceFeed, Quote, TickerData};
 use crate::market::{self, Session};
 
 pub const REFRESH: Duration = Duration::from_secs(60);
@@ -13,6 +13,32 @@ pub const REFRESH: Duration = Duration::from_secs(60);
 pub struct Supplement {
     pub quote: Option<Quote>,
     pub candles: Vec<Candle>,
+    /// Consolidated share counts by bar start, regular session included,
+    /// with the feed that counted them. IEX bars borrow these, so one chart
+    /// never plots a single venue's volume beside the whole market's.
+    pub volumes: BTreeMap<i64, (PriceFeed, f64)>,
+    /// Whether the consolidated history has been paged back to the start
+    /// of the primary series for this window (see `Alpaca::supplement`).
+    pub paged: bool,
+}
+
+impl Supplement {
+    /// Alpaca's consolidated tape is the reference: its answer overwrites
+    /// what is known about its bars, the newest of which is still filling.
+    /// A fallback fills gaps and refreshes its own counts, never the
+    /// reference's.
+    pub fn record_volumes(&mut self, bars: &[Candle]) {
+        for c in bars {
+            let Some(v) = c.volume else { continue };
+            let reference = matches!(c.feed, PriceFeed::DelayedSip | PriceFeed::Sip);
+            match self.volumes.get(&c.ts) {
+                Some((feed, _)) if !reference && *feed != c.feed => {}
+                _ => {
+                    self.volumes.insert(c.ts, (c.feed, v));
+                }
+            }
+        }
+    }
 }
 
 #[derive(Default)]
@@ -96,8 +122,7 @@ pub fn merge_history(old: &[Candle], incoming: &[Candle]) -> Vec<Candle> {
             *previous = std::mem::take(&mut bars).into_values().collect();
         } else if new.first().unwrap().ts <= previous.first().unwrap().ts
             && (new.last().unwrap().ts >= previous.last().unwrap().ts
-                || (previous[0].feed == crate::domain::PriceFeed::Iex
-                    && new.len() > previous.len()))
+                || (previous[0].feed == PriceFeed::Iex && new.len() > previous.len()))
         {
             *previous = new;
         }
@@ -129,12 +154,25 @@ pub fn apply(data: &mut TickerData, extra: &Supplement, now: chrono::DateTime<ch
     data.candles.retain(|c| session_key(c).is_none());
     data.candles.extend(ext);
     data.candles.sort_by_key(|c| c.ts);
+    // IEX is a few percent of the tape: beside consolidated after-hours
+    // bars its regular session read as the quietest part of the day. Once
+    // such bars are on the chart, IEX bars take the consolidated count of
+    // the same bar, or none until the delayed feed has reached it.
+    if data
+        .candles
+        .iter()
+        .any(|c| c.feed != PriceFeed::Iex && c.volume.is_some())
+    {
+        for c in data.candles.iter_mut().filter(|c| c.feed == PriceFeed::Iex) {
+            c.volume = extra.volumes.get(&c.ts).map(|(_, v)| *v);
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::{PriceFeed, QuoteTiming};
+    use crate::domain::QuoteTiming;
 
     fn at(s: &str) -> chrono::DateTime<chrono::Utc> {
         chrono::DateTime::parse_from_rfc3339(s).unwrap().to_utc()
@@ -176,6 +214,69 @@ mod tests {
     }
 
     #[test]
+    fn iex_bars_take_consolidated_volume_once_consolidated_bars_are_charted() {
+        let pre = at("2026-09-14T08:00:00Z").timestamp();
+        let open = at("2026-09-14T13:30:00Z").timestamp();
+        let iex = |ts, v| Candle {
+            volume: Some(v),
+            ..bar(ts, PriceFeed::Iex, 100.0)
+        };
+        let primary = || TickerData {
+            quote: Quote::default(),
+            candles: vec![iex(open, 40.0), iex(open + 300, 30.0)],
+        };
+        let now = at("2026-09-14T14:00:00Z");
+
+        // The delayed feed has counted the first regular bar, not the second.
+        let mut extra = Supplement {
+            candles: vec![bar(pre, PriceFeed::DelayedSip, 99.0)],
+            ..Default::default()
+        };
+        let counted = |ts, feed, v| Candle {
+            volume: Some(v),
+            ..bar(ts, feed, 100.0)
+        };
+        extra.record_volumes(&[
+            bar(pre, PriceFeed::DelayedSip, 99.0),
+            counted(open, PriceFeed::DelayedSip, 900.0),
+        ]);
+        let mut data = primary();
+        apply(&mut data, &extra, now);
+        let volumes: Vec<_> = data.candles.iter().map(|c| c.volume).collect();
+        assert_eq!(volumes, vec![Some(10.0), Some(900.0), None]);
+
+        // A fallback fills gaps but never rewrites a SIP count.
+        extra.record_volumes(&[
+            counted(open, PriceFeed::Yahoo, 1.0),
+            counted(open + 300, PriceFeed::Yahoo, 700.0),
+        ]);
+        let mut data = primary();
+        apply(&mut data, &extra, now);
+        assert_eq!(data.candles[1].volume, Some(900.0));
+        assert_eq!(data.candles[2].volume, Some(700.0));
+
+        // The fallback's own bar keeps filling on later refreshes (a frozen
+        // first minute would understate it for a quarter hour), and the
+        // reference takes over as soon as it reaches the bar.
+        extra.record_volumes(&[counted(open + 300, PriceFeed::Yahoo, 750.0)]);
+        assert_eq!(extra.volumes[&(open + 300)], (PriceFeed::Yahoo, 750.0));
+        extra.record_volumes(&[counted(open + 300, PriceFeed::DelayedSip, 800.0)]);
+        extra.record_volumes(&[counted(open + 300, PriceFeed::Yahoo, 760.0)]);
+        assert_eq!(extra.volumes[&(open + 300)], (PriceFeed::DelayedSip, 800.0));
+
+        // Nothing consolidated on the chart: IEX keeps its own counts, and
+        // the chart labels them.
+        let mut data = primary();
+        let quote_only = Supplement {
+            volumes: extra.volumes.clone(),
+            ..Default::default()
+        };
+        apply(&mut data, &quote_only, now);
+        let volumes: Vec<_> = data.candles.iter().map(|c| c.volume).collect();
+        assert_eq!(volumes, vec![Some(40.0), Some(30.0)]);
+    }
+
+    #[test]
     fn mixed_quote_uses_its_own_reference_and_does_not_replace_the_headline() {
         let now = at("2026-09-14T09:00:00Z");
         let mut primary = TickerData {
@@ -199,7 +300,7 @@ mod tests {
                 },
                 ..Default::default()
             }),
-            candles: vec![],
+            ..Default::default()
         };
         apply(&mut primary, &extra, now);
         assert_eq!(primary.quote.price, 100.0);

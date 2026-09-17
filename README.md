@@ -133,6 +133,14 @@ combines different sessions or feeds into one candle. These session rules
 apply to US stocks on intraday intervals, including scheduled 13:00 closes
 and 17:00 after-hours closes on half days; crypto remains 24/7.
 
+When the plot is too narrow for every bar, bars merge into larger candles
+on clock boundaries: 10m, 15m, 30m, 1h and so on, counted from the
+session's opening for US stocks, then whole sessions; daily bars merge
+into weeks, months, quarters or years. The title names the size, such as
+`30m candles`, so the narrow chart in the split view and the wide one in
+the chart view explain why they differ. A given size draws the same
+candles at any width, and a new bar only changes the newest candle.
+
 The time axis adapts its label spacing to the terminal width, gives the
 opening and closing bells priority, and puts dates on a second row. US
 stocks use New York time (`ET`) by default; `[chart] timezone = "local"`
@@ -592,6 +600,11 @@ get a sourced brief without leaving the terminal.
   The chart labels the extended feed, and the rail labels the quote's own
   source and age. Volume bars from different feeds are not consolidated
   into a single session; IEX's total is not presented as whole-market volume.
+  Once extended candles are on the chart, regular IEX candles take their
+  volume from the same consolidated bars, so both sessions share one
+  scale. The newest 15 minutes have no volume bar until the delayed feed
+  covers them. With extended hours off, the panel shows IEX's own counts
+  and labels them `IEX only`.
 
   Supplemental results are cached for 60 seconds per symbol/window. Empty
   or failed refreshes retain prior session data. A Yahoo IP block pauses
@@ -622,6 +635,10 @@ get a sourced brief without leaving the terminal.
   plus up to 2 per minute for cached SIP supplementation. The startup and
   settings warnings include that supplemental allowance when suggesting
   a polling interval. Changing candle presets can trigger a fresh cache fill.
+  Alpaca sizes a bars page by the minute bars behind it, roughly two weeks
+  of a liquid name's extended hours, so the first fill of a chart window
+  follows up to three more pages to reach the start of the IEX series;
+  later refreshes take the newest page only.
 
 **When a source stops answering**
 

@@ -6,7 +6,9 @@ use ratatui::widgets::Paragraph;
 
 use crate::app::{App, ChartStyle};
 use crate::config::ChartDefaults;
-use crate::domain::{Candle, Interval, Quote, Range, Sessions, TickerData, fmt_price, fmt_volume};
+use crate::domain::{
+    Candle, Interval, PriceFeed, Quote, Range, Sessions, TickerData, fmt_price, fmt_volume,
+};
 use crate::indicators;
 use crate::keymap::Action;
 use crate::market;
@@ -116,6 +118,7 @@ pub fn render_chart(f: &mut Frame, area: Rect, app: &App) {
     // An empty volume panel would only steal rows from the price chart:
     // finnhub synthesizes candles from ticks and carries no volume at all.
     let has_volume = app.show_volume && data.candles[cut..].iter().any(|c| c.volume.is_some());
+    let single_venue = single_venue_volume(&data.candles);
     let (volume_h, rsi_h) = panel_split(area.height, has_volume, app.show_rsi);
     let [price_area, volume_area, rsi_area] = Layout::vertical([
         Constraint::Min(0),
@@ -127,7 +130,7 @@ pub fn render_chart(f: &mut Frame, area: Rect, app: &App) {
     let geom = render_price_candles(f, price_area, app, &symbol, data, cut);
     if let Some(geom) = geom {
         if volume_h > 0 {
-            render_volume_candles(f, volume_area, &geom, &app.chart, &app.theme);
+            render_volume_candles(f, volume_area, &geom, single_venue, &app.chart, &app.theme);
         }
         if rsi_h > 0 {
             render_rsi(f, rsi_area, data, cut, &geom, &app.chart, &app.theme);
@@ -180,7 +183,15 @@ pub(crate) fn dir_color(q: &Quote, theme: &Theme) -> Color {
 /// Legend labels appear only for average lines that actually have points on
 /// screen: an average needs `period` candles of history, which short series
 /// (finnhub's growing synthetic one, thin symbols) may not have yet.
-fn chart_title(symbol: &str, data: &TickerData, app: &App, flash: Option<bool>) -> Line<'static> {
+/// `merged` names the candle size when the plot is too narrow for the
+/// fetched interval, so two widths of the same chart explain themselves.
+fn chart_title(
+    symbol: &str,
+    data: &TickerData,
+    app: &App,
+    flash: Option<bool>,
+    merged: Option<&str>,
+) -> Line<'static> {
     let (q, theme) = (&data.quote, &app.theme);
     let change_str = match (q.change(), q.change_pct()) {
         (Some(c), Some(p)) => format!("{c:+.2} ({p:+.2}%)"),
@@ -201,6 +212,12 @@ fn chart_title(symbol: &str, data: &TickerData, app: &App, flash: Option<bool>) 
             Style::new().fg(dir_color(q, theme)),
         ),
     ];
+    if let Some(size) = merged {
+        spans.push(Span::styled(
+            format!("{size} candles "),
+            Style::new().fg(theme.flat),
+        ));
+    }
     if app.interval != Interval::D1 && market::is_us_equity(symbol) {
         let mut feeds = Vec::new();
         let cut = visible_from(&data.candles, app.range);
@@ -326,14 +343,12 @@ fn render_price_candles(
     };
     let visible = &data.candles[cut..];
     let flash = app.price_flash_dir(symbol);
-    let block = app
-        .theme
-        .panel()
-        .title(chart_title(symbol, data, app, flash));
-    // Titles live on the border row, so the inner area is known before the
-    // bottom one is: the block itself is rendered further down, once the
-    // candle columns (and with them the news marks) are laid out.
-    let inner = block.inner(area);
+    let panel = app.theme.panel();
+    // Titles live on the border row, so the inner area is known before any
+    // of them is: the block itself is rendered further down, once the
+    // candle columns (and with them the candle size and the news marks)
+    // are laid out.
+    let inner = panel.inner(area);
 
     // Aggregation preserves the visible low/high, so the y-range can be
     // folded over the raw visible candles before the downsampling decision.
@@ -360,6 +375,7 @@ fn render_price_candles(
     ];
     let gutter = y_labels.iter().map(|s| s.chars().count()).max().unwrap() as u16 + 1;
     if inner.width <= gutter + 2 || inner.height <= 3 {
+        let block = panel.title(chart_title(symbol, data, app, flash, None));
         f.render_widget(block, area);
         return None; // too small: leave the bare block
     }
@@ -371,29 +387,26 @@ fn render_price_candles(
     };
 
     // Every candle gets a slot of body + 1 column of gap so neighbours never
-    // fuse into a solid mass; history beyond width/2 candles aggregates into
-    // even buckets. The right margin stays out of the candle zone entirely:
-    // it hosts the last-price marker.
+    // fuse into a solid mass; history beyond width/2 candles merges into
+    // larger clock-aligned candles. The right margin stays out of the candle
+    // zone entirely: it hosts the last-price marker.
     let margin = margin_cols(plot.width, app.chart.right_margin_pct);
     let usable = plot.width - margin;
     let max_cols = usable as usize;
     let max_candles = (max_cols / 2).max(1);
-    let (display, sample_idx): (Vec<Candle>, Vec<usize>) = if visible.len() > max_candles {
-        let ranges = session_buckets(
-            visible,
-            max_candles,
-            market::is_us_equity(symbol) && app.interval != Interval::D1,
-        );
-        (
-            ranges
-                .iter()
-                .map(|r| aggregate(&visible[r.clone()]))
-                .collect(),
-            ranges.iter().map(|r| r.end - 1).collect(),
-        )
-    } else {
-        (visible.to_vec(), (0..visible.len()).collect())
-    };
+    let (step, ranges) = display_buckets(
+        visible,
+        max_candles,
+        app.interval,
+        market::is_us_equity(symbol) && app.interval != Interval::D1,
+    );
+    let display: Vec<Candle> = ranges
+        .iter()
+        .map(|r| aggregate(&visible[r.clone()]))
+        .collect();
+    let sample_idx: Vec<usize> = ranges.iter().map(|r| r.end - 1).collect();
+    let merged = step.map(|s| s.label(market::is_us_equity(symbol)));
+    let block = panel.title(chart_title(symbol, data, app, flash, merged.as_deref()));
     // Spread the visible history across the candle zone even when only
     // a few pre-market bars exist. Keep bodies at most 3 columns wide.
     let n = display.len();
@@ -742,31 +755,120 @@ fn candle_color(c: &Candle, prev_close: Option<f64>, theme: &Theme) -> Color {
     }
 }
 
-/// Candles spread evenly over the columns (bucket sizes differ by at most
-/// one), so the plot always fills its full width and the newest candle ends
-/// the last bucket.
-fn bucket_ranges(len: usize, max_cols: usize) -> Vec<std::ops::Range<usize>> {
-    let cols = max_cols.min(len);
-    (0..cols)
-        .map(|i| (i * len / cols)..((i + 1) * len / cols))
-        .collect()
+/// Size of the larger candles a narrow plot merges its bars into.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Step {
+    /// Seconds from the session's opening for US stocks (so hourly candles
+    /// start at 09:30, like the fetched 60m ones) and from the UTC clock
+    /// elsewhere. A day-long step is one whole session.
+    Secs(i64),
+    Week,
+    Month,
+    Quarter,
+    Year,
 }
 
-fn session_buckets(candles: &[Candle], max_cols: usize, us: bool) -> Vec<std::ops::Range<usize>> {
-    let mut out = Vec::new();
-    for range in bucket_ranges(candles.len(), max_cols) {
-        let mut start = range.start;
-        for i in range.start + 1..range.end {
-            if candles[i].feed != candles[i - 1].feed
-                || (us && market::window_at(candles[i].ts) != market::window_at(candles[i - 1].ts))
-            {
-                out.push(start..i);
+/// Merged intraday sizes, finest first. Only whole multiples of the fetched
+/// interval are used, so a bar never straddles two merged candles.
+const INTRADAY_STEPS: [i64; 14] = [
+    120, 180, 300, 600, 900, 1_200, 1_800, 2_700, 3_600, 5_400, 7_200, 10_800, 14_400, 86_400,
+];
+
+impl Step {
+    fn label(self, us: bool) -> String {
+        match self {
+            Step::Secs(86_400) if us => "session".into(),
+            Step::Secs(86_400) => "1d".into(),
+            Step::Secs(s) if s % 3_600 == 0 => format!("{}h", s / 3_600),
+            Step::Secs(s) => format!("{}m", s / 60),
+            Step::Week => "1w".into(),
+            Step::Month => "1mo".into(),
+            Step::Quarter => "3mo".into(),
+            Step::Year => "1y".into(),
+        }
+    }
+
+    /// Identifier of the merged candle a bar belongs to. `session` is the
+    /// opening of the bar's US session, when the chart keeps sessions apart.
+    fn key(self, ts: i64, session: Option<i64>) -> i64 {
+        use chrono::Datelike;
+        let months = || {
+            let date = chrono::DateTime::from_timestamp(ts, 0).unwrap_or_default();
+            date.year() as i64 * 12 + date.month0() as i64
+        };
+        match self {
+            Step::Secs(s) => match session {
+                Some(start) => start + (ts - start).div_euclid(s) * s,
+                None => ts.div_euclid(s) * s,
+            },
+            // Day 0 was a Thursday: weeks start on Mondays.
+            Step::Week => (ts.div_euclid(86_400) + 3).div_euclid(7),
+            Step::Month => months(),
+            Step::Quarter => months().div_euclid(3),
+            Step::Year => months().div_euclid(12),
+        }
+    }
+}
+
+/// Bars grouped into the finest merged size that fits `max` candles, as
+/// ranges of `candles`; the size is None when every bar fits as it is.
+/// Merged candles sit on the clock rather than on bar counts: the same size
+/// draws the same candles at any width, and a new bar changes only the
+/// newest candle instead of reshuffling the whole history. Feeds never
+/// share a candle, nor (for US stocks) do sessions. When even the largest
+/// size does not fit, it is used anyway and the candles crowd together.
+fn display_buckets(
+    candles: &[Candle],
+    max: usize,
+    interval: Interval,
+    us: bool,
+) -> (Option<Step>, Vec<std::ops::Range<usize>>) {
+    if candles.len() <= max {
+        return (None, (0..candles.len()).map(|i| i..i + 1).collect());
+    }
+    let steps: Vec<Step> = if interval == Interval::D1 {
+        vec![Step::Week, Step::Month, Step::Quarter, Step::Year]
+    } else {
+        let base = interval.secs();
+        INTRADAY_STEPS
+            .into_iter()
+            .filter(|s| *s > base && s % base == 0)
+            .map(Step::Secs)
+            .collect()
+    };
+    let sessions: Vec<Option<i64>> = candles
+        .iter()
+        .map(|c| {
+            us.then(|| market::window_at(c.ts).map(|w| w.start))
+                .flatten()
+        })
+        .collect();
+    let mut best = None;
+    for step in steps {
+        let keys: Vec<i64> = candles
+            .iter()
+            .zip(&sessions)
+            .map(|(c, session)| step.key(c.ts, *session))
+            .collect();
+        let mut ranges = Vec::new();
+        let mut start = 0;
+        for i in 1..candles.len() {
+            if keys[i] != keys[i - 1] || candles[i].feed != candles[i - 1].feed {
+                ranges.push(start..i);
                 start = i;
             }
         }
-        out.push(start..range.end);
+        ranges.push(start..candles.len());
+        let fits = ranges.len() <= max;
+        best = Some((step, ranges));
+        if fits {
+            break;
+        }
     }
-    out
+    match best {
+        Some((step, ranges)) => (Some(step), ranges),
+        None => (None, (0..candles.len()).map(|i| i..i + 1).collect()),
+    }
 }
 
 fn aggregate(chunk: &[Candle]) -> Candle {
@@ -792,7 +894,19 @@ fn aggregate(chunk: &[Candle]) -> Candle {
 
 // -- volume panel -------------------------------------------------------------
 
-fn volume_title(last: Option<f64>, theme: &Theme) -> Line<'static> {
+/// IEX is one exchange, a few percent of the tape. Its share counts survive
+/// only on charts without consolidated bars (`extended::apply` swaps them
+/// out otherwise), and then the panel names the venue rather than passing
+/// them off as the market's volume.
+fn single_venue_volume(candles: &[Candle]) -> bool {
+    let mut feeds = candles
+        .iter()
+        .filter(|c| c.volume.is_some())
+        .map(|c| c.feed);
+    feeds.next() == Some(PriceFeed::Iex) && feeds.all(|f| f == PriceFeed::Iex)
+}
+
+fn volume_title(last: Option<f64>, single_venue: bool, theme: &Theme) -> Line<'static> {
     let mut spans = vec![Span::styled(
         " Vol ",
         Style::new().fg(theme.accent).add_modifier(Modifier::BOLD),
@@ -803,8 +917,16 @@ fn volume_title(last: Option<f64>, theme: &Theme) -> Line<'static> {
             Style::new().fg(theme.flat),
         ));
     }
+    if single_venue {
+        spans.push(Span::styled("IEX only ", Style::new().fg(theme.flat)));
+    }
     Line::from(spans)
 }
+
+/// Lower block glyphs by eighths: four panel rows resolve 32 bar heights,
+/// enough to tell a regular session from a quiet premarket next to an
+/// auction print.
+const LOWER_EIGHTHS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
 
 /// Volume bars sharing the candles' columns exactly: same gutter, same
 /// slots, and the right margin left empty (the last-price marker lives
@@ -814,6 +936,7 @@ fn render_volume_candles(
     f: &mut Frame,
     area: Rect,
     geom: &CandleGeom,
+    single_venue: bool,
     chart: &ChartDefaults,
     theme: &Theme,
 ) {
@@ -822,8 +945,10 @@ fn render_volume_candles(
         .iter()
         .filter_map(|c| c.volume)
         .fold(0.0, f64::max);
-    let last = geom.display.last().and_then(|c| c.volume);
-    let block = theme.panel().title(volume_title(last, theme));
+    // The newest bars can lack a count while the delayed consolidated feed
+    // catches up; the title keeps the latest one known.
+    let last = geom.display.iter().rev().find_map(|c| c.volume);
+    let block = theme.panel().title(volume_title(last, single_venue, theme));
     let inner = block.inner(area);
     f.render_widget(block, area);
     if vmax <= 0.0 || inner.height == 0 || inner.width <= geom.gutter {
@@ -839,20 +964,19 @@ fn render_volume_candles(
     );
     geom.axis
         .backdrop(buf, plot, theme, chart.session_shading, chart.time_grid);
-    let sub_rows = inner.height as usize * 2;
+    let levels = inner.height as usize * LOWER_EIGHTHS.len();
     for (i, c) in geom.display.iter().enumerate() {
         let Some(v) = c.volume else { continue };
-        // Subrows filled from the bottom up. A traded candle keeps at least a
+        // Eighths filled from the bottom up. A traded candle keeps at least a
         // stub so a quiet session still reads as data, not as a gap.
-        let filled = (((v / vmax) * sub_rows as f64).round() as usize).clamp(1, sub_rows);
+        let filled = (((v / vmax) * levels as f64).round() as usize).clamp(1, levels);
         let color = candle_color(c, (i > 0).then(|| geom.display[i - 1].close), theme);
         let body_x = geom.body_x(i);
         for row in 0..inner.height {
-            let lower = (inner.height - 1 - row) as usize * 2;
-            let ch = match filled.saturating_sub(lower) {
+            let lower = (inner.height - 1 - row) as usize * LOWER_EIGHTHS.len();
+            let ch = match filled.saturating_sub(lower).min(LOWER_EIGHTHS.len()) {
                 0 => continue,
-                1 => '▄',
-                _ => '█',
+                n => LOWER_EIGHTHS[n - 1],
             };
             for x in body_x..body_x + geom.body_w {
                 if let Some(cell) = buf.cell_mut((x, inner.y + row)) {
@@ -956,9 +1080,12 @@ fn render_rsi(
 mod tests {
     use super::*;
 
+    fn at(s: &str) -> i64 {
+        chrono::DateTime::parse_from_rfc3339(s).unwrap().timestamp()
+    }
+
     #[test]
     fn display_aggregation_keeps_session_boundaries_even_in_one_bucket() {
-        let parse = |s| chrono::DateTime::parse_from_rfc3339(s).unwrap().timestamp();
         let bars: Vec<_> = [
             "2026-09-11T13:25:00Z",
             "2026-09-11T13:30:00Z",
@@ -967,11 +1094,125 @@ mod tests {
         ]
         .into_iter()
         .map(|s| Candle {
-            ts: parse(s),
+            ts: at(s),
             ..Default::default()
         })
         .collect();
-        assert_eq!(session_buckets(&bars, 1, true), vec![0..1, 1..3, 3..4]);
+        let (step, ranges) = display_buckets(&bars, 1, Interval::M5, true);
+        assert_eq!(step, Some(Step::Secs(86_400)));
+        assert_eq!(ranges, vec![0..1, 1..3, 3..4]);
+    }
+
+    /// Five-minute bars of 2026-09-15 from 09:30 ET: after-hours starts at
+    /// bar 78 (16:00), and bars 91.. (17:05 on) come from another feed.
+    fn day_of_bars(n: i64) -> Vec<Candle> {
+        (0..n)
+            .map(|i| Candle {
+                ts: at("2026-09-15T13:30:00Z") + i * 300,
+                feed: if i >= 91 {
+                    PriceFeed::DelayedSip
+                } else {
+                    PriceFeed::Iex
+                },
+                ..Default::default()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn merged_candles_sit_on_the_clock() {
+        let bars = day_of_bars(100);
+        // 100 bars into 40 slots: 10m would take 51, 15m takes 35.
+        let (step, ranges) = display_buckets(&bars, 40, Interval::M5, true);
+        assert_eq!(step, Some(Step::Secs(900)));
+        assert!(ranges.len() <= 40);
+        for r in &ranges {
+            let feed_change = r.start > 0 && bars[r.start - 1].feed != bars[r.start].feed;
+            assert!(
+                bars[r.start].ts % 900 == 0 || feed_change,
+                "candle {r:?} starts off the quarter hour"
+            );
+            assert!(r.len() <= 3);
+            assert!(bars[r.clone()].iter().all(|c| c.feed == bars[r.start].feed));
+        }
+        // The regular close starts a candle, and so does the feed change in
+        // the middle of the 17:00 quarter.
+        assert!(ranges.iter().any(|r| r.start == 78));
+        assert!(ranges.contains(&(90..91)));
+        assert!(ranges.iter().any(|r| r.start == 91));
+    }
+
+    #[test]
+    fn merged_candles_do_not_depend_on_width_or_the_window_start() {
+        let bars = day_of_bars(100);
+        let (_, wide) = display_buckets(&bars, 45, Interval::M5, true);
+        let (_, narrow) = display_buckets(&bars, 38, Interval::M5, true);
+        assert_eq!(wide, narrow, "one size, two widths, different candles");
+        // Sliding the window by one bar changes only the first candle.
+        let (_, slid) = display_buckets(&bars[1..], 38, Interval::M5, true);
+        let shifted: Vec<_> = slid.iter().map(|r| r.start + 1..r.end + 1).collect();
+        assert_eq!(shifted[1..], wide[1..]);
+    }
+
+    #[test]
+    fn hourly_candles_open_with_the_session_and_fit_bars_as_they_are() {
+        let bars = day_of_bars(78);
+        let (step, ranges) = display_buckets(&bars, 7, Interval::M5, true);
+        assert_eq!(step, Some(Step::Secs(3_600)));
+        // 09:30, 10:30, ... 15:30: the last one is half an hour.
+        assert_eq!(ranges.len(), 7);
+        assert_eq!(ranges[0], 0..12);
+        assert_eq!(ranges[6], 72..78);
+        assert_eq!(Step::Secs(3_600).label(true), "1h");
+        assert_eq!(Step::Secs(5_400).label(true), "90m");
+        assert_eq!(Step::Secs(86_400).label(true), "session");
+
+        let (step, ranges) = display_buckets(&bars, 78, Interval::M5, true);
+        assert_eq!(step, None);
+        assert_eq!(ranges.len(), 78);
+    }
+
+    #[test]
+    fn daily_candles_merge_into_calendar_weeks() {
+        // Wednesday 2026-09-02 through Friday 2026-09-25, weekdays only.
+        let bars: Vec<_> = (0..24)
+            .map(|d| at("2026-09-02T04:00:00Z") + d * 86_400)
+            .filter(|ts| {
+                use chrono::Datelike;
+                chrono::DateTime::from_timestamp(*ts, 0)
+                    .unwrap()
+                    .weekday()
+                    .num_days_from_monday()
+                    < 5
+            })
+            .map(|ts| Candle {
+                ts,
+                ..Default::default()
+            })
+            .collect();
+        let (step, ranges) = display_buckets(&bars, 5, Interval::D1, false);
+        assert_eq!(step, Some(Step::Week));
+        // Wed-Fri, then three full weeks.
+        assert_eq!(ranges, vec![0..3, 3..8, 8..13, 13..18]);
+    }
+
+    #[test]
+    fn volume_names_a_single_venue_only_when_nothing_else_counts() {
+        let bar = |feed, volume| Candle {
+            feed,
+            volume,
+            ..Default::default()
+        };
+        let iex = bar(PriceFeed::Iex, Some(10.0));
+        let sip = bar(PriceFeed::DelayedSip, Some(900.0));
+        assert!(single_venue_volume(&[iex, iex]));
+        assert!(!single_venue_volume(&[iex, sip]));
+        assert!(!single_venue_volume(&[sip]));
+        assert!(!single_venue_volume(&[bar(PriceFeed::Iex, None)]));
+        assert!(single_venue_volume(&[
+            bar(PriceFeed::DelayedSip, None),
+            iex
+        ]));
     }
 
     fn candle(open: f64, high: f64, low: f64, close: f64) -> Candle {
@@ -1052,17 +1293,6 @@ mod tests {
         let cols = candle_column(&candle(5.0, 5.0, 5.0, 5.0), 0.0, 10.0, 5);
         assert_eq!(cols.len(), 1);
         assert!(matches!(cols[0].1, '▀' | '▄'));
-    }
-
-    #[test]
-    fn bucket_ranges_fill_all_columns() {
-        assert_eq!(bucket_ranges(10, 4), vec![0..2, 2..5, 5..7, 7..10]);
-        assert_eq!(bucket_ranges(130, 108).len(), 108);
-        // Fewer candles than columns: identity buckets.
-        assert_eq!(
-            bucket_ranges(5, 10),
-            (0..5).map(|i| i..i + 1).collect::<Vec<_>>()
-        );
     }
 
     #[test]
