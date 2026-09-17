@@ -17,14 +17,14 @@
 
 use std::cmp::Reverse;
 use std::collections::HashSet;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
 
 use crate::alphai::{self, Article, FeedMode, FeedPayload, InsiderTrades, SentimentSummary, Sort};
 use crate::ui;
 
-use super::{App, EarningsSlot, NewsScope};
+use super::{App, CalendarSlot, EarningsSlot, NewsScope};
 
 /// How many TTLs a polling feed's head page may live for. Merges keep the
 /// rows current, so the head fetch is only renewing the side payload and
@@ -45,6 +45,7 @@ const EARNINGS_TTL_FACTOR: u32 = 12;
 /// Agency schedules move about once a month, and the window reaches 45 days
 /// ahead, so one fetch covers a working day.
 const CALENDAR_TTL_FACTOR: u32 = 72;
+pub(crate) const REPORT_DATE_PACE: Duration = Duration::from_secs(4);
 
 /// The AlphAI feeds a view can display (`View::feed_shown`). Trending is
 /// not a kind: it is a news scope, a different cache key of the news feed.
@@ -268,7 +269,17 @@ impl App {
     }
 
     pub(crate) fn apply_alphai(&mut self, event: alphai::Event) {
+        if matches!(event, alphai::Event::KeyChanged) {
+            self.alphai_key_pending = self.alphai_key_pending.saturating_sub(1);
+            return;
+        }
+        // The fetcher is serial: its SetKey acknowledgement arrives after
+        // every old-key response and before any new-key request can start.
+        if self.alphai_key_pending > 0 {
+            return;
+        }
         match event {
+            alphai::Event::KeyChanged => unreachable!(),
             alphai::Event::Feed {
                 key,
                 articles,
@@ -399,12 +410,22 @@ impl App {
                     },
                 );
             }
-            // An empty window is also what a failed fetch looks like: the
-            // strip renders nothing either way, and caching it keeps the
-            // next frame from asking again (nothing here auto-retries).
-            alphai::Event::Calendar { events } => {
+            alphai::Event::Calendar { events, from, to } => {
                 self.inflight.remove(alphai::CALENDAR_KEY);
-                self.calendar = Some((events, Instant::now()));
+                self.alphai_errors.remove(alphai::CALENDAR_KEY);
+                if let (Ok(from), Ok(to)) = (from.parse(), to.parse()) {
+                    self.calendar = Some(CalendarSlot {
+                        events,
+                        fetched: Instant::now(),
+                        from,
+                        to,
+                    });
+                }
+            }
+            alphai::Event::CalendarBlocked { key, error } => {
+                self.inflight.remove(&key);
+                self.report_dates_paused = Some(error.clone());
+                self.alphai_errors.insert(key, error);
             }
             alphai::Event::Error { key, error } => {
                 self.inflight.remove(&key);
@@ -418,20 +439,28 @@ impl App {
     /// the same key is in flight, and never on top of an error (manual `r`
     /// clears the error and retries) — the free tier is 100 requests/day.
     pub(crate) fn ensure_alphai_data(&mut self) {
+        self.ensure_alphai_data_at(Utc::now(), Instant::now());
+    }
+
+    pub(crate) fn ensure_alphai_data_at(&mut self, now: DateTime<Utc>, clock: Instant) {
         // The overlay gate also keeps a TTL refetch from swapping the article
         // out from under the reader mid-scroll. These preconditions hold for
         // every surface, so they live here and the branches below only carry
         // what is specific to their own payload.
         if !self.alphai_enabled
+            || self.alphai_key_pending > 0
             || self.settings.open
             || self.article_overlay.open
             || self.help.open
+            || self.prompt.open
             || self.symbols.is_empty()
         {
             return;
         }
         self.ensure_feed_data();
         self.ensure_earnings_data();
+        self.ensure_calendar(now, clock);
+        self.ensure_report_dates(clock);
     }
 
     /// The feed behind the visible view: head fetch, delta poll, or nothing.
@@ -492,9 +521,8 @@ impl App {
         }
     }
 
-    /// The earnings surface: one request per ticker, and one for the macro
-    /// calendar window, only while the view that shows them is up. Neither
-    /// paginates and neither ever retries by itself.
+    /// Earnings shares its slots with Calendar, but refreshes the read on
+    /// screen more often. An unsupported symbol stays terminal for this key.
     fn ensure_earnings_data(&mut self) {
         if !ui::VIEWS[self.view_idx].shows_earnings() {
             return;
@@ -508,26 +536,102 @@ impl App {
         let busy = self.inflight.iter().any(|k| k.starts_with("earn:"));
         let stale = match self.earnings.get(&symbol) {
             None => true,
-            Some(slot) => slot.fetched.elapsed() > ttl * EARNINGS_TTL_FACTOR,
+            Some(slot) => !slot.data.unknown && slot.fetched.elapsed() > ttl * EARNINGS_TTL_FACTOR,
         };
         if stale && !busy && !self.alphai_errors.contains_key(&key) {
             self.inflight.insert(key);
+            self.report_date_asked = Some(Instant::now());
             let _ = self.alphai_tx.send(alphai::Cmd::FetchEarnings { symbol });
         }
-        // The calendar is market-wide, so it is fetched once for every
-        // ticker; a failure caches an empty window rather than an error.
-        let due = match &self.calendar {
+    }
+
+    pub(crate) fn calendar_ttl(&self) -> Duration {
+        self.alphai_ttl * CALENDAR_TTL_FACTOR
+    }
+
+    /// Crypto, FX and indices cannot have company report dates. Foreign
+    /// listings remain candidates; a 404 from the API is terminal.
+    pub(crate) fn calendar_symbols(&self) -> impl Iterator<Item = &String> {
+        self.symbols
+            .iter()
+            .filter(|s| !crate::market::is_crypto(s) && !s.contains(['^', '=']))
+    }
+
+    pub(crate) fn report_date_due(&self, symbol: &str, clock: Instant) -> bool {
+        if self
+            .alphai_errors
+            .contains_key(&alphai::earnings_key(symbol))
+        {
+            return false;
+        }
+        match self.earnings.get(symbol) {
             None => true,
-            Some((_, at)) => at.elapsed() > ttl * CALENDAR_TTL_FACTOR,
-        };
-        if due && !self.inflight.contains(alphai::CALENDAR_KEY) {
-            let today = Utc::now().date_naive();
+            Some(slot) => {
+                !slot.data.unknown
+                    && (self.report_date_retry.contains(symbol)
+                        || clock.saturating_duration_since(slot.fetched) >= self.calendar_ttl())
+            }
+        }
+    }
+
+    fn ensure_calendar(&mut self, now: DateTime<Utc>, clock: Instant) {
+        let due = self.calendar_refresh_requested
+            || self.calendar.as_ref().is_none_or(|slot| {
+                clock.saturating_duration_since(slot.fetched) >= self.calendar_ttl()
+            });
+        if due
+            && !self.inflight.contains(alphai::CALENDAR_KEY)
+            && !self.alphai_errors.contains_key(alphai::CALENDAR_KEY)
+        {
+            let today = crate::market::et_time(now).date();
+            // API boundaries are UTC midnights. One extra UTC day includes
+            // the whole last ET day; the agenda clips the response locally.
             self.inflight.insert(alphai::CALENDAR_KEY.to_string());
+            self.calendar_refresh_requested = false;
             let _ = self.alphai_tx.send(alphai::Cmd::FetchCalendar {
-                from: today.to_string(),
-                to: (today + chrono::Duration::days(alphai::CALENDAR_DAYS)).to_string(),
+                from: (today - chrono::Duration::days(alphai::CALENDAR_LOOKBACK_DAYS)).to_string(),
+                to: (today + chrono::Duration::days(alphai::CALENDAR_DAYS + 1)).to_string(),
             });
         }
+    }
+
+    fn ensure_report_dates(&mut self, clock: Instant) {
+        if !ui::VIEWS[self.view_idx].shows_calendar()
+            || self.report_dates_paused.is_some()
+            || self.inflight.contains(alphai::CALENDAR_KEY)
+            || self.inflight.iter().any(|k| k.starts_with("earn:"))
+            || self
+                .report_date_asked
+                .is_some_and(|at| clock.saturating_duration_since(at) < REPORT_DATE_PACE)
+        {
+            return;
+        }
+        let candidate = self
+            .calendar_symbols()
+            .find(|s| self.report_date_due(s, clock))
+            .cloned();
+        if let Some(symbol) = candidate {
+            self.inflight.insert(alphai::earnings_key(&symbol));
+            self.report_date_retry.remove(&symbol);
+            self.report_date_asked = Some(clock);
+            let _ = self.alphai_tx.send(alphai::Cmd::FetchEarnings { symbol });
+        }
+    }
+
+    pub(crate) fn change_alphai_key(&mut self, key: Option<String>) {
+        self.alphai_enabled = key.is_some();
+        self.alphai_key_pending += 1;
+        let _ = self.alphai_tx.send(alphai::Cmd::SetKey(key));
+        self.feeds.clear();
+        self.feed_seen.clear();
+        self.earnings.clear();
+        self.calendar = None;
+        self.calendar_refresh_requested = false;
+        self.report_date_retry.clear();
+        self.report_date_asked = None;
+        self.report_dates_paused = None;
+        self.alphai_errors.clear();
+        self.inflight.clear();
     }
 
     /// j at the last row: ask for the feed's next page (explicitly
@@ -586,14 +690,28 @@ impl App {
             self.alphai_errors.remove(&key);
         } else if ui::VIEWS[self.view_idx].shows_earnings() {
             let symbol = self.selected_symbol().to_string();
-            self.earnings.remove(&symbol);
+            if !self
+                .earnings
+                .get(&symbol)
+                .is_some_and(|slot| slot.data.unknown)
+            {
+                self.earnings.remove(&symbol);
+            }
             self.alphai_errors.remove(&alphai::earnings_key(&symbol));
-            // The calendar is dropped only when it holds nothing, which is
-            // also what a failed fetch leaves behind: that keeps `r` a
-            // manual retry for it without spending a second request on a
-            // schedule that moves about once a month.
-            if self.calendar.as_ref().is_some_and(|(e, _)| e.is_empty()) {
-                self.calendar = None;
+        } else if ui::VIEWS[self.view_idx].shows_calendar()
+            && !self.inflight.contains(alphai::CALENDAR_KEY)
+        {
+            self.calendar_refresh_requested = true;
+            self.alphai_errors.remove(alphai::CALENDAR_KEY);
+            self.report_dates_paused = None;
+            for symbol in &self.symbols {
+                if self
+                    .alphai_errors
+                    .remove(&alphai::earnings_key(symbol))
+                    .is_some()
+                {
+                    self.report_date_retry.insert(symbol.clone());
+                }
             }
         }
     }

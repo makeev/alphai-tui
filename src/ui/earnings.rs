@@ -113,7 +113,7 @@ impl View for EarningsView {
         let ahead = app
             .calendar
             .as_ref()
-            .map(|(events, _)| ahead_line(events, Utc::now()))
+            .map(|slot| ahead_line(&slot.events, Utc::now()))
             .filter(|line| !line.is_empty());
         let strip_h = u16::from(ahead.is_some() && inner.height >= AHEAD_MIN_HEIGHT);
         f.render_widget(block, area);

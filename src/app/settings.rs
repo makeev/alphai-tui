@@ -11,7 +11,6 @@ use std::time::Duration;
 
 use crossterm::event::{KeyCode, KeyEvent};
 
-use crate::alphai;
 use crate::config::{self, ALPHAI_KEY_FIELD, Config, KeyField};
 use crate::source::{make_source, registry};
 
@@ -296,11 +295,7 @@ impl App {
 
         if cfg.alphai_key() != self.config.alphai_key() {
             let key = cfg.alphai_key();
-            self.alphai_enabled = key.is_some();
-            let _ = self.alphai_tx.send(alphai::Cmd::SetKey(key));
-            self.feeds.clear();
-            self.alphai_errors.clear();
-            self.inflight.clear();
+            self.change_alphai_key(key);
         }
 
         match config::save_at(self.config_path.as_deref(), &cfg) {

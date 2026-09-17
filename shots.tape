@@ -1,11 +1,12 @@
 # Shoots every still the README uses, in one run of the app. Run
-# `vhs shots.tape` from the repo root with alphai-tui built in
-# ./target/release (or on PATH) and an AlphAI key configured.
+# `vhs shots.tape` from the repo root after `cargo build --release`, with
+# an AlphAI key configured.
 #
 # One take is one launch, which is one price request per ticker (the poll
 # interval is parked at 900s on purpose: Yahoo rate-limits by IP, and a
-# second poll would double the bill) plus about eight AlphAI requests for
-# the feeds, the earnings read and the macro calendar.
+# second poll would double the bill) plus about eighteen AlphAI requests
+# for the feeds, the earnings reads and the macro calendar. The company
+# dates are fetched one at a time while Calendar is open.
 #
 # The app wears catppuccin-mocha and so does the terminal: the app paints
 # foreground colors only, so the two have to agree. 2400x1300 at font size
@@ -46,7 +47,7 @@ Type `printf '\n[[positions]]\nsymbol = "NVDA"\nqty = 120\navg_price = 118.40\n\
 Enter
 Type `clear`
 Enter
-Type "alphai-tui --config /tmp/alphaishot.toml --theme catppuccin-mocha --source yahoo --every 900 NVDA AVGO AAPL MSFT META TSLA AMZN GOOGL BTC-USD"
+Type "env -u NO_COLOR ./target/release/alphai-tui --config /tmp/alphaishot.toml --theme catppuccin-mocha --source yahoo --every 900 --range 6mo --interval 1d NVDA AVGO AAPL MSFT META TSLA AMZN GOOGL MU COST BTC-USD"
 Enter
 Sleep 14s
 Show
@@ -92,10 +93,10 @@ Sleep 3s
 Screenshot assets/table.png
 Sleep 5s
 
-# 4:Chart, with E adding the pre and post market candles.
+# 4:Chart, daily candles with enough history for both moving averages.
+# The visible bars keep their daily interval, even if the window is wider
+# than the terminal. Extended hours are already enabled by default.
 Type "4"
-Sleep 3s
-Type "E"
 Sleep 4s
 Screenshot assets/chart.png
 Sleep 5s
@@ -132,6 +133,13 @@ Sleep 5s
 Type "8"
 Sleep 3s
 Screenshot assets/portfolio.png
+Sleep 5s
+
+# 9:Calendar, US macro releases beside confirmed watchlist report dates.
+# Allow the paced date sweep to finish; the NVDA read above is reused.
+Type "9"
+Sleep 50s
+Screenshot assets/calendar.png
 Sleep 5s
 
 # The help overlay, every action with the keys it is bound to.

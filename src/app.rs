@@ -14,7 +14,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use chrono::{DateTime, Local};
+use chrono::{DateTime, Local, NaiveDate, Utc};
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::DefaultTerminal;
 use ratatui::widgets::TableState;
@@ -192,6 +192,14 @@ pub struct EarningsSlot {
     pub fetched: Instant,
 }
 
+/// The last successful macro response and its requested UTC date window.
+pub struct CalendarSlot {
+    pub events: Vec<alphai::CalendarEvent>,
+    pub fetched: Instant,
+    pub from: NaiveDate,
+    pub to: NaiveDate,
+}
+
 /// The default combos the t and T keys cycle through (`[chart] presets`
 /// overrides them); wraps at the ends. A startup combo not in the table
 /// (e.g. -r 3mo) jumps to the first preset on t and to the last on T.
@@ -351,7 +359,15 @@ pub struct App {
     pub earnings: HashMap<String, EarningsSlot>,
     /// The macro calendar window and when it landed. One market-wide payload
     /// for every ticker, so it is not keyed by symbol.
-    pub calendar: Option<(Vec<alphai::CalendarEvent>, Instant)>,
+    pub calendar: Option<CalendarSlot>,
+    pub calendar_selection: ui::calendar::Selection,
+    pub calendar_state: TableState,
+    pub(crate) calendar_refresh_requested: bool,
+    pub(crate) report_date_asked: Option<Instant>,
+    pub(crate) report_date_retry: HashSet<String>,
+    pub(crate) report_dates_paused: Option<String>,
+    /// SetKey acknowledgements form a barrier against old-key responses.
+    pub(crate) alphai_key_pending: usize,
     /// Scroll of the Earnings view's body; reset when the ticker changes.
     pub earnings_scroll: u16,
     /// How long a fetched AlphAI bundle stays fresh. Seeded from
@@ -437,6 +453,13 @@ impl App {
             bare: init.ui.bare,
             earnings: HashMap::new(),
             calendar: None,
+            calendar_selection: ui::calendar::Selection::default(),
+            calendar_state: TableState::default(),
+            calendar_refresh_requested: false,
+            report_date_asked: None,
+            report_date_retry: HashSet::new(),
+            report_dates_paused: None,
+            alphai_key_pending: 0,
             earnings_scroll: 0,
             alphai_ttl: init.ui.alphai_ttl,
             card_scroll: 0,
@@ -722,6 +745,7 @@ impl App {
         let news_view = ui::VIEWS[self.view_idx].navigates_articles();
         let chart_view = ui::VIEWS[self.view_idx].has_chart_panel();
         let earnings_view = ui::VIEWS[self.view_idx].shows_earnings();
+        let calendar_view = ui::VIEWS[self.view_idx].shows_calendar();
         // ←→ walk the watchlist wherever the view is scoped to one ticker.
         let lr_ticker = news_view || earnings_view;
         let news_feed = ui::VIEWS[self.view_idx].feed_shown() == Some(FeedKind::News);
@@ -751,6 +775,11 @@ impl App {
                 }
             }
             Action::Refresh => self.manual_refresh(),
+            Action::Up if calendar_view => self.move_calendar(-1),
+            Action::Down if calendar_view => self.move_calendar(1),
+            Action::PageUp if calendar_view => self.move_calendar(-10),
+            Action::PageDown if calendar_view => self.move_calendar(10),
+            Action::Open if calendar_view => self.open_calendar_row(),
             // News/Insider: up/down scroll articles, left/right switch ticker.
             Action::Up if news_view => {
                 self.news_selected = self.news_selected.saturating_sub(1);
@@ -1082,6 +1111,7 @@ impl App {
             return;
         }
         let gone = self.symbols.remove(self.selected);
+        self.report_date_retry.remove(&gone);
         self.sync_shared_symbols();
         // Prices are cheap to fetch again; the AlphAI feeds are not, so
         // their cache survives a removal and a re-add costs no request.
@@ -1175,6 +1205,40 @@ impl App {
             self.news_selected = 0;
             self.card_scroll = 0;
             self.earnings_scroll = 0;
+            if ui::VIEWS[idx].shows_calendar() {
+                self.calendar_selection = ui::calendar::Selection::default();
+                self.calendar_state = TableState::default();
+            }
+        }
+    }
+
+    fn move_calendar(&mut self, delta: isize) {
+        let rows = ui::calendar::agenda(self, Utc::now());
+        let Some(current) = self.calendar_selection.resolve(&rows) else {
+            return;
+        };
+        let next = current.saturating_add_signed(delta).min(rows.len() - 1);
+        self.calendar_selection.choose(&rows, next);
+        if let ui::calendar::Kind::Report { symbol } = &rows[next].kind
+            && let Some(idx) = self.symbols.iter().position(|s| s == symbol)
+        {
+            self.select_symbol(idx);
+        }
+    }
+
+    fn open_calendar_row(&mut self) {
+        match ui::calendar::open_target(self, Utc::now()) {
+            Some(ui::calendar::OpenTarget::Url(url)) => open_url(&url),
+            Some(ui::calendar::OpenTarget::Earnings(symbol)) => {
+                if let Some(idx) = self.symbols.iter().position(|s| s == &symbol) {
+                    self.select_symbol(idx);
+                    self.switch_view(ui::view_index(ui::ViewId::Earnings));
+                }
+            }
+            Some(ui::calendar::OpenTarget::Unavailable) => {
+                self.notice = Some(("No source link for this event".into(), Instant::now()));
+            }
+            None => {}
         }
     }
 

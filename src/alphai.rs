@@ -15,7 +15,7 @@
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
@@ -63,6 +63,34 @@ pub fn is_unknown_symbol(error: &str) -> bool {
     error.contains("API 404")
 }
 
+/// Keep the HTTP status available to the calendar queue without coupling its
+/// pause policy to the wording of a user-facing error.
+#[derive(Debug)]
+struct ApiError {
+    status: reqwest::StatusCode,
+    message: String,
+}
+
+impl std::fmt::Display for ApiError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for ApiError {}
+
+fn calendar_error(key: String, error: anyhow::Error) -> Event {
+    let blocked = error
+        .downcast_ref::<ApiError>()
+        .is_some_and(|e| matches!(e.status.as_u16(), 401 | 403 | 429));
+    let error = format!("{error:#}");
+    if blocked {
+        Event::CalendarBlocked { key, error }
+    } else {
+        Event::Error { key, error }
+    }
+}
+
 pub struct Client {
     http: reqwest::Client,
     base: String,
@@ -94,7 +122,12 @@ impl Client {
 
         let status = resp.status();
         if status == reqwest::StatusCode::UNAUTHORIZED {
-            bail!("invalid AlphAI API key, press s to update it (free keys: alphai.io)");
+            return Err(ApiError {
+                status,
+                message: "invalid AlphAI API key, press s to update it (free keys: alphai.io)"
+                    .into(),
+            }
+            .into());
         }
         if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
             let wait = resp
@@ -102,7 +135,13 @@ impl Client {
                 .get("retry-after")
                 .and_then(|v| v.to_str().ok())
                 .unwrap_or("60");
-            bail!("AlphAI rate limit hit, retry in {wait}s (Free tier: 20/min, 100/day)");
+            return Err(ApiError {
+                status,
+                message: format!(
+                    "AlphAI rate limit hit, retry in {wait}s (Free tier: 20/min, 100/day)"
+                ),
+            }
+            .into());
         }
         if !status.is_success() {
             let body = resp.text().await.unwrap_or_default();
@@ -120,7 +159,11 @@ impl Client {
             let msg = parsed
                 .and_then(|e| e.message.or(e.detail).or(e.error))
                 .unwrap_or_else(|| body.chars().take(120).collect());
-            bail!("AlphAI API {status}: {msg}");
+            return Err(ApiError {
+                status,
+                message: format!("AlphAI API {status}: {msg}"),
+            }
+            .into());
         }
         resp.json().await.context("bad JSON from AlphAI")
     }
@@ -342,6 +385,8 @@ pub enum Cmd {
 }
 
 pub enum Event {
+    /// The serial worker has retired all requests made with the previous key.
+    KeyChanged,
     /// One feed fetch's result; `mode` says what it does to the bundle.
     Feed {
         /// Cache key: a symbol / `MARKET_KEY` / `TRENDING_KEY` for news,
@@ -382,9 +427,14 @@ pub enum Event {
         key: String,
         data: Box<TickerEarnings>,
     },
-    /// The macro calendar window. Its failure is silent by design (the strip
-    /// simply does not render), so there is no error twin.
-    Calendar { events: Vec<CalendarEvent> },
+    /// A successful macro window, including the UTC date bounds requested.
+    Calendar {
+        events: Vec<CalendarEvent>,
+        from: String,
+        to: String,
+    },
+    /// Stop the watchlist date sweep after an account-wide access/limit error.
+    CalendarBlocked { key: String, error: String },
     /// `key` matches the cache key of the fetch that failed.
     Error { key: String, error: String },
 }
@@ -419,6 +469,7 @@ pub const CALENDAR_KEY: &str = "~calendar";
 /// How far ahead the calendar window reaches. Long enough to always hold the
 /// next CPI and FOMC, short enough to stay one small response.
 pub const CALENDAR_DAYS: i64 = 45;
+pub const CALENDAR_LOOKBACK_DAYS: i64 = 7;
 
 /// Which paginated feed a page fetch targets, each with its score filter.
 enum Feed<'a> {
@@ -522,6 +573,9 @@ pub async fn run(
             Cmd::SetKey(key) => {
                 client = key.and_then(|k| Client::new(k).ok());
                 page50 = None;
+                if tx.send(SourceEvent::Alphai(Event::KeyChanged)).is_err() {
+                    return;
+                }
             }
             Cmd::FetchNews {
                 symbol,
@@ -679,28 +733,23 @@ pub async fn run(
                             ..Default::default()
                         }),
                     },
-                    Err(e) => Event::Error {
-                        key,
-                        error: format!("{e:#}"),
-                    },
+                    Err(e) => calendar_error(key, e),
                 };
                 if tx.send(SourceEvent::Alphai(event)).is_err() {
                     return;
                 }
             }
             Cmd::FetchCalendar { from, to } => {
-                // The calendar garnishes the earnings view, so its failure is
-                // silent: an empty window renders no strip, and the answer
-                // still lands so the app stops waiting on it and does not
-                // retry until the cache ages out (nothing here auto-retries).
-                let events = match &client {
-                    Some(c) => c.calendar(&from, &to).await.unwrap_or_default(),
-                    None => Vec::new(),
+                let key = CALENDAR_KEY.to_string();
+                let Some(client) = &client else {
+                    send_error(&tx, key, "no AlphAI API key configured");
+                    continue;
                 };
-                if tx
-                    .send(SourceEvent::Alphai(Event::Calendar { events }))
-                    .is_err()
-                {
+                let event = match client.calendar(&from, &to).await {
+                    Ok(events) => Event::Calendar { events, from, to },
+                    Err(e) => calendar_error(key, e),
+                };
+                if tx.send(SourceEvent::Alphai(event)).is_err() {
                     return;
                 }
             }
@@ -1174,6 +1223,12 @@ pub struct TickerEarnings {
 }
 
 impl TickerEarnings {
+    pub fn next_report_day(&self) -> Option<NaiveDate> {
+        let day = self.next_report_date.as_deref()?.trim();
+        let parsed = NaiveDate::parse_from_str(day, "%Y-%m-%d").ok()?;
+        (parsed.to_string() == day).then_some(parsed)
+    }
+
     /// The newest read, the one the view opens on.
     pub fn latest(&self) -> Option<&EarningsRead> {
         self.reports.first()
@@ -1375,23 +1430,33 @@ pub struct SpeakerQuote {
 /// One scheduled US macro release, from `GET /api/calendar/`.
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct CalendarEvent {
+    #[serde(default, deserialize_with = "calendar_string")]
+    pub uid: String,
+    #[serde(default, deserialize_with = "calendar_string")]
+    pub event_key: String,
+    #[serde(default, deserialize_with = "calendar_string")]
+    pub reference_period: String,
     #[serde(default)]
+    pub release_stage: Option<String>,
+    #[serde(default)]
+    pub source_url: Option<String>,
+    #[serde(default, deserialize_with = "calendar_string")]
     pub title: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "calendar_string")]
     pub scheduled_at: String,
     /// upcoming / elapsed. Says only that the moment passed, never that the
     /// agency published.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "calendar_string")]
     pub phase: String,
     /// scheduled / postponed / cancelled. Read this before `phase`.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "calendar_string")]
     pub schedule_status: String,
     /// official (printed on the agency's schedule) / inferred (derived from
     /// the documented cadence). Shown, not hidden.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "calendar_string")]
     pub schedule_basis: String,
     /// high / medium / low.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "calendar_string")]
     pub importance: String,
     /// FOMC decisions only: the press conference.
     #[serde(default)]
@@ -1402,7 +1467,45 @@ pub struct CalendarEvent {
     pub has_sep: bool,
 }
 
+// Some schedule fields may be absent on postponed/undated events. Null
+// carries the same lack of information as a missing string, not a bad window.
+fn calendar_string<'de, D: serde::Deserializer<'de>>(
+    d: D,
+) -> std::result::Result<String, D::Error> {
+    Ok(Option::<String>::deserialize(d)?.unwrap_or_default())
+}
+
 impl CalendarEvent {
+    pub fn short_name(&self) -> &str {
+        if self.event_key == "fomc_decision" {
+            return "FOMC";
+        }
+        let title = self.title.split(" (").next().unwrap_or("").trim();
+        // Use the published title for series whose event_key is not known.
+        // These are display abbreviations, never assumptions about a wire enum.
+        for (prefix, short) in [
+            ("FOMC minutes", "minutes"),
+            ("CPI", "CPI"),
+            ("PPI", "PPI"),
+            ("Nonfarm payrolls", "jobs"),
+            ("Employment Situation", "jobs"),
+            ("GDP", "GDP"),
+            ("PCE", "PCE"),
+            ("Retail sales", "retail"),
+            ("Initial jobless claims", "claims"),
+            ("JOLTS", "JOLTS"),
+        ] {
+            if title.starts_with(prefix) {
+                return short;
+            }
+        }
+        if title.is_empty() {
+            "Macro event"
+        } else {
+            title
+        }
+    }
+
     pub fn scheduled(&self) -> Option<DateTime<Utc>> {
         DateTime::parse_from_rfc3339(&self.scheduled_at)
             .ok()
@@ -1927,7 +2030,7 @@ mod tests {
         assert_eq!(fmt_usd("garbage"), "garbage");
     }
 
-    /// Live end-to-end check against the real API (13 requests).
+    /// Live end-to-end check against the real API (14 requests).
     /// Run: ALPHAI_API_KEY=ak_live_… cargo test live_api -- --ignored
     #[tokio::test]
     #[ignore = "live API call; needs ALPHAI_API_KEY"]
@@ -2303,3 +2406,6 @@ mod tests {
         assert_eq!(a.age(now), "");
     }
 }
+
+#[cfg(test)]
+mod calendar_tests;

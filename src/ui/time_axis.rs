@@ -32,6 +32,14 @@ pub fn label(ts: i64, fmt: &str, zone: ChartTimezone, us: bool) -> String {
     }
 }
 
+pub(crate) fn zone_name(zone: ChartTimezone, us: bool) -> &'static str {
+    match zone {
+        ChartTimezone::Exchange if us => "ET",
+        ChartTimezone::Utc => "UTC",
+        _ => "local",
+    }
+}
+
 fn x_at(points: &[(i64, u16)], ts: i64, us: bool) -> u16 {
     let i = points.partition_point(|(t, _)| *t < ts);
     if i == 0 {
@@ -106,11 +114,7 @@ impl TimeAxis {
         us: bool,
         last_ts: i64,
     ) -> Self {
-        let zone_name = match zone {
-            ChartTimezone::Exchange if us => "ET",
-            ChartTimezone::Utc => "UTC",
-            _ => "local",
-        };
+        let zone_name = zone_name(zone, us);
         let mut points: Vec<_> = candles.iter().zip(xs).map(|(c, x)| (c.ts, *x)).collect();
         let (first, _) = points[0];
         let last_x = *xs.last().unwrap();

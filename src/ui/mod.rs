@@ -1,4 +1,5 @@
 pub mod article;
+pub mod calendar;
 pub mod chart;
 pub mod earnings;
 pub mod help;
@@ -36,6 +37,7 @@ pub enum ViewId {
     Earnings,
     Summary,
     Portfolio,
+    Calendar,
 }
 
 /// One footer hint: the keys of `actions` (looked up in the live keymap so
@@ -116,12 +118,17 @@ pub trait View: Sync {
         false
     }
 
+    /// The watchlist agenda and its paced report-date sweep.
+    fn shows_calendar(&self) -> bool {
+        false
+    }
+
     fn render(&self, f: &mut Frame, area: Rect, app: &mut App);
 }
 
 /// Register new display modes here. Order defines the tab cycle and the
 /// 1..9 hotkeys.
-pub static VIEWS: [&dyn View; 8] = [
+pub static VIEWS: [&dyn View; 9] = [
     &split::SplitView,
     &news::NewsView,
     &table::TableView,
@@ -133,6 +140,7 @@ pub static VIEWS: [&dyn View; 8] = [
     // view behind it and break the muscle memory of anyone using them.
     &summary::SummaryView,
     &portfolio::PortfolioView,
+    &calendar::CalendarView,
 ];
 
 /// Index of a view in `VIEWS`. Every `ViewId` is registered exactly once

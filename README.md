@@ -8,9 +8,10 @@ An open-source, Bloomberg-style stock dashboard for the terminal that also
 answers why the price moved. Live quotes and candlestick charts on one side;
 on the other, for the same ticker, AI-scored news with a full analysis of
 each story, the SEC Form 4 insider filings and a structured read of the last
-earnings report. One Rust binary built on [ratatui](https://ratatui.rs), no
-browser tab, and no account needed for the prices. Coming from tickrs or
-ticker? See [how it compares](#how-it-compares).
+earnings report. A watchlist calendar brings upcoming company reports and
+US macro releases into the same workspace. One Rust binary built on
+[ratatui](https://ratatui.rs), no browser tab, and no account needed for the
+prices. Coming from tickrs or ticker? See [how it compares](#how-it-compares).
 
 ![alphai-tui demo: the split dashboard with the quote rail, the news list next to the full AI analysis card, the market-wide scope, a year of SEC Form 4 insider filings, the earnings read, the summary grid and the candlestick chart with moving averages, volume and RSI](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/demo.gif)
 
@@ -20,16 +21,16 @@ alphai-tui NVDA AVGO AAPL MSFT META TSLA AMZN GOOGL BTC-USD
 ```
 
 Quotes and charts run keyless on Yahoo, or on Finnhub or Alpaca with their
-own free keys. The News, Insider and Earnings views run on a free
+own free keys. The News, Insider, Earnings and Calendar views run on a free
 [AlphAI](https://alphai.io?utm_source=alphai-tui&utm_medium=referral) key
 that you paste once in the settings screen. The first run walks you through
 both, and after that a bare `alphai-tui` reopens your watchlist.
 
 ## The screens
 
-Seven views, one keystroke apart (`1` to `7`, or Tab). Every one of them is
-scoped to the ticker selected in the watchlist, and one line under the tabs
-carries that ticker's price into all of them.
+Nine views, one keystroke apart (`1` to `9`, or Tab). Some follow the
+selected ticker; Summary, Portfolio and Calendar cover several names.
+One line under the tabs carries the selected ticker's price into all of them.
 
 ### The quote rail, in every view
 
@@ -42,6 +43,12 @@ long until the next bell, whether the feed is delayed, where the price sits
 between the day's low and high, and, where the source reports them and the
 terminal is wide enough, the year's range and the day's volume. The rest of
 the watchlist follows as percentages.
+
+A flag shows the next high-importance macro event within seven days, or a
+confirmed report date for the selected ticker within seven ET calendar
+days. The ticker's report takes priority. It uses fresh cached dates only;
+the flag never fetches a company's report dates itself. Estimated macro
+dates keep an `est.` label, and postponed or cancelled events do not flag.
 
 So the News, Insider and Earnings views are never a ticker name with no
 price attached, and moving between tickers with the arrow keys is not a
@@ -100,7 +107,7 @@ session, so it costs no width during the trading day.
 
 ### 4 Chart: candles, averages, volume, RSI
 
-![alphai-tui chart view: candlesticks with moving average overlays and a last-price marker, a volume panel colored by candle direction and an RSI panel underneath](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/chart.png)
+![alphai-tui chart view: NVDA daily candles with SMA20 and SMA100 tracking the price swings, matching volume bars and RSI underneath](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/chart.png)
 
 Candlesticks at half-block resolution with a previous-close reference line,
 20 and 100 period moving average overlays threaded through them as thin
@@ -233,6 +240,40 @@ There is no currency conversion here and there is not going to be one: if
 the holdings quote in more than one currency, the total says `mixed
 currencies` rather than pretending the sum means something.
 
+### 9 Calendar: what is scheduled
+
+![alphai-tui calendar: US macro releases and confirmed watchlist report dates in one agenda, with importance, countdowns, source details and report-date coverage](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/calendar.png)
+
+US macro releases and confirmed report dates from your watchlist in one
+agenda: the past seven days and the next 45 days. The cursor starts at the
+first upcoming event, a `now` line separates it from the past, and new
+arrivals keep the event you selected in place. High-importance releases
+and company reports stand out; `estimated`, `postponed` and `cancelled`
+remain explicit even when the terminal is too narrow for the Details column.
+
+`↑` / `↓` select an event, `PgUp` / `PgDn` move ten events, and `Enter`
+opens a macro event's source or the company's Earnings view. That view
+contains published reads, so it may show the previous quarter until a new
+read is available. Calendar is an agenda, not confirmation that a release
+has been published; it has no actual, forecast or previous macro figures.
+
+Macro times follow `[chart] timezone` (ET by default). Company report dates
+stay in ET in every timezone and show `—` for time: the API confirms the
+day, not the hour. A company without a confirmed date simply has no report
+row; this does not mean it will not report. Coverage is partial. Historical
+company dates are limited to the next-report dates still in the cache.
+
+Dates are checked one company at a time while Calendar is open, at least
+four seconds apart. The progress line distinguishes unconfirmed dates,
+unchecked names and failed checks. A failed macro update keeps the last
+successful rows, marked as cached, alongside any available company dates.
+
+`r` refreshes the macro window and resumes missing, stale or failed report
+date checks. It keeps fresh successful company dates, so it is not a full
+watchlist refresh. To recheck one fresh company date, open its Earnings
+view and press `r` there. An access or rate-limit error pauses the date
+sweep until a manual retry, rather than repeating it for every company.
+
 ### Everywhere: help, settings, themes
 
 ![alphai-tui help overlay: the full key table with the config name of every action next to it, drawn over the summary grid](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/help.png)
@@ -243,7 +284,7 @@ keys, poll interval (applied immediately), color theme and where Enter opens
 an article. Save writes all of it, plus the watchlist on screen, to the
 config file. `}` and `{` walk the color presets live, `z` hides the header
 and the footer for a tmux pane that carries its own status bar, and `r`
-refreshes prices and the visible feed.
+refreshes prices and the visible data.
 
 ## How it compares
 
@@ -490,21 +531,24 @@ defaults. API keys can also come from env vars, which win over the config:
 
 | Key | Where | Action |
 |-----|-------|--------|
-| `Tab` / `1`..`8` | everywhere | switch view |
+| `Tab` / `1`..`9` | everywhere | switch view |
 | `↑` `↓` / `j` `k` | table, chart, split | select ticker |
 | `a` | everywhere | add a ticker: type the symbol, `Enter` adds it, `Esc` cancels |
 | `d` | everywhere | remove the selected ticker (the last one stays) |
 | `p` | everywhere | set what you hold of the ticker: `qty avg`, `Enter` saves it to the config, an empty line clears it |
 | `↑` `↓` / `j` `k` | news, insider | scroll articles |
 | `↑` `↓` / `j` `k` | earnings | scroll the read |
+| `↑` `↓` / `j` `k` | calendar | select event |
 | `←` `→` / `h` `l` | news, insider, earnings | switch ticker |
 | `Enter` / `o` | news, insider | open article in browser |
 | `Enter` / `o` | earnings | open the read on alphai.io |
+| `Enter` / `o` | calendar | open macro source or the company's Earnings view |
 | `v` | news, insider | fullscreen article card; scroll with `↑` `↓`, `Esc` closes |
 | `E` | everywhere | draw pre and post market candles too (Yahoo and Alpaca) |
 | `x` | news | flip the list/card layout: side-by-side or stacked |
 | `PgUp` `PgDn` | news | scroll the article card pane |
 | `PgUp` `PgDn` | earnings | page through the read |
+| `PgUp` `PgDn` | calendar | move ten events |
 | `↓` / `j` on the last row | news, insider | load the next page of the feed |
 | `f` | news, split | cycle news scope: selected ticker, whole market, trending |
 | `+` / `-` | news, insider, split | raise / lower the visible feed's score filter (news: relevance, starts at 7; insider: trade size, starts at 4) |
@@ -516,7 +560,7 @@ defaults. API keys can also come from env vars, which win over the config:
 | `b` | chart, split | toggle the volume panel |
 | `n` | chart, split | mark the ticker's cached news on the candles |
 | `t` / `T` | everywhere | cycle candle interval presets forward / back (each interval with a matching history window; the list is configurable as `[chart] presets`) |
-| `r` | everywhere | refresh prices and the visible news view |
+| `r` | everywhere | refresh prices and visible data; Calendar refetches macro and retries missing, stale or failed dates |
 | `z` | everywhere | bare mode: hide the header and footer, giving both rows to the view |
 | `}` / `{` | everywhere | next / previous color preset (session-only until Save) |
 | `s` | everywhere | settings |
@@ -528,7 +572,7 @@ defaults. API keys can also come from env vars, which win over the config:
 alphai-tui is a single self-contained process, so a terminal multiplexer
 (tmux, zellij, screen, or your terminal's own splits) turns it into a
 custom trading workspace: run one instance per pane and switch each pane
-to the view you want with `1`..`7`.
+to the view you want with `1`..`9`.
 
 ```sh
 tmux new-session -d -s market 'alphai-tui --bare NVDA'
@@ -676,8 +720,8 @@ Three things happen here instead:
   impact, confidence, novelty, actionability); insider rows are generated
   from SEC EDGAR Form 4 filings, one row per economic event. The free tier
   (no card) allows 20 requests/min and 100/day. The app is careful with
-  that budget: it fetches only what the visible view needs (the trending
-  scope is one extra request), caches each response for 5 minutes
+  that budget: news and insider feeds fetch only what the visible view needs
+  (the trending scope is one extra request), and cache each response for 5 minutes
   (`[ui] alphai_ttl_secs` in the config changes that), loads
   further pages only when you ask for them, and the article card reuses
   data already fetched with the list. The refresh at the end of that cache
@@ -697,8 +741,20 @@ Three things happen here instead:
   carries the whole history of reads for the ticker and its next
   confirmed report date, which is also what fills the read shown in the
   News card, so opening the card still costs nothing. The macro calendar
-  behind the bottom line of that view is one request for the whole market,
-  cached for six hours; if it fails there is simply no line.
+  is shared by all views, including the quote-rail flag, and costs one
+  request per six hours by default. Calendar checks company dates using
+  the same earnings response, one company at a time, and keeps them for
+  six hours. These intervals are `alphai_ttl_secs * 72`; the Earnings
+  view uses `* 12`. At the minimum setting of 30 seconds, Calendar's
+  interval is 36 minutes, not six hours.
+  Ten companies with Calendar continuously open for 24 hours cost roughly
+  44 requests at the default TTL, including the macro window. Twenty-five
+  cost roughly 104, before other activity, so a larger list needs a longer
+  TTL. There is no daily quota limiter, and restarting loses these caches.
+  The four-second date-check pace limits this sweep, not other requests or
+  other processes using the key. Manual refresh adds a macro request and
+  any missing, stale or failed company checks. Errors wait for a manual
+  retry; successful cached rows remain visible in Calendar.
   Feeds page 20 articles at a time, the most every plan allows (50 on Pro
   keys, detected automatically). Paging back past your plan's
   archive horizon (30 days on Free, 90 on Basic) shows an upgrade hint
@@ -737,7 +793,7 @@ alpaca_key_id = ""
 alpaca_secret = ""
 
 [ui]
-default_view = "split"    # split | news | table | chart | insider | earnings | summary | portfolio
+default_view = "split"    # split | news | table | chart | insider | earnings | summary | portfolio | calendar
 quote_rail = true         # the price line under the tabs
 bare = false              # start with no header and no footer (--bare, z)
 news_layout = "side"      # side | stacked
@@ -920,6 +976,7 @@ src/
     insider.rs   Form 4 rollup + filing list
     insider_chart.rs  log-scale trades scatter + weekly dollar bars
     earnings.rs  structured earnings read + the schedule line
+    calendar.rs  watchlist agenda, report-date progress and event flags
     article.rs   modal full-article card (AI analysis, context)
     settings.rs  modal settings overlay
 ```
@@ -946,8 +1003,8 @@ request-budget guard lives in one file (`app/feeds.rs`).
 1. Implement `ui::View` as a unit struct in a new module under `src/ui/`: a
    stateless `render` over `&mut App`, a new `ViewId` variant, a footer hint
    line, and the capability methods (`feed_shown`, `navigates_articles`,
-   `has_chart_panel`) that opt into the shared key handling and the
-   demand-driven AlphAI fetch. Views never fetch anything themselves.
+   `has_chart_panel`, `shows_earnings`, `shows_calendar`) that opt into shared
+   key handling and demand-driven AlphAI fetching. Views never fetch anything themselves.
 2. Add it to `ui::VIEWS`. Order in that array defines the tab cycle and the
    `1`..`9` hotkeys; the header pills and the footer hints derive from it.
 
@@ -958,7 +1015,8 @@ cargo test          # unit + TestBackend rendering tests
 cargo clippy --all-targets
 cargo fmt --all -- --check
 cargo run -- --once AAPL             # network smoke test without a TTY
-ALPHAI_API_KEY=ak_live_... cargo test live_api -- --ignored   # live API smoke
+ALPHAI_API_KEY=ak_live_... cargo test live_calendar_smoke -- --ignored  # 1 request
+ALPHAI_API_KEY=ak_live_... cargo test live_api -- --ignored   # 14 requests
 ```
 
 CI runs the first three on every push and pull request, on Linux, macOS

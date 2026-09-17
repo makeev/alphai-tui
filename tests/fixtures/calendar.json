@@ -1,0 +1,21 @@
+{
+  "events": [
+    {
+      "uid": "US-FOMC-2026-09-DECISION",
+      "event_key": "fomc_decision",
+      "title": "FOMC rate decision",
+      "reference_period": "2026-09",
+      "release_stage": null,
+      "scheduled_at": "2026-09-16T18:00:00Z",
+      "phase": "upcoming",
+      "schedule_status": "scheduled",
+      "schedule_basis": "official",
+      "importance": "high",
+      "category": "macro_economy",
+      "country": "US",
+      "source_url": "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm",
+      "press_conference_at": "2026-09-16T18:30:00Z",
+      "has_sep": true
+    }
+  ]
+}

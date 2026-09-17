@@ -5,6 +5,22 @@ the crates.io releases; from 0.7.0 on each one is also a git tag and a
 GitHub release with prebuilt binaries. The Homebrew tap, the AUR and the
 apt repository joined later, and carry every version since.
 
+## 0.24.0 - 2026-09-17
+
+- Add `9:Calendar`, combining US macro releases and confirmed watchlist
+  report dates, with countdowns, source links and a cursor that stays on
+  the selected event while new dates arrive. Dates without a time remain
+  dates in ET; estimated, postponed and cancelled events are labelled.
+- Show a fresh upcoming-event flag in the quote rail. A confirmed report
+  date for the selected ticker takes priority over macro releases.
+- Share one cached macro window across all views and check report dates
+  gradually while Calendar is open. Preserve successful rows on an update
+  failure, show partial progress, and pause the sweep on access/limit errors.
+  Calendar refresh retries missing, stale and failed dates while retaining
+  fresh successful company dates.
+- Document Calendar with a screenshot and refresh the chart screenshot
+  with daily candles, moving averages, volume and RSI.
+
 ## 0.23.2 - 2026-09-17
 
 - A bar is its interval at every width. A plot too narrow for the whole

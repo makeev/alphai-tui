@@ -107,7 +107,7 @@ fn head(app: &App, symbol: &str) -> Vec<Span<'static>> {
 fn optional_zones(app: &App, symbol: &str, now: DateTime<Utc>) -> Vec<Vec<Vec<Span<'static>>>> {
     let theme = &app.theme;
     let Some(data) = app.data.get(symbol) else {
-        return Vec::new();
+        return vec![event_zone(app, symbol, now)];
     };
     let quote = &data.quote;
     let color = dir_color(quote, theme);
@@ -161,6 +161,7 @@ fn optional_zones(app: &App, symbol: &str, now: DateTime<Utc>) -> Vec<Vec<Vec<Sp
             Span::styled(spark_line(&closes, SPARK), Style::new().fg(color)),
         ]]);
     }
+    zones.push(event_zone(app, symbol, now));
     // Last, because they are context rather than news: they say where the
     // day sits in the year and how heavily it traded, and a narrow terminal
     // gives their width back to everything above.
@@ -177,6 +178,21 @@ fn optional_zones(app: &App, symbol: &str, now: DateTime<Utc>) -> Vec<Vec<Vec<Sp
         )]]);
     }
     zones
+}
+
+fn event_zone(app: &App, symbol: &str, now: DateTime<Utc>) -> Vec<Vec<Span<'static>>> {
+    let Some(flag) = super::calendar::flag(app, symbol, now) else {
+        return Vec::new();
+    };
+    let style = if flag.urgent {
+        Style::new().fg(app.theme.warn).bold()
+    } else {
+        Style::new().fg(app.theme.accent)
+    };
+    [flag.full, flag.compact]
+        .into_iter()
+        .map(|text| vec![Span::styled(format!("  {text}"), style)])
+        .collect()
 }
 
 /// What this ticker has made its holder, for the rows that are held. It

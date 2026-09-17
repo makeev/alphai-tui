@@ -1,3 +1,5 @@
+mod calendar;
+
 use std::sync::{Arc, RwLock};
 use std::time::Instant;
 
@@ -75,6 +77,17 @@ fn empty_app_with_cmds(
         source_fallback: true,
     });
     (app, alphai_rx)
+}
+
+/// Isolate feed-budget tests from the calendar's independent global fetch.
+fn cache_empty_calendar(app: &mut App) {
+    let today = crate::market::et_time(chrono::Utc::now()).date();
+    app.calendar = Some(crate::app::CalendarSlot {
+        events: Vec::new(),
+        fetched: Instant::now(),
+        from: today - chrono::Duration::days(7),
+        to: today + chrono::Duration::days(46),
+    });
 }
 
 fn current_source(app: &App) -> Arc<dyn crate::source::DataSource> {
@@ -1031,6 +1044,7 @@ fn line_mode_marks_the_news_with_dots() {
 #[test]
 fn chart_marks_never_cost_a_request() {
     let (mut app, mut cmds) = empty_app_with_cmds(vec!["AAPL".into()]);
+    cache_empty_calendar(&mut app);
     app.view_idx = ui::view_index(ui::ViewId::Chart);
     app.ensure_alphai_data();
     assert!(
@@ -2151,6 +2165,7 @@ fn insider_chart_degrades_bars_then_panel() {
 #[test]
 fn insider_score_keys_adjust_own_filter() {
     let (mut app, mut cmds) = empty_app_with_cmds(vec!["AAPL".into()]);
+    cache_empty_calendar(&mut app);
     app.view_idx = ui::view_index(ui::ViewId::Insider);
     let mut bundle = FeedBundle::new(
         vec![filing("Apple insider sold $12.5M of stock", "direct")],
@@ -2404,6 +2419,7 @@ fn x_cycles_news_layout() {
 #[test]
 fn score_keys_adjust_filter_and_refetch() {
     let (mut app, mut cmds) = empty_app_with_cmds(vec!["AAPL".into()]);
+    cache_empty_calendar(&mut app);
     app.view_idx = ui::view_index(ui::ViewId::News);
     let mut bundle = FeedBundle::new(
         vec![
@@ -3021,6 +3037,7 @@ fn merge_keeps_the_row_under_the_cursor() {
 #[test]
 fn poll_error_keeps_the_feed_and_stops_polling() {
     let (mut app, mut cmds) = empty_app_with_cmds(vec!["AAPL".into()]);
+    cache_empty_calendar(&mut app);
     app.view_idx = ui::view_index(ui::ViewId::News);
     app.feeds.insert(
         "AAPL".into(),
@@ -3146,6 +3163,7 @@ fn trending_tick_stays_a_head_refetch() {
 #[test]
 fn ttl_tick_polls_wherever_the_reader_is() {
     let (mut app, mut cmds) = empty_app_with_cmds(vec!["AAPL".into()]);
+    cache_empty_calendar(&mut app);
     app.view_idx = ui::view_index(ui::ViewId::News);
     app.feeds.insert(
         "AAPL".into(),
@@ -3182,6 +3200,7 @@ fn ttl_tick_polls_wherever_the_reader_is() {
 #[test]
 fn head_refresh_still_waits_for_top_row() {
     let (mut app, mut cmds) = empty_app_with_cmds(vec!["AAPL".into()]);
+    cache_empty_calendar(&mut app);
     app.view_idx = ui::view_index(ui::ViewId::News);
     app.feeds.insert(
         "AAPL".into(),
@@ -3578,6 +3597,7 @@ fn settings_save_merge_preserves_file_only_sections() {
 #[test]
 fn insider_tick_polls_and_head_refresh_waits_for_top_row() {
     let (mut app, mut cmds) = empty_app_with_cmds(vec!["AAPL".into()]);
+    cache_empty_calendar(&mut app);
     app.view_idx = ui::view_index(ui::ViewId::Insider);
     let key = alphai::insider_key("AAPL");
     app.feeds.insert(
@@ -4080,7 +4100,12 @@ fn earnings_refresh_touches_only_the_visible_surface() {
         "NVDA".into(),
         FeedBundle::new(vec![article("Kept", "NVDA", 8, "positive")], None, None),
     );
-    app.calendar = Some((Vec::new(), Instant::now()));
+    app.calendar = Some(crate::app::CalendarSlot {
+        events: Vec::new(),
+        fetched: Instant::now(),
+        from: "2026-09-10".parse().unwrap(),
+        to: "2026-11-02".parse().unwrap(),
+    });
     press(&mut app, KeyCode::Char('r'));
     assert!(
         !app.earnings.contains_key("NVDA"),
@@ -4091,8 +4116,8 @@ fn earnings_refresh_touches_only_the_visible_surface() {
         "r dropped a feed it was not showing"
     );
     assert!(
-        app.calendar.is_none(),
-        "r left an empty calendar with no way to retry it"
+        app.calendar.is_some(),
+        "r must not treat an empty successful calendar as a failure"
     );
 
     // A calendar that holds events is not worth a second request: the
@@ -4104,6 +4129,8 @@ fn earnings_refresh_touches_only_the_visible_surface() {
     );
     app.apply_alphai(alphai::Event::Calendar {
         events: vec![alphai::CalendarEvent::default()],
+        from: "2026-09-10".into(),
+        to: "2026-11-02".into(),
     });
     press(&mut app, KeyCode::Char('r'));
     assert!(
