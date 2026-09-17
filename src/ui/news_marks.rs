@@ -71,24 +71,6 @@ pub(crate) fn place<'a>(
         .collect()
 }
 
-/// Map raw candle marks to the displayed buckets, keeping the same
-/// score/time preference when several marked candles share one column.
-pub(crate) fn resample<'a>(marks: Vec<Mark<'a>>, sample_idx: &[usize]) -> Vec<Mark<'a>> {
-    let mut best: Vec<Option<Mark<'a>>> = (0..sample_idx.len()).map(|_| None).collect();
-    for mut mark in marks {
-        let col = sample_idx.partition_point(|&end| end < mark.col);
-        let Some(slot) = best.get_mut(col) else {
-            continue;
-        };
-        mark.col = col;
-        let rank = |m: &Mark| (m.article.score(), m.article.published());
-        if slot.as_ref().is_none_or(|old| rank(old) < rank(&mark)) {
-            *slot = Some(mark);
-        }
-    }
-    best.into_iter().flatten().collect()
-}
-
 /// The mark the bottom border names: the freshest one on screen, which is
 /// the "what just happened" a reader looks for.
 pub(crate) fn latest<'a, 'm>(marks: &'m [Mark<'a>]) -> Option<&'m Mark<'a>> {
@@ -244,25 +226,6 @@ mod tests {
         let marks = place(&articles, &candles, Interval::M5);
         assert_eq!(marks.len(), 1, "one mark per column");
         assert_eq!(marks[0].article.score(), 9);
-    }
-
-    #[test]
-    fn downsampled_marks_keep_bucket_boundaries_and_rank() {
-        let candles = candles(1_000, 300, 5);
-        let articles = vec![
-            row(1_050, 9, "positive"),
-            row(1_350, 9, "negative"), // same bucket/score, newer wins
-            row(1_650, 6, "neutral"),
-            row(2_199, 8, "positive"),  // end of the next bucket
-            row(2_200, 7, "negative"),  // exact start of the final bucket
-            row(2_500, 10, "positive"), // beyond the actual final candle
-        ];
-        let marks = resample(place(&articles, &candles, Interval::M5), &[1, 3, 4]);
-        let placed: Vec<_> = marks
-            .iter()
-            .map(|m| (m.col, m.article.published().unwrap().timestamp()))
-            .collect();
-        assert_eq!(placed, vec![(0, 1_350), (1, 2_199), (2, 2_200)]);
     }
 
     #[test]

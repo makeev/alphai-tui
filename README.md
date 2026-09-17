@@ -133,13 +133,13 @@ combines different sessions or feeds into one candle. These session rules
 apply to US stocks on intraday intervals, including scheduled 13:00 closes
 and 17:00 after-hours closes on half days; crypto remains 24/7.
 
-When the plot is too narrow for every bar, bars merge into larger candles
-on clock boundaries: 10m, 15m, 30m, 1h and so on, counted from the
-session's opening for US stocks, then whole sessions; daily bars merge
-into weeks, months, quarters or years. The title names the size, such as
-`30m candles`, so the narrow chart in the split view and the wide one in
-the chart view explain why they differ. A given size draws the same
-candles at any width, and a new bar only changes the newest candle.
+A bar is its interval at every width. When the plot is too narrow for
+every bar of the window, the newest bars that fit are drawn and the title
+counts the rest: `last 70 of 192 bars`. Bars are never merged into larger
+candles, so the half-width chart in the split view draws the same bars as
+the chart view, fewer of them, and the price axis follows the bars on
+screen. To see more of the window, widen the terminal or pick a coarser
+interval with `t`.
 
 The time axis adapts its label spacing to the terminal width, gives the
 opening and closing bells priority, and puts dates on a second row. US

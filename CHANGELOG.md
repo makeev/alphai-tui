@@ -5,6 +5,17 @@ the crates.io releases; from 0.7.0 on each one is also a git tag and a
 GitHub release with prebuilt binaries. The Homebrew tap, the AUR and the
 apt repository joined later, and carry every version since.
 
+## 0.23.2 - 2026-09-17
+
+- A bar is its interval at every width. A plot too narrow for the whole
+  window now shows its newest bars and counts the rest in the title, such
+  as `last 70 of 192 bars`, instead of merging bars into larger candles,
+  which the chart had done since its first version and 0.23.1 had only
+  labelled. The split view's half-width chart draws the same bars as the
+  chart view, fewer of them, and the price axis follows the bars on
+  screen. To see more of the window, widen the terminal or pick a coarser
+  interval with `t`.
+
 ## 0.23.1 - 2026-09-17
 
 - Volume on Alpaca's IEX mode sits on one scale. Once consolidated

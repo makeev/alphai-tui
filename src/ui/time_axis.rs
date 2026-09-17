@@ -104,7 +104,6 @@ impl TimeAxis {
         sessions: Sessions,
         zone: ChartTimezone,
         us: bool,
-        raw_bars: usize,
         last_ts: i64,
     ) -> Self {
         let zone_name = match zone {
@@ -119,7 +118,7 @@ impl TimeAxis {
             points.push((last_ts, last_x));
         }
         let intraday = interval != Interval::D1;
-        let per_bar = interval.secs() * raw_bars.max(1) as i64 / candles.len().max(1) as i64;
+        let per_bar = interval.secs();
         let spacing = if xs.len() > 1 {
             (last_x - xs[0]) as f64 / (xs.len() - 1) as f64
         } else {
@@ -351,7 +350,6 @@ mod tests {
             Sessions::Extended,
             ChartTimezone::Exchange,
             true,
-            bars.len(),
             bars.last().unwrap().ts,
         );
         assert!(axis.ticks.len() >= 6, "{} ticks", axis.ticks.len());
@@ -384,7 +382,6 @@ mod tests {
                 Sessions::Regular,
                 ChartTimezone::Local,
                 true,
-                bars.len(),
                 bars.last().unwrap().ts,
             );
             let mut buf = Buffer::empty(Rect::new(0, 0, width, 7));

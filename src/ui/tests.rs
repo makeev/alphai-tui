@@ -112,20 +112,24 @@ fn session_backgrounds_and_time_grid_share_all_three_panels() {
     app.view_idx = ui::view_index(ui::ViewId::Chart);
     app.show_news_markers = false;
     app.theme = Theme::resolve(None, Some("catppuccin-mocha"), &mut Vec::new()).0;
+    // One extended day of 15m bars (04:00 to 20:00 ET): 22 pre-market, 26
+    // regular from IEX, 16 after-hours. Bars are never merged, so the wide
+    // terminal must have room for all 64 of them.
+    app.interval = Interval::M15;
     let first = chrono::DateTime::parse_from_rfc3339("2026-09-11T08:00:00Z")
         .unwrap()
         .timestamp();
-    let candles: Vec<_> = (0..192)
+    let candles: Vec<_> = (0..64)
         .map(|i| {
-            let price = 100.0 + i as f64 * 0.02 + (i as f64 / 8.0).sin();
+            let price = 100.0 + i as f64 * 0.05 + (i as f64 / 4.0).sin();
             Candle {
-                ts: first + i * 300,
+                ts: first + i * 900,
                 open: price,
                 high: price + 0.3,
                 low: price - 0.2,
                 close: price + (i as f64 / 3.0).sin() * 0.15,
                 volume: Some(100.0 + (i % 13) as f64 * 100.0),
-                feed: if (66..144).contains(&i) {
+                feed: if (22..48).contains(&i) {
                     PriceFeed::Iex
                 } else {
                     PriceFeed::DelayedSip
@@ -142,11 +146,11 @@ fn session_backgrounds_and_time_grid_share_all_three_panels() {
     );
     for style in [ChartStyle::Candles, ChartStyle::Line] {
         app.chart_style = style;
-        for (width, height) in [(160, 44), (80, 34), (44, 22), (20, 12)] {
+        for (width, height) in [(200, 44), (80, 34), (44, 22), (20, 12)] {
             let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
             terminal.draw(|f| ui::draw(f, &mut app)).unwrap();
             let buffer = terminal.backend().buffer();
-            if width != 160 {
+            if width != 200 {
                 continue;
             }
             let lines: Vec<String> = (0..height)
@@ -1142,18 +1146,42 @@ fn single_venue_volume_is_labelled() {
     assert!(screen.contains("IEX only"), "screen:\n{screen}");
 }
 
-/// A plot too narrow for every bar merges them into larger candles and
-/// names their size, so two widths of one chart explain why they differ.
+/// A bar is its interval at every width. A plot too narrow for the whole
+/// window shows the newest bars and counts the rest in the title; the price
+/// axis follows the bars on screen, not the ones it left out.
 #[test]
-fn chart_title_names_the_merged_candle_size() {
+fn a_narrow_chart_shows_the_newest_bars_and_says_so() {
     let mut app = fake_app();
     app.view_idx = ui::view_index(ui::ViewId::Chart);
     let screen = render_sized(&mut app, 120, 40);
-    assert!(!screen.contains(" candles "), "screen:\n{screen}");
+    assert!(!screen.contains(" of 30 bars "), "screen:\n{screen}");
     assert!(has_candles(&screen), "screen:\n{screen}");
+    // Without the previous close, the axis has only the bars to follow.
+    app.data.get_mut("AAPL").unwrap().quote.prev_close = None;
     let screen = render_sized(&mut app, 50, 40);
-    assert!(screen.contains("m candles "), "screen:\n{screen}");
+    // The 50-column border cuts the title after "last 16 of 30 b".
+    assert!(screen.contains("last 16 of 30"), "screen:\n{screen}");
     assert!(has_candles(&screen), "screen:\n{screen}");
+    // The oldest bars (closes from 200) are off the left edge, so the
+    // bottom price label sits near the newest ones instead of down at 199.
+    assert!(
+        !screen.contains("199."),
+        "axis spans hidden bars:\n{screen}"
+    );
+}
+
+/// The split view's half-width chart draws the same bars as the chart view,
+/// fewer of them: a narrower plot never means larger candles.
+#[test]
+fn split_and_chart_views_draw_the_same_bars() {
+    let mut app = fake_app();
+    app.view_idx = ui::view_index(ui::ViewId::Chart);
+    let chart = render_sized(&mut app, 120, 40);
+    assert!(!chart.contains(" of 30 bars "), "screen:\n{chart}");
+    app.view_idx = ui::view_index(ui::ViewId::Split);
+    let split = render_sized(&mut app, 120, 40);
+    assert!(split.contains(" of 30 bars "), "screen:\n{split}");
+    assert!(has_candles(&split), "screen:\n{split}");
 }
 
 /// Every bar sits under its candle: both panels end in the same column, and
