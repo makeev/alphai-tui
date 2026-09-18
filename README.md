@@ -16,7 +16,7 @@ prices. Coming from tickrs or ticker? See [how it compares](#how-it-compares).
 ![alphai-tui demo: the split dashboard with the quote rail, the news list next to the full AI analysis card, the market-wide scope, a year of SEC Form 4 insider filings, the earnings read, the summary grid and the candlestick chart with moving averages, volume and RSI](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/demo.gif)
 
 ```sh
-brew install makeev/tap/alphai-tui   # also cargo, apt, AUR, or a prebuilt binary
+brew install makeev/tap/alphai-tui   # also cargo, apt, AUR, x-cmd, or a prebuilt binary
 alphai-tui NVDA AVGO AAPL MSFT META TSLA AMZN GOOGL BTC-USD
 ```
 
@@ -355,6 +355,13 @@ sudo apt update && sudo apt install alphai-tui
 
 Single `.deb` files, for an install without the repository, are linked from
 [the repository landing page](https://makeev.github.io/alphai-tui-apt/).
+
+Through [x-cmd](https://www.x-cmd.com/install/alphai-tui/), which picks
+whichever of the methods above your system already has:
+
+```sh
+x install alphai-tui
+```
 
 Prebuilt binaries for macOS, Linux and Windows, no Rust needed:
 
