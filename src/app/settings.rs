@@ -266,6 +266,7 @@ impl App {
                 Ok(src) => {
                     self.set_price_source(src);
                     self.data.clear();
+                    self.data_window.clear();
                     self.from_cache.clear();
                     self.quote_fetched.clear();
                     self.abandoned.clear();

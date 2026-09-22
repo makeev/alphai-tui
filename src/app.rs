@@ -263,6 +263,11 @@ pub struct App {
     pub positions: Vec<Position>,
     pub data: HashMap<String, TickerData>,
     pub errors: HashMap<String, String>,
+    /// The window each entry of `errors` was asked for, so a failure of the
+    /// old window is not read as the new one's until it is actually tried
+    /// (see `window_failed`). Kept beside `errors` rather than in it: the
+    /// message is what every view reads, and tests set it plainly.
+    error_window: HashMap<String, (Range, Interval, Sessions)>,
     /// When a poll changed a symbol's price: (moment, tick was up). Views
     /// pulse the price for `PRICE_FLASH` after it via `price_flash_dir`;
     /// the first data a symbol ever gets sets no flash (nothing changed).
@@ -303,6 +308,12 @@ pub struct App {
     pub interval: Interval,
     /// Whether the chart draws the pre and post market candles too.
     pub sessions: Sessions,
+    /// The window each symbol's candles were fetched for. A preset or
+    /// session switch changes `range`/`interval`/`sessions` at once, but
+    /// the rows only follow when the poller answers, which on a paged
+    /// source takes seconds. Until then the chart draws the rows on their
+    /// own window (see `chart_window`) rather than relabelling them.
+    data_window: HashMap<String, (Range, Interval, Sessions)>,
     pub last_update: Option<DateTime<Local>>,
     pub table_state: TableState,
     /// The portfolio view's own cursor: its rows are the positions, which
@@ -415,6 +426,7 @@ impl App {
             prompt: Prompt::default(),
             data: HashMap::new(),
             errors: HashMap::new(),
+            error_window: HashMap::new(),
             price_flash: HashMap::new(),
             from_cache: HashMap::new(),
             quote_fetched: HashMap::new(),
@@ -430,6 +442,7 @@ impl App {
             range: init.range,
             interval: init.interval,
             sessions: init.sessions,
+            data_window: HashMap::new(),
             last_update: None,
             table_state: TableState::default(),
             chart_style: init.chart.style,
@@ -500,7 +513,35 @@ impl App {
     pub fn seed_cached(&mut self, symbol: String, entry: crate::cache::Entry) {
         self.quote_fetched.insert(symbol.clone(), entry.fetched);
         self.from_cache.insert(symbol.clone(), entry.fetched);
+        // The store only hands out rows saved for the starting window.
+        self.data_window.insert(symbol.clone(), self.window());
         self.data.insert(symbol, entry.data);
+    }
+
+    fn window(&self) -> (Range, Interval, Sessions) {
+        (self.range, self.interval, self.sessions)
+    }
+
+    /// The window to draw `symbol`'s candles on, and whether a different
+    /// one is on its way. Rows are drawn on the window they were fetched
+    /// for: drawn on the new one, 15m bars read as hours and the axis
+    /// extrapolates the wrong step until the poller answers.
+    pub fn chart_window(&self, symbol: &str) -> ((Range, Interval, Sessions), bool) {
+        let current = self.window();
+        let Some(&drawn) = self.data_window.get(symbol) else {
+            return (current, false);
+        };
+        let pending = drawn.0 != current.0
+            || drawn.1 != current.1
+            || (drawn.2 != current.2 && sessions_matter(symbol, current.1));
+        (if pending { drawn } else { current }, pending)
+    }
+
+    /// Whether the window on the keys was tried for `symbol` and refused.
+    /// An error left over from the previous window says nothing about the
+    /// one on its way: after a preset change that symbol is loading again.
+    pub fn window_failed(&self, symbol: &str) -> bool {
+        self.error_window.get(symbol) == Some(&self.window())
     }
 
     /// How old the retained rows are, as a label.
@@ -564,6 +605,7 @@ impl App {
                     return;
                 }
                 self.errors.remove(&symbol);
+                self.error_window.remove(&symbol);
                 self.quote_fetched
                     .insert(symbol.clone(), chrono::Utc::now().timestamp());
                 // A live answer clears the outage clock and retires the
@@ -595,6 +637,8 @@ impl App {
                     );
                 }
                 data.update_current_bar(self.interval);
+                self.data_window
+                    .insert(symbol.clone(), params.unwrap_or(self.window()));
                 self.data.insert(symbol, data);
                 self.last_update = Some(Local::now());
             }
@@ -609,6 +653,7 @@ impl App {
                 {
                     return;
                 }
+                self.error_window.insert(symbol.clone(), self.window());
                 self.errors.insert(symbol, error);
                 self.last_update = Some(Local::now());
                 // One failing ticker is a bad symbol; all of them is the
@@ -653,6 +698,7 @@ impl App {
         self.source_delay = source.delay_note();
         *self.source.write().unwrap() = source;
         self.errors.clear();
+        self.error_window.clear();
         self.source_trouble_since = None;
         self.price_flash.clear();
         self.notice = None;
@@ -1119,7 +1165,9 @@ impl App {
         // row would leave the portfolio view showing "…" until the tick.
         if self.position(&gone).is_none() {
             self.data.remove(&gone);
+            self.data_window.remove(&gone);
             self.errors.remove(&gone);
+            self.error_window.remove(&gone);
             self.price_flash.remove(&gone);
             self.from_cache.remove(&gone);
             self.quote_fetched.remove(&gone);
@@ -1256,16 +1304,25 @@ impl App {
     /// E: draw the pre and post market candles, or stop. Same shape as the
     /// preset cycle, and the same reason for only nudging the price
     /// poller: nothing about the AlphAI feeds changes.
+    ///
+    /// Switching off needs no fetch to look right: dropping the extended
+    /// candles is all a regular-hours answer would change, so the rows are
+    /// trimmed and retagged here and the chart follows the key at once.
+    /// The trim goes by the interval the rows were fetched at, which is not
+    /// the current one while a preset change is still pending.
     fn toggle_sessions(&mut self) {
+        let before = self.window();
         self.sessions = self.sessions.toggled();
-        if self.sessions == Sessions::Regular && self.interval != Interval::D1 {
+        if self.sessions == Sessions::Regular {
             for (symbol, data) in &mut self.data {
-                if crate::market::is_us_equity(symbol) {
+                let window = self.data_window.entry(symbol.clone()).or_insert(before);
+                if sessions_matter(symbol, window.1) {
                     data.candles.retain(|c| {
                         crate::market::window_at(c.ts)
                             .is_some_and(|w| w.session == crate::market::Session::Open)
                     });
                 }
+                window.2 = Sessions::Regular;
             }
         }
         self.push_params();
@@ -1275,6 +1332,14 @@ impl App {
         *self.params.write().unwrap() = (self.range, self.interval, self.sessions);
         self.refresh.notify_one();
     }
+}
+
+/// Whether a ticker's candles differ between regular and extended hours.
+/// Only a US listing's intraday bars do: crypto trades around the clock,
+/// and a daily bar is the regular session either way (the same test
+/// `source::normalize_sessions` makes).
+fn sessions_matter(symbol: &str, interval: Interval) -> bool {
+    interval != Interval::D1 && crate::market::is_us_equity(symbol)
 }
 
 /// Tag an outgoing article link with this client as the traffic source, so

@@ -128,7 +128,7 @@ fn card(f: &mut Frame, area: Rect, app: &App, symbol: &str, selected: bool) {
         f.render_widget(Paragraph::new(msg).block(block), area);
         return;
     };
-    plot(f, area, app, data, block);
+    plot(f, area, app, symbol, data, block);
 }
 
 /// `▶ AAPL 315.42 -0.27%`, the same numbers the rail and the table show.
@@ -173,9 +173,11 @@ fn title_line(app: &App, symbol: &str, selected: bool) -> Line<'static> {
 ///
 /// Renders rather than returns: the widget borrows its point buffer, and
 /// that buffer cannot outlive this call.
-fn plot(f: &mut Frame, area: Rect, app: &App, data: &TickerData, block: Block) {
+fn plot(f: &mut Frame, area: Rect, app: &App, symbol: &str, data: &TickerData, block: Block) {
     let q = &data.quote;
-    let cut = visible_from(&data.candles, app.range);
+    // The range the rows were fetched for, as on the full chart.
+    let ((range, _, _), _) = app.chart_window(symbol);
+    let cut = visible_from(&data.candles, range);
     let points: Vec<(f64, f64)> = data.candles[cut..]
         .iter()
         .enumerate()

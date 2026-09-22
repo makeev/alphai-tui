@@ -73,15 +73,18 @@ impl Alpaca {
     /// minute bars behind it (about 10,000, so two weeks of a liquid name's
     /// extended hours or four of its regular sessions) and `limit` cannot
     /// raise that; the token is the only way further back. A page failing
-    /// after the first keeps what came before it.
+    /// after the first keeps what came before it, and the flag says whether
+    /// the walk got as far as it meant to (false only for such a failure),
+    /// so the caller knows to walk it again.
     async fn bars_pages(
         &self,
         path: &str,
         query: &[(&str, &str)],
         until: Option<i64>,
-    ) -> Result<Vec<AlpacaBar>> {
+    ) -> Result<(Vec<AlpacaBar>, bool)> {
         let mut all = Vec::new();
         let mut token: Option<String> = None;
+        let mut complete = true;
         for _ in 0..MAX_BARS_PAGES {
             let page_token = token.take();
             let mut query = query.to_vec();
@@ -91,7 +94,10 @@ impl Alpaca {
             let page = match self.get_json::<StockBars>(path, &query).await {
                 Ok(page) => page,
                 Err(e) if all.is_empty() => return Err(e),
-                Err(_) => break,
+                Err(_) => {
+                    complete = false;
+                    break;
+                }
             };
             let bars = page.bars.unwrap_or_default();
             let oldest = bars
@@ -105,7 +111,7 @@ impl Alpaca {
                 _ => break,
             }
         }
-        Ok(all)
+        Ok((all, complete))
     }
 
     async fn stock_parts(
@@ -115,7 +121,7 @@ impl Alpaca {
         start: &str,
         feed: &str,
         until: Option<i64>,
-    ) -> (Result<Quote>, Result<Vec<Candle>>) {
+    ) -> (Result<Quote>, Result<(Vec<Candle>, bool)>) {
         let snapshot_path = format!("/v2/stocks/{symbol}/snapshot");
         let snapshot_query = [("feed", feed)];
         // The historical endpoint calls delayed SIP `sip`. Set its end
@@ -157,12 +163,15 @@ impl Alpaca {
             q.timing.extended_feed = provenance;
             Ok(q)
         });
-        let candles = bars.map(|bars| {
+        let candles = bars.map(|(bars, complete)| {
             let mut candles = candles_from_desc(bars);
             for c in &mut candles {
                 c.feed = provenance;
             }
-            normalize_sessions(candles, symbol, interval, Sessions::Extended)
+            (
+                normalize_sessions(candles, symbol, interval, Sessions::Extended),
+                complete,
+            )
         });
         (quote, candles)
     }
@@ -182,7 +191,7 @@ impl Alpaca {
             .await;
         let mut data = TickerData {
             quote: quote?,
-            candles: candles?,
+            candles: candles?.0,
         };
         let now = Utc::now();
         let draw_extended = sessions == Sessions::Extended && interval != Interval::D1;
@@ -243,11 +252,15 @@ impl Alpaca {
             .stock_parts(symbol, interval, &start, "delayed_sip", until)
             .await;
         let sip_failed = quote.is_err() || (history && bars.is_err());
+        // A page refused halfway leaves the older sessions without
+        // consolidated bars; the window is walked again rather than marked.
+        let mut walk_broken = false;
         extended::merge_quote(&mut cached.quote, quote.ok());
-        if let Ok(bars) = bars {
+        if let Ok((bars, complete)) = bars {
             cached.candles = extended::merge_history(&cached.candles, &bars);
             cached.record_volumes(&bars);
-            cached.paged |= until.is_some();
+            cached.paged |= until.is_some() && complete;
+            walk_broken = until.is_some() && !complete;
         }
         // At 04:00 the delayed tape naturally cannot yet have today's PRE.
         // Empty responses during those first 15 minutes are not failures.
@@ -296,7 +309,18 @@ impl Alpaca {
         let cutoff = now.timestamp() - range.secs();
         cached.candles.retain(|c| c.ts >= cutoff);
         cached.volumes = cached.volumes.split_off(&cutoff);
-        self.extended.lock().unwrap().finish(&key, cached.clone());
+        // A refused first answer for a window must not be the chart's for a
+        // whole refresh: it drew the IEX session alone for a minute and
+        // then jumped when the delayed tape arrived. What is kept from an
+        // earlier answer can wait the full minute.
+        let missing = (sip_failed
+            && ((history && cached.candles.is_empty()) || cached.quote.is_none()))
+            || walk_broken;
+        let retry = missing.then(|| Instant::now() + extended::RETRY);
+        self.extended
+            .lock()
+            .unwrap()
+            .finish(&key, cached.clone(), retry);
         cached
     }
 
@@ -694,7 +718,9 @@ mod tests {
 
     /// The bars pages follow `next_page_token` only as far back as asked:
     /// a target inside the first page costs one request, an older one
-    /// follows the token, and no target means the newest page alone.
+    /// follows the token, and no target means the newest page alone. A page
+    /// refused on the way keeps the bars before it but reports the walk as
+    /// unfinished, so the older sessions are asked for again.
     #[tokio::test]
     async fn bars_pages_follow_the_token_back_to_the_target() {
         use serde_json::json;
@@ -705,7 +731,7 @@ mod tests {
         let base = format!("http://{}", listener.local_addr().unwrap());
         let server = tokio::spawn(async move {
             let mut paths = Vec::new();
-            for _ in 0..4 {
+            for _ in 0..6 {
                 let (mut stream, _) = listener.accept().await.unwrap();
                 let mut request = Vec::new();
                 let mut byte = [0; 1];
@@ -715,15 +741,20 @@ mod tests {
                 }
                 let text = String::from_utf8(request).unwrap();
                 let path = text.split_whitespace().nth(1).unwrap().to_string();
-                let body = if path.contains("page_token=p2") {
+                // Not a retried status, so the refusal costs one request.
+                let refused = path.contains("page_token=p2") && path.contains("15Min");
+                let body = if refused {
+                    json!({"message":"refused"})
+                } else if path.contains("page_token=p2") {
                     json!({"bars":[{"t":"2026-09-10T13:30:00Z","c":1.0}],"next_page_token":null})
                 } else {
                     json!({"bars":[{"t":"2026-09-16T13:30:00Z","c":2.0},{"t":"2026-09-15T13:30:00Z","c":1.5}],
                            "next_page_token":"p2"})
                 }
                 .to_string();
+                let status = if refused { "404 Not Found" } else { "200 OK" };
                 let response = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                     body.len()
                 );
                 stream.write_all(response.as_bytes()).await.unwrap();
@@ -741,24 +772,30 @@ mod tests {
         let at = |s: &str| chrono::DateTime::parse_from_rfc3339(s).unwrap().timestamp();
         let path = "/v2/stocks/AAPL/bars";
         let query = [("timeframe", "5Min"), ("sort", "desc")];
-        let newest = source.bars_pages(path, &query, None).await.unwrap();
-        assert_eq!(newest.len(), 2);
-        let covered = source
+        let (newest, complete) = source.bars_pages(path, &query, None).await.unwrap();
+        assert_eq!((newest.len(), complete), (2, true));
+        let (covered, complete) = source
             .bars_pages(path, &query, Some(at("2026-09-15T13:30:00Z")))
             .await
             .unwrap();
-        assert_eq!(covered.len(), 2);
-        let deeper = source
+        assert_eq!((covered.len(), complete), (2, true));
+        let (deeper, complete) = source
             .bars_pages(path, &query, Some(at("2026-09-12T13:30:00Z")))
             .await
             .unwrap();
-        assert_eq!(deeper.len(), 3);
+        assert_eq!((deeper.len(), complete), (3, true));
         assert_eq!(deeper[2].t, "2026-09-10T13:30:00Z");
+        let refused = [("timeframe", "15Min"), ("sort", "desc")];
+        let (kept, complete) = source
+            .bars_pages(path, &refused, Some(at("2026-09-12T13:30:00Z")))
+            .await
+            .unwrap();
+        assert_eq!((kept.len(), complete), (2, false));
         let paths = tokio::time::timeout(std::time::Duration::from_secs(2), server)
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(paths.len(), 4);
+        assert_eq!(paths.len(), 6);
         assert!(
             paths[..3].iter().all(|p| !p.contains("page_token")),
             "{paths:?}"

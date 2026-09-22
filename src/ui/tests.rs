@@ -1631,6 +1631,117 @@ fn range_keys_cycle_presets_and_update_header() {
     assert!(app.data.contains_key("AAPL"));
 }
 
+/// Rows stay on the window they were fetched for until the poller answers
+/// the new one. Drawn on the new window, 5m bars read as 15m ones (axis,
+/// visible range, the step the margin extrapolates) for as long as the
+/// source takes, which on Alpaca is seconds, and then the chart jumped.
+#[test]
+fn a_pending_preset_draws_the_old_rows_on_their_own_window() {
+    let mut app = fake_app();
+    app.view_idx = ui::view_index(ui::ViewId::Chart);
+    let source = current_source(&app);
+    let data = app.data["AAPL"].clone();
+    let answer = |app: &mut App, range, interval| {
+        app.apply(SourceEvent::Data {
+            params: Some((range, interval, Sessions::Regular)),
+            source: source.clone(),
+            symbol: "AAPL".into(),
+            data: data.clone(),
+        })
+    };
+    answer(&mut app, Range::D1, Interval::M5);
+    // A failure of the old window (a throttled poll, say) is not the new
+    // window's: that one has not been asked for yet.
+    app.apply(SourceEvent::Error {
+        params: Some((Range::D1, Interval::M5, Sessions::Regular)),
+        source: source.clone(),
+        symbol: "AAPL".into(),
+        error: "yahoo API 429".into(),
+    });
+    press(&mut app, KeyCode::Char('t'));
+    assert_eq!(
+        app.chart_window("AAPL"),
+        ((Range::D1, Interval::M5, Sessions::Regular), true)
+    );
+    let screen = render(&mut app);
+    assert!(screen.contains("loading 5d / 15m"), "screen:\n{screen}");
+    assert!(!screen.contains("failed"), "screen:\n{screen}");
+    // A refusal for the new window is not left reading as loading.
+    app.apply(SourceEvent::Error {
+        params: Some((Range::D5, Interval::M15, Sessions::Regular)),
+        source: source.clone(),
+        symbol: "AAPL".into(),
+        error: "yahoo API 422".into(),
+    });
+    let screen = render(&mut app);
+    assert!(screen.contains("5d / 15m failed"), "screen:\n{screen}");
+    answer(&mut app, Range::D5, Interval::M15);
+    assert_eq!(
+        app.chart_window("AAPL"),
+        ((Range::D5, Interval::M15, Sessions::Regular), false)
+    );
+    let screen = render(&mut app);
+    assert!(!screen.contains("loading"), "screen:\n{screen}");
+}
+
+/// Switching the extended candles off needs no fetch, so the chart follows
+/// the key at once. Switching them on waits for the poller, and until then
+/// the title says they are loading rather than that they are off.
+#[test]
+fn extended_candles_leave_at_once_and_arrive_with_the_poller() {
+    let mut app = fake_app();
+    app.view_idx = ui::view_index(ui::ViewId::Chart);
+    app.show_news_markers = false;
+    let source = current_source(&app);
+    let open = chrono::DateTime::parse_from_rfc3339("2026-09-11T13:30:00Z")
+        .unwrap()
+        .timestamp();
+    let bar = |ts| Candle {
+        ts,
+        open: 200.0,
+        high: 201.0,
+        low: 199.0,
+        close: 200.5,
+        volume: Some(1000.0),
+        feed: Default::default(),
+    };
+    let regular: Vec<Candle> = (0..30).map(|i| bar(open + i * 300)).collect();
+    // 08:00 ET, pre-market.
+    let extended: Vec<Candle> = std::iter::once(bar(open - 5400))
+        .chain(regular.iter().copied())
+        .collect();
+    let answer = |app: &mut App, sessions, candles| {
+        app.apply(SourceEvent::Data {
+            params: Some((Range::D1, Interval::M5, sessions)),
+            source: source.clone(),
+            symbol: "AAPL".into(),
+            data: TickerData {
+                quote: plain_quote("AAPL", 200.5, Some(199.0), Some("USD")),
+                candles,
+            },
+        })
+    };
+    answer(&mut app, Sessions::Regular, regular);
+
+    press(&mut app, KeyCode::Char('E'));
+    assert!(app.chart_window("AAPL").1);
+    let screen = render(&mut app);
+    assert!(screen.contains("EXT: loading"), "screen:\n{screen}");
+
+    answer(&mut app, Sessions::Extended, extended);
+    assert!(!app.chart_window("AAPL").1);
+    assert_eq!(app.data["AAPL"].candles.len(), 31);
+
+    press(&mut app, KeyCode::Char('E'));
+    assert_eq!(
+        app.chart_window("AAPL"),
+        ((Range::D1, Interval::M5, Sessions::Regular), false)
+    );
+    assert_eq!(app.data["AAPL"].candles.len(), 30);
+    let screen = render(&mut app);
+    assert!(screen.contains("EXT: off"), "screen:\n{screen}");
+}
+
 /// Budget invariant: a range switch must wake only the price poller. The
 /// visible AlphAI bundle stays cached (manual_refresh would drop it and
 /// trigger a refetch on the next draw).

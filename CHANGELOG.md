@@ -5,6 +5,29 @@ the crates.io releases; from 0.7.0 on each one is also a git tag and a
 GitHub release with prebuilt binaries. The Homebrew tap, the AUR and the
 apt repository joined later, and carry every version since.
 
+## 0.24.1 - 2026-09-22
+
+- The `1mo / 60m` preset works on Yahoo again. Yahoo keeps bars finer than
+  an hour for 60 days and refused the three months the preset's indicator
+  warm-up asked for, ever since 0.23.0 started fetching hourly bars as half
+  hours. The request now asks for 59 trading days, which reaches about
+  twelve weeks back. On Alpaca the same request serves as the extended
+  hours fallback, so its refusal had also switched that fallback off for
+  two minutes at a time.
+- A preset or session change no longer redraws the bars already on screen
+  on the new window while the source answers. The chart keeps drawing the
+  rows it has on the window they were fetched for and names the one on its
+  way in the title, `loading 1mo / 60m` or `EXT: loading`, or says the
+  request failed once it has actually been refused. Switching extended
+  hours off takes effect at once. On Alpaca, which pages consolidated
+  history, the old rows had shown for a few seconds as 15m bars on an
+  hourly axis and then jumped.
+- Alpaca's extended hours candles arrive sooner after a refused request. An
+  answer that left the chart with nothing to draw is asked for again after
+  15 seconds instead of a minute, and a history walk that lost a page on
+  the way is walked again rather than marked complete, which had left the
+  older sessions without consolidated bars until a restart.
+
 ## 0.24.0 - 2026-09-17
 
 - Add `9:Calendar`, combining US macro releases and confirmed watchlist

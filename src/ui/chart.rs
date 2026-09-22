@@ -114,7 +114,8 @@ pub fn render_chart(f: &mut Frame, area: Rect, app: &App) {
         return;
     }
 
-    let cut = visible_from(&data.candles, app.range);
+    let drawn = Drawn::of(app, &symbol);
+    let cut = visible_from(&data.candles, drawn.range);
     // An empty volume panel would only steal rows from the price chart:
     // finnhub synthesizes candles from ticks and carries no volume at all.
     let has_volume = app.show_volume && data.candles[cut..].iter().any(|c| c.volume.is_some());
@@ -127,13 +128,36 @@ pub fn render_chart(f: &mut Frame, area: Rect, app: &App) {
     ])
     .areas(area);
 
-    let geom = render_price_candles(f, price_area, app, &symbol, data, cut);
+    let geom = render_price_candles(f, price_area, app, &symbol, data, drawn, cut);
     if let Some(geom) = geom {
         if volume_h > 0 {
             render_volume_candles(f, volume_area, &geom, single_venue, &app.chart, &app.theme);
         }
         if rsi_h > 0 {
             render_rsi(f, rsi_area, data, cut, &geom, &app.chart, &app.theme);
+        }
+    }
+}
+
+/// The window the chart draws a ticker's rows on: the one they were fetched
+/// for, which lags the keys until the poller answers (`App::chart_window`).
+#[derive(Clone, Copy)]
+struct Drawn {
+    range: Range,
+    interval: Interval,
+    sessions: Sessions,
+    /// Another window is on its way; the title says which.
+    pending: bool,
+}
+
+impl Drawn {
+    fn of(app: &App, symbol: &str) -> Self {
+        let ((range, interval, sessions), pending) = app.chart_window(symbol);
+        Self {
+            range,
+            interval,
+            sessions,
+            pending,
         }
     }
 }
@@ -184,11 +208,13 @@ pub(crate) fn dir_color(q: &Quote, theme: &Theme) -> Color {
 /// screen: an average needs `period` candles of history, which short series
 /// (finnhub's growing synthetic one, thin symbols) may not have yet.
 /// `note` is the bar count when the plot is too narrow for the whole
-/// window, so a narrow chart says what it left out.
+/// window, so a narrow chart says what it left out. A pending window is
+/// named too, so the old rows are not read as the new preset's.
 fn chart_title(
     symbol: &str,
     data: &TickerData,
     app: &App,
+    drawn: Drawn,
     flash: Option<bool>,
     note: Option<&str>,
 ) -> Line<'static> {
@@ -212,15 +238,28 @@ fn chart_title(
             Style::new().fg(dir_color(q, theme)),
         ),
     ];
+    // Only the sessions switch pending shows in the EXT label below. A
+    // refused window says so: the footer carries the error, and "loading"
+    // would be a promise the next poll may not keep.
+    let loading = drawn.pending && (drawn.range, drawn.interval) != (app.range, app.interval);
+    let failed = drawn.pending && app.window_failed(symbol);
+    if loading {
+        let window = format!("{} / {}", app.range.as_str(), app.interval.as_str());
+        spans.push(if failed {
+            Span::styled(format!("{window} failed "), Style::new().fg(theme.error))
+        } else {
+            Span::styled(format!("loading {window} "), Style::new().fg(theme.accent))
+        });
+    }
     if let Some(note) = note {
         spans.push(Span::styled(
             format!("{note} "),
             Style::new().fg(theme.flat),
         ));
     }
-    if app.interval != Interval::D1 && market::is_us_equity(symbol) {
+    if drawn.interval != Interval::D1 && market::is_us_equity(symbol) {
         let mut feeds = Vec::new();
-        let cut = visible_from(&data.candles, app.range);
+        let cut = visible_from(&data.candles, drawn.range);
         for c in &data.candles[cut..] {
             if market::window_at(c.ts).is_some_and(|w| w.session != market::Session::Open)
                 && !feeds.contains(&c.feed)
@@ -228,7 +267,14 @@ fn chart_title(
                 feeds.push(c.feed);
             }
         }
-        let text = if app.sessions == Sessions::Regular {
+        let text = if drawn.pending && !loading {
+            if failed {
+                "EXT: failed"
+            } else {
+                "EXT: loading"
+            }
+            .to_string()
+        } else if drawn.sessions == Sessions::Regular {
             "EXT: off".to_string()
         } else if feeds.is_empty() {
             "EXT: no data".to_string()
@@ -326,10 +372,11 @@ fn render_price_candles(
     app: &App,
     symbol: &str,
     data: &TickerData,
+    drawn: Drawn,
     cut: usize,
 ) -> Option<CandleGeom> {
     let q = &data.quote;
-    let draw_extended = app.sessions == Sessions::Extended && app.interval != Interval::D1;
+    let draw_extended = drawn.sessions == Sessions::Extended && drawn.interval != Interval::D1;
     let extended_price = q.extended_price();
     let marker_price = if draw_extended {
         extended_price.unwrap_or_else(|| data.candles.last().map_or(q.price, |c| c.close))
@@ -360,7 +407,7 @@ fn render_price_candles(
         .unwrap() as u16
         + 1;
     if inner.width <= gutter + 2 || inner.height <= 3 {
-        let block = panel.title(chart_title(symbol, data, app, flash, None));
+        let block = panel.title(chart_title(symbol, data, app, drawn, flash, None));
         f.render_widget(block, area);
         return None; // too small: leave the bare block
     }
@@ -385,7 +432,14 @@ fn render_price_candles(
     let sample_idx: Vec<usize> = shown.clone().collect();
     let note =
         (shown.start > 0).then(|| format!("last {} of {} bars", display.len(), visible.len()));
-    let block = panel.title(chart_title(symbol, data, app, flash, note.as_deref()));
+    let block = panel.title(chart_title(
+        symbol,
+        data,
+        app,
+        drawn,
+        flash,
+        note.as_deref(),
+    ));
     let (y_lo, y_hi) = y_range(&display, reference, marker_price);
     let y_labels = y_labels(y_lo, y_hi);
     // Spread the visible history across the candle zone even when only
@@ -400,8 +454,8 @@ fn render_price_candles(
         &display,
         &xs.iter().map(|x| x + body_w / 2).collect::<Vec<_>>(),
         plot,
-        app.interval,
-        app.sessions,
+        drawn.interval,
+        drawn.sessions,
         app.chart.timezone,
         market::is_us_equity(symbol),
         visible.last().unwrap().ts,
@@ -411,7 +465,7 @@ fn render_price_candles(
     // the first of them are dropped by `place`. Read from the cache the News
     // and Split views fill, so this costs nothing.
     let marks = if app.show_news_markers {
-        news_marks::place(app.ticker_articles(symbol), &display, app.interval)
+        news_marks::place(app.ticker_articles(symbol), &display, drawn.interval)
     } else {
         Vec::new()
     };

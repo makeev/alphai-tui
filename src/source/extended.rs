@@ -8,6 +8,10 @@ use crate::domain::{Candle, PriceFeed, Quote, TickerData};
 use crate::market::{self, Session};
 
 pub const REFRESH: Duration = Duration::from_secs(60);
+/// How soon a refresh that came back with nothing to draw is tried again.
+/// Longer than a poll, so a source that keeps refusing costs a couple of
+/// requests per ticker every few polls rather than every one.
+pub const RETRY: Duration = Duration::from_secs(15);
 
 #[derive(Clone, Default)]
 pub struct Supplement {
@@ -73,9 +77,14 @@ impl Cache {
         (Supplement::default(), true)
     }
 
-    pub fn finish(&mut self, key: &str, data: Supplement) {
-        if let Some((_, old)) = self.entries.get_mut(key) {
+    /// Store a refresh. `retry` brings the next one forward, for an answer
+    /// that left the chart with nothing to draw.
+    pub fn finish(&mut self, key: &str, data: Supplement, retry: Option<Instant>) {
+        if let Some((after, old)) = self.entries.get_mut(key) {
             *old = data;
+            if let Some(at) = retry {
+                *after = (*after).min(at);
+            }
         }
     }
 
@@ -307,6 +316,28 @@ mod tests {
         assert_eq!(primary.quote.extended_price_at(now), Some(101.0));
         assert_eq!(primary.quote.extended_reference(), 99.9);
         assert_eq!(primary.quote.timing.extended_feed, PriceFeed::DelayedSip);
+    }
+
+    /// An answer with nothing to draw is asked again sooner than a good one
+    /// is refreshed, and never later than that refresh.
+    #[test]
+    fn an_empty_answer_is_retried_before_the_refresh() {
+        let now = Instant::now();
+        let mut cache = Cache::default();
+        assert!(cache.begin("AAPL:1mo:60m", now).1);
+        cache.finish("AAPL:1mo:60m", Supplement::default(), Some(now + RETRY));
+        assert!(!cache.begin("AAPL:1mo:60m", now + RETRY / 2).1);
+        assert!(cache.begin("AAPL:1mo:60m", now + RETRY).1);
+        // A good answer keeps the full refresh.
+        cache.finish("AAPL:1mo:60m", Supplement::default(), None);
+        assert!(!cache.begin("AAPL:1mo:60m", now + RETRY * 2).1);
+        // A retry never pushes the next refresh back.
+        cache.finish(
+            "AAPL:1mo:60m",
+            Supplement::default(),
+            Some(now + REFRESH * 5),
+        );
+        assert!(cache.begin("AAPL:1mo:60m", now + RETRY + REFRESH).1);
     }
 
     #[test]

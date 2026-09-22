@@ -192,7 +192,7 @@ impl Yahoo {
             "yahoo",
             &url,
             &[
-                ("range", range.as_str()),
+                ("range", range_param(range, interval)),
                 ("interval", interval.as_str()),
                 ("includePrePost", if pre_post { "true" } else { "false" }),
             ],
@@ -338,9 +338,37 @@ struct QuoteBlock {
     volume: Option<Vec<Option<f64>>>,
 }
 
+/// Yahoo keeps bars finer than an hour for 60 days and refuses a calendar
+/// range reaching past that with a 422, which is what the 1mo / 60m preset
+/// asked for: its warm-up widens the fetch to 3mo, and an hour is fetched
+/// as two halves (see `fetch`). A count of days is taken as trading days
+/// and is not refused, so `59d` still reaches about twelve weeks back
+/// (checked 2026-09-22: 30m bars from June 30 on). One minute bars have a
+/// shorter limit of their own and are left alone; no preset uses them.
+fn range_param(range: Range, interval: Interval) -> &'static str {
+    let sub_hour = matches!(
+        interval,
+        Interval::M2 | Interval::M5 | Interval::M15 | Interval::M30
+    );
+    if sub_hour && range.secs() > 60 * 86_400 {
+        "59d"
+    } else {
+        range.as_str()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sub_hour_bars_never_ask_past_yahoos_sixty_days() {
+        assert_eq!(range_param(Range::Mo3, Interval::M30), "59d");
+        assert_eq!(range_param(Range::Mo6, Interval::M5), "59d");
+        assert_eq!(range_param(Range::Mo1, Interval::M15), "1mo");
+        assert_eq!(range_param(Range::Mo3, Interval::M60), "3mo");
+        assert_eq!(range_param(Range::Y2, Interval::D1), "2y");
+    }
 
     #[test]
     fn an_unstamped_fullday_price_cannot_become_todays_premarket() {
