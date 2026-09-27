@@ -5,6 +5,30 @@ the crates.io releases; from 0.7.0 on each one is also a git tag and a
 GitHub release with prebuilt binaries. The Homebrew tap, the AUR and the
 apt repository joined later, and carry every version since.
 
+## 0.25.0 - 2026-09-27
+
+- `a` and `d` save the watchlist to the config straight away, the way a
+  holding is saved. Before, an added ticker was gone on the next start
+  unless Save in the settings screen came first. A session started on
+  tickers from the command line leaves a saved watchlist alone, so that
+  `alphai-tui TSLA` and one keypress cannot replace it, and the footer says
+  the change was not saved.
+- `E` says why when it has nothing to draw: daily candles cover the regular
+  session only, crypto trades around the clock, pre and post market are
+  drawn for US listings only, and Finnhub has no candle history at all. On
+  Finnhub the chart title reads `EXT: n/a` instead of `EXT: no data`, which
+  looked like a gap the next poll might fill.
+- Daily charts on Alpaca's IEX feed draw the consolidated daily bars. IEX
+  is one exchange with a few percent of the tape, so its daily volume was
+  some thirty times too small (0.84M against 30.1M for AAPL on 25
+  September) and its high and low were one venue's. The current day keeps
+  its live IEX close. This costs one request per ticker a minute; if it is
+  refused, the chart keeps IEX's own bars and labels the volume `IEX only`
+  as before.
+- A notice in the footer, such as the one about switching to another price
+  source, now comes before the key hints for its minute on screen. Behind
+  them it started past column 95 and a common terminal cut it off.
+
 ## 0.24.1 - 2026-09-22
 
 - The `1mo / 60m` preset works on Yahoo again. Yahoo keeps bars finer than

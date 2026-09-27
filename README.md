@@ -65,8 +65,10 @@ half. One screen that says what you follow, what it is doing and what is
 being said about it. On very small terminals the feed steps aside.
 
 `a` adds a ticker without leaving the app (type the symbol, Enter), `d`
-drops the selected one. Both are session-only, like every other runtime
-change here; Save in the settings screen writes the watchlist to the config.
+drops the selected one. Both write the watchlist to the config straight
+away, the way a holding is saved. A session started on tickers from the
+command line (`alphai-tui TSLA`) leaves a saved watchlist alone and says
+so in the footer; Save in the settings screen keeps such a list on purpose.
 
 ### 2 News: the story and what it means
 
@@ -118,6 +120,9 @@ simple or exponential, `t` cycles interval presets, and `E` draws the pre
 and post market candles too (Yahoo and Alpaca), enabled by default. The
 chart title keeps the switch beside the source: `EXT: Yahoo (Shift+E: off)`
 or `EXT: off (Shift+E: on)` when hidden. The hint follows custom keybindings.
+Where there is nothing to draw, `E` says why in the footer: daily candles,
+crypto that trades around the clock, a listing outside the US, or Finnhub,
+which has no candle history (its chart title reads `EXT: n/a`).
 Charts start with five days of `15m` candles; set the top-level `range` and
 `interval` in the config to choose another window or size. The header shows
 both values, `5d / 15m (t: change)`, because `t` and `T` cycle forward and
@@ -551,7 +556,7 @@ defaults. API keys can also come from env vars, which win over the config:
 | `Enter` / `o` | earnings | open the read on alphai.io |
 | `Enter` / `o` | calendar | open macro source or the company's Earnings view |
 | `v` | news, insider | fullscreen article card; scroll with `↑` `↓`, `Esc` closes |
-| `E` | everywhere | draw pre and post market candles too (Yahoo and Alpaca) |
+| `E` | everywhere | draw pre and post market candles too (Yahoo and Alpaca); says why when there are none |
 | `x` | news | flip the list/card layout: side-by-side or stacked |
 | `PgUp` `PgDn` | news | scroll the article card pane |
 | `PgUp` `PgDn` | earnings | page through the read |
@@ -654,8 +659,12 @@ get a sourced brief without leaving the terminal.
   Once extended candles are on the chart, regular IEX candles take their
   volume from the same consolidated bars, so both sessions share one
   scale. The newest 15 minutes have no volume bar until the delayed feed
-  covers them. With extended hours off, the panel shows IEX's own counts
-  and labels them `IEX only`.
+  covers them. An intraday chart with extended hours off shows IEX's own
+  counts and labels them `IEX only`. Daily charts take the consolidated
+  daily bars whole, so the price range and the volume are the whole
+  market's, while the current day keeps its live IEX close. That costs one
+  request per ticker a minute, on top of the two per poll. If it is
+  refused, the chart keeps IEX's daily bars and labels them `IEX only`.
 
   Supplemental results are cached for 60 seconds per symbol/window. Empty
   or failed refreshes retain prior session data. A Yahoo IP block pauses
@@ -777,7 +786,7 @@ which is also what AlphAI uses. Finnhub-specific symbols like
 `~/.config/alphai-tui/config.toml` on Linux and macOS (`%APPDATA%` on
 Windows), created by the settings screen with mode 0600 since it can hold
 keys; `--config PATH` points at a different file. Saving the settings also
-persists the watchlist on screen. Every key is optional. A misspelled value
+persists the watchlist on screen, and `a` and `d` write it straight away. Every key is optional. A misspelled value
 in the `[ui]`, `[chart]`, `[theme]` or `[keybindings]` sections prints a
 warning on startup and keeps that entry's default; only a TOML syntax error
 makes the whole file fall back to defaults. The `[ui]` and `[chart]` sections set startup

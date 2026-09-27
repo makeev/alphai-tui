@@ -299,6 +299,9 @@ impl App {
             self.change_alphai_key(key);
         }
 
+        // The list on screen is the saved one from here on, so `a` and `d`
+        // write it through even in a session started from the command line.
+        self.watchlist_saved = true;
         match config::save_at(self.config_path.as_deref(), &cfg) {
             Ok(()) => {
                 self.config = cfg;

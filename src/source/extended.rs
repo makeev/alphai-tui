@@ -178,10 +178,82 @@ pub fn apply(data: &mut TickerData, extra: &Supplement, now: chrono::DateTime<ch
     }
 }
 
+/// Puts consolidated daily bars under an IEX daily chart. IEX is one venue
+/// with a few percent of the tape, so its daily bar understates volume
+/// some thirtyfold and carries that venue's own high and low. A finished
+/// day takes the consolidated bar whole. The day still trading keeps its
+/// live IEX close, since the consolidated bar is fifteen minutes behind,
+/// and takes the rest from the wider tape. A day the delayed feed has not
+/// reached yet loses its volume rather than plot one venue's count beside
+/// the market's.
+pub fn consolidate_daily(
+    candles: &mut [Candle],
+    sip: &[Candle],
+    now: chrono::DateTime<chrono::Utc>,
+) {
+    if sip.is_empty() {
+        return;
+    }
+    let by_ts: HashMap<i64, &Candle> = sip.iter().map(|c| (c.ts, c)).collect();
+    let today = market::et_date(now.timestamp());
+    for c in candles.iter_mut().filter(|c| c.feed == PriceFeed::Iex) {
+        match by_ts.get(&c.ts) {
+            Some(s) if market::et_date(c.ts) == today => {
+                c.open = s.open;
+                c.high = c.high.max(s.high);
+                c.low = c.low.min(s.low);
+                c.volume = s.volume;
+            }
+            Some(s) => *c = **s,
+            None => c.volume = None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::domain::QuoteTiming;
+
+    #[test]
+    fn iex_daily_bars_take_the_consolidated_tape() {
+        let day = |d: u32| at(&format!("2026-09-{d:02}T04:00:00Z")).timestamp();
+        let iex = |ts, price| Candle {
+            volume: Some(1.0),
+            ..bar(ts, PriceFeed::Iex, price)
+        };
+        let sip = |ts, price| Candle {
+            high: price + 5.0,
+            low: price - 5.0,
+            volume: Some(30.0),
+            ..bar(ts, PriceFeed::DelayedSip, price)
+        };
+        let mut candles = vec![
+            iex(day(23), 100.0),
+            iex(day(24), 101.0),
+            iex(day(25), 102.0),
+        ];
+        let now = at("2026-09-25T15:00:00Z");
+
+        // Nothing consolidated came back: IEX stays as it was, labelled.
+        consolidate_daily(&mut candles, &[], now);
+        assert!(candles.iter().all(|c| c.volume == Some(1.0)));
+
+        // The feed has not reached the 24th: that day loses its volume.
+        consolidate_daily(&mut candles, &[sip(day(23), 99.0), sip(day(25), 98.0)], now);
+        let done = candles[0];
+        assert_eq!(done.feed, PriceFeed::DelayedSip);
+        assert_eq!((done.open, done.high, done.close), (99.0, 104.0, 99.0));
+        assert_eq!(done.volume, Some(30.0));
+        assert_eq!(candles[1].volume, None);
+        let today = candles[2];
+        assert_eq!(today.feed, PriceFeed::Iex, "today's close is the live one");
+        assert_eq!(
+            (today.open, today.high, today.low, today.close),
+            (98.0, 103.0, 93.0, 102.0)
+        );
+        assert_eq!(today.volume, Some(30.0));
+    }
 
     fn at(s: &str) -> chrono::DateTime<chrono::Utc> {
         chrono::DateTime::parse_from_rfc3339(s).unwrap().to_utc()

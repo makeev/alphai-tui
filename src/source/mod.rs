@@ -40,6 +40,12 @@ pub trait DataSource: Send + Sync {
     fn delay_note(&self) -> Option<&'static str> {
         None
     }
+
+    /// Whether this source has pre and post market candles for `E` to
+    /// draw. A source without candle history has none to offer.
+    fn extended_candles(&self) -> bool {
+        true
+    }
 }
 
 /// Build a source by name (registry id or alias). Credentials resolve

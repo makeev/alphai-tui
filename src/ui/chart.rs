@@ -274,6 +274,9 @@ fn chart_title(
                 "EXT: loading"
             }
             .to_string()
+        } else if !app.source_extended {
+            // Not "no data", which reads as a gap the next poll may fill.
+            "EXT: n/a".to_string()
         } else if drawn.sessions == Sessions::Regular {
             "EXT: off".to_string()
         } else if feeds.is_empty() {

@@ -323,12 +323,17 @@ fn footer_line(app: &App) -> Paragraph<'static> {
     let mut spans = vec![Span::raw(hints).dim()];
     // What the app did on its own outranks what a source is complaining
     // about: after a fallback the errors are gone anyway, and the notice is
-    // the only place the swap is explained.
+    // the only place the swap is explained. It goes in front of the hints
+    // for its minute, since behind them it started past column 95 and a
+    // common terminal cut it off.
     if let Some(notice) = app.notice() {
-        spans.push(Span::styled(
-            ellipsize(&format!("  {notice}"), 120),
-            Style::new().fg(app.theme.warn).add_modifier(Modifier::BOLD),
-        ));
+        spans.insert(
+            0,
+            Span::styled(
+                ellipsize(&format!(" {notice} "), 120),
+                Style::new().fg(app.theme.warn).add_modifier(Modifier::BOLD),
+            ),
+        );
     } else if let Some((symbol, error)) = app.errors.iter().next() {
         let msg = ellipsize(&format!("  {symbol}: {error}"), 120);
         spans.push(Span::styled(

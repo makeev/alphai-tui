@@ -4997,3 +4997,124 @@ fn the_prompt_ignores_modified_keys_and_clears_on_ctrl_u() {
     assert_eq!(held.qty, 4.0);
     assert_eq!(held.avg_price, 150.0);
 }
+
+/// A ticker added or removed with `a` and `d` is the reader's data, like a
+/// holding: it reaches the config file straight away.
+#[test]
+fn a_and_d_write_the_watchlist_straight_away() {
+    let dir = std::env::temp_dir().join(format!("alphai-tui-watchlist-{}", std::process::id()));
+    let path = dir.join("config.toml");
+    let _ = std::fs::remove_dir_all(&dir);
+    let mut app = fake_app();
+    app.config_path = Some(path.clone());
+
+    press(&mut app, KeyCode::Char('a'));
+    for c in "nvda".chars() {
+        press(&mut app, KeyCode::Char(c));
+    }
+    press(&mut app, KeyCode::Enter);
+    assert!(!app.prompt.open, "error: {:?}", app.prompt.error);
+    let saved = || {
+        let raw = std::fs::read_to_string(&path).unwrap();
+        toml::from_str::<Config>(&raw).unwrap().watchlist
+    };
+    assert_eq!(saved(), vec!["AAPL", "MSFT", "NVDA"]);
+
+    press(&mut app, KeyCode::Char('d'));
+    assert_eq!(saved(), vec!["AAPL", "MSFT"]);
+    assert!(app.notice.is_none(), "{:?}", app.notice);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `alphai-tui TSLA` is a look at one ticker, not a new watchlist: a
+/// keypress in that session must not replace the saved list, and says so.
+#[test]
+fn tickers_from_the_command_line_leave_the_saved_watchlist_alone() {
+    let saved: Vec<String> = vec!["aapl".into(), "MSFT".into()];
+    assert!(crate::app::watchlist_is_saved(&[], &["TSLA".into()]));
+    assert!(crate::app::watchlist_is_saved(
+        &saved,
+        &["AAPL".into(), "MSFT".into()]
+    ));
+    assert!(!crate::app::watchlist_is_saved(&saved, &["TSLA".into()]));
+
+    let dir = std::env::temp_dir().join(format!("alphai-tui-cli-list-{}", std::process::id()));
+    let path = dir.join("config.toml");
+    let _ = std::fs::remove_dir_all(&dir);
+    let mut app = fake_app();
+    app.config_path = Some(path.clone());
+    app.config.watchlist = vec!["TSLA".into()];
+    app.watchlist_saved = false;
+
+    press(&mut app, KeyCode::Char('a'));
+    for c in "NVDA".chars() {
+        press(&mut app, KeyCode::Char(c));
+    }
+    press(&mut app, KeyCode::Enter);
+    assert_eq!(app.symbols, vec!["AAPL", "MSFT", "NVDA"]);
+    assert!(!path.exists(), "nothing was written");
+    let (notice, _) = app.notice.clone().expect("the reader is told");
+    assert!(notice.contains("not saved"), "{notice}");
+    assert_eq!(app.config.watchlist, vec!["TSLA"]);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `E` on a chart it cannot change says why instead of flipping in silence.
+#[test]
+fn extended_hours_explain_why_they_cannot_draw() {
+    // The chart's label agrees: not "no data", which a poll might fill.
+    let mut app = fake_app();
+    app.source_extended = false;
+    app.view_idx = ui::view_index(ui::ViewId::Chart);
+    let screen = render(&mut app);
+    assert!(screen.contains("EXT: n/a"), "screen:\n{screen}");
+
+    let mut app = fake_app();
+    let notice = |app: &App| app.notice.as_ref().map(|(n, _)| n.clone());
+
+    // A US listing on an intraday chart: the key just works.
+    press(&mut app, KeyCode::Char('E'));
+    assert_eq!(notice(&app), None);
+    press(&mut app, KeyCode::Char('E'));
+
+    app.interval = Interval::D1;
+    press(&mut app, KeyCode::Char('E'));
+    assert!(notice(&app).unwrap().contains("Daily candles"));
+    // Read in full on a common terminal: it leads the footer, not trails it.
+    let screen = render_sized(&mut app, 110, 32);
+    let footer = screen.lines().last().unwrap();
+    assert!(footer.contains("pick an intraday preset (t)"), "{footer}");
+    press(&mut app, KeyCode::Char('E'));
+    app.notice = None;
+
+    // Turning it off needs no explanation.
+    press(&mut app, KeyCode::Char('E'));
+    app.notice = None;
+    press(&mut app, KeyCode::Char('E'));
+    assert_eq!(notice(&app), None);
+
+    app.interval = Interval::M5;
+    app.source_extended = false;
+    app.source_name = "finnhub";
+    press(&mut app, KeyCode::Char('E'));
+    let why = notice(&app).unwrap();
+    assert!(why.starts_with("finnhub has no candle history"), "{why}");
+    press(&mut app, KeyCode::Char('E'));
+
+    app.source_extended = true;
+    app.symbols.push("BTC-USD".into());
+    app.selected = 2;
+    app.notice = None;
+    press(&mut app, KeyCode::Char('E'));
+    assert!(notice(&app).unwrap().contains("around the clock"));
+    press(&mut app, KeyCode::Char('E'));
+
+    app.symbols.push("VOD.L".into());
+    app.selected = 3;
+    press(&mut app, KeyCode::Char('E'));
+    assert!(
+        notice(&app)
+            .unwrap()
+            .contains("US listings only, not VOD.L")
+    );
+}

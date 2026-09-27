@@ -38,6 +38,10 @@ impl DataSource for Finnhub {
         "finnhub"
     }
 
+    fn extended_candles(&self) -> bool {
+        false
+    }
+
     /// `sessions` is ignored along with the window: this source has no
     /// candle history at all, only the quotes collected while the app runs.
     async fn fetch(

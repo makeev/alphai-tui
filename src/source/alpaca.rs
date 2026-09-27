@@ -195,14 +195,29 @@ impl Alpaca {
         };
         let now = Utc::now();
         let draw_extended = sessions == Sessions::Extended && interval != Interval::D1;
-        if self.feed == "iex"
-            && market::is_us_equity(symbol)
-            && (draw_extended || market::extended_window(now).is_some())
-        {
-            let earliest = data.candles.first().map(|c| c.ts);
-            let extra = self
-                .supplement(symbol, range, interval, draw_extended, earliest, now)
-                .await;
+        let iex_equity = self.feed == "iex" && market::is_us_equity(symbol);
+        let wants_extra = iex_equity && (draw_extended || market::extended_window(now).is_some());
+        let earliest = data.candles.first().map(|c| c.ts);
+        let (extra, daily) = tokio::join!(
+            async {
+                if wants_extra {
+                    Some(
+                        self.supplement(symbol, range, interval, draw_extended, earliest, now)
+                            .await,
+                    )
+                } else {
+                    None
+                }
+            },
+            async {
+                if iex_equity && interval == Interval::D1 {
+                    self.daily_consolidated(symbol, range, start, now).await
+                } else {
+                    Vec::new()
+                }
+            },
+        );
+        if let Some(extra) = extra {
             // Daily candles stay regular-only, while the extended quote is
             // still useful to the rail and portfolio.
             if interval == Interval::D1 || !draw_extended {
@@ -218,8 +233,66 @@ impl Alpaca {
                 extended::apply(&mut data, &extra, now);
             }
         }
+        // After `apply`, which would read the consolidated bars as extended
+        // ones and strip the IEX volumes it has no counts for.
+        extended::consolidate_daily(&mut data.candles, &daily, now);
         data.candles = normalize_sessions(data.candles, symbol, interval, sessions);
         Ok(data)
+    }
+
+    /// Consolidated daily bars behind an IEX daily chart (see
+    /// `extended::consolidate_daily`). One request, refreshed at most once
+    /// a minute per ticker and window; a single page covers two years of
+    /// daily bars. A refusal keeps the last good answer, and with none the
+    /// chart keeps IEX's own bars and says so.
+    async fn daily_consolidated(
+        &self,
+        symbol: &str,
+        range: Range,
+        start: &str,
+        now: chrono::DateTime<Utc>,
+    ) -> Vec<Candle> {
+        let key = format!("{symbol}:{}:1d:sip", range.as_str());
+        let (cached, due) = self.extended.lock().unwrap().begin(&key, Instant::now());
+        if !due {
+            return cached.candles;
+        }
+        let end = (now - chrono::Duration::minutes(15)).to_rfc3339_opts(SecondsFormat::Secs, true);
+        let query = [
+            ("timeframe", "1Day"),
+            ("start", start),
+            ("end", end.as_str()),
+            ("limit", "10000"),
+            ("sort", "desc"),
+            ("adjustment", "split"),
+            ("feed", "sip"),
+        ];
+        let path = format!("/v2/stocks/{symbol}/bars");
+        let (data, retry) = match self.get_json::<StockBars>(&path, &query).await {
+            Ok(page) => {
+                let mut candles = candles_from_desc(page.bars.unwrap_or_default());
+                for c in &mut candles {
+                    c.feed = PriceFeed::DelayedSip;
+                }
+                let data = extended::Supplement {
+                    candles,
+                    ..Default::default()
+                };
+                (data, None)
+            }
+            Err(_) => {
+                let retry = cached
+                    .candles
+                    .is_empty()
+                    .then(|| Instant::now() + extended::RETRY);
+                (cached, retry)
+            }
+        };
+        self.extended
+            .lock()
+            .unwrap()
+            .finish(&key, data.clone(), retry);
+        data.candles
     }
 
     async fn supplement(

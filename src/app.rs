@@ -304,6 +304,9 @@ pub struct App {
     /// re-read whenever the settings screen swaps the source. The quote
     /// rail badges it so a delayed price is never read as a live one.
     pub source_delay: Option<&'static str>,
+    /// Whether the source has extended-hours candles at all, cached like
+    /// `source_delay` (see `extended_unavailable`).
+    pub source_extended: bool,
     pub range: Range,
     pub interval: Interval,
     /// Whether the chart draws the pre and post market candles too.
@@ -394,6 +397,10 @@ pub struct App {
     /// The watchlist as the price poller sees it; kept in step with
     /// `symbols` by `add_symbol` and `remove_selected_symbol`.
     pub shared_symbols: SharedSymbols,
+    /// Whether `a` and `d` write the watchlist to the config. False for a
+    /// session started on tickers from the command line while the file
+    /// holds a list of its own (see `persist_watchlist`).
+    pub watchlist_saved: bool,
     pub config: Config,
     pub config_path: Option<PathBuf>,
     pub theme: Theme,
@@ -420,7 +427,10 @@ pub struct App {
 impl App {
     pub fn new(init: AppInit) -> Self {
         let source_delay = init.source.read().unwrap().delay_note();
+        let source_extended = init.source.read().unwrap().extended_candles();
+        let watchlist_saved = watchlist_is_saved(&init.config.watchlist, &init.symbols);
         let mut app = Self {
+            watchlist_saved,
             symbols: init.symbols,
             shared_symbols: init.shared_symbols,
             prompt: Prompt::default(),
@@ -439,6 +449,7 @@ impl App {
             view_idx: init.ui.view_idx,
             source_name: init.source_name,
             source_delay,
+            source_extended,
             range: init.range,
             interval: init.interval,
             sessions: init.sessions,
@@ -696,6 +707,7 @@ impl App {
     fn set_price_source(&mut self, source: Arc<dyn crate::source::DataSource>) {
         self.source_name = source.name();
         self.source_delay = source.delay_note();
+        self.source_extended = source.extended_candles();
         *self.source.write().unwrap() = source;
         self.errors.clear();
         self.error_window.clear();
@@ -1079,10 +1091,11 @@ impl App {
         }
     }
 
-    /// Writes a position through and saves it. Unlike every other runtime
-    /// change here it does not wait for Save in the settings screen: a
-    /// quantity and a price someone typed are their data, not a display
-    /// preference, and losing them on quit would read as a bug.
+    /// Writes a position through and saves it. Like the watchlist keys, and
+    /// unlike the display options, it does not wait for Save in the
+    /// settings screen: a quantity and a price someone typed are their
+    /// data, not a display preference, and losing them on quit would read
+    /// as a bug.
     fn apply_position(&mut self, entry: portfolio::Entry) -> Result<(), String> {
         match entry {
             portfolio::Entry::Set {
@@ -1125,13 +1138,36 @@ impl App {
             .map_err(|e| format!("kept for this session only: {e}"))
     }
 
-    /// Adds a symbol to the live watchlist and selects it. The poller reads
-    /// the shared list at the top of its next cycle, and the nudge makes
-    /// that cycle start now instead of up to one interval later.
-    ///
-    /// Session-only, like every other runtime change here (chart options,
-    /// scope, theme): Save in the settings screen writes the watchlist to
-    /// the config.
+    /// Writes the watchlist through after `a` or `d`, the way a holding is:
+    /// a ticker someone added is their data, and losing it on quit read as
+    /// a bug. A session started on tickers from the command line is left
+    /// alone while the file holds another list, or `alphai-tui TSLA` and
+    /// one keypress would replace the saved watchlist with two tickers.
+    /// Save in the settings screen still keeps such a list on purpose.
+    fn persist_watchlist(&mut self) {
+        if !self.watchlist_saved {
+            self.notice = Some((
+                "Tickers from the command line are not saved (s, then Save, keeps them)".into(),
+                Instant::now(),
+            ));
+            return;
+        }
+        self.config.watchlist = self.symbols.clone();
+        if self.config_path.is_none() {
+            return;
+        }
+        if let Err(e) = config::save_at(self.config_path.as_deref(), &self.config) {
+            self.notice = Some((
+                format!("Watchlist kept for this session only: {e}"),
+                Instant::now(),
+            ));
+        }
+    }
+
+    /// Adds a symbol to the live watchlist, selects it and saves the list.
+    /// The poller reads the shared list at the top of its next cycle, and
+    /// the nudge makes that cycle start now instead of up to one interval
+    /// later.
     fn add_symbol(&mut self, symbol: &str) -> Result<(), String> {
         if symbol.is_empty() {
             return Err("type a ticker, e.g. AAPL".into());
@@ -1146,6 +1182,7 @@ impl App {
         self.sync_shared_symbols();
         self.select_symbol(self.symbols.len() - 1);
         self.refresh.notify_one();
+        self.persist_watchlist();
         Ok(())
     }
 
@@ -1159,6 +1196,7 @@ impl App {
         let gone = self.symbols.remove(self.selected);
         self.report_date_retry.remove(&gone);
         self.sync_shared_symbols();
+        self.persist_watchlist();
         // Prices are cheap to fetch again; the AlphAI feeds are not, so
         // their cache survives a removal and a re-add costs no request.
         // A holding keeps its price: it is still polled, and blanking the
@@ -1301,6 +1339,36 @@ impl App {
         self.push_params();
     }
 
+    /// Why `E` cannot change the chart in front of the reader, if it
+    /// cannot. The switch still flips (it is one setting for the session,
+    /// and the next ticker or preset may use it), but a key that does
+    /// nothing visible has to say why.
+    pub fn extended_unavailable(&self) -> Option<String> {
+        let symbol = self.selected_symbol();
+        if !self.source_extended {
+            return Some(format!(
+                "{} has no candle history, so there are no pre or post market candles to draw",
+                self.source_name
+            ));
+        }
+        if self.interval == Interval::D1 {
+            return Some(
+                "Daily candles cover the regular session only, pick an intraday preset (t)".into(),
+            );
+        }
+        if crate::market::is_crypto(symbol) {
+            return Some(format!(
+                "{symbol} trades around the clock, it has no pre or post market"
+            ));
+        }
+        if !crate::market::is_us_equity(symbol) {
+            return Some(format!(
+                "Pre and post market candles are drawn for US listings only, not {symbol}"
+            ));
+        }
+        None
+    }
+
     /// E: draw the pre and post market candles, or stop. Same shape as the
     /// preset cycle, and the same reason for only nudging the price
     /// poller: nothing about the AlphAI feeds changes.
@@ -1313,6 +1381,11 @@ impl App {
     fn toggle_sessions(&mut self) {
         let before = self.window();
         self.sessions = self.sessions.toggled();
+        if self.sessions == Sessions::Extended
+            && let Some(why) = self.extended_unavailable()
+        {
+            self.notice = Some((why, Instant::now()));
+        }
         if self.sessions == Sessions::Regular {
             for (symbol, data) in &mut self.data {
                 let window = self.data_window.entry(symbol.clone()).or_insert(before);
@@ -1332,6 +1405,18 @@ impl App {
         *self.params.write().unwrap() = (self.range, self.interval, self.sessions);
         self.refresh.notify_one();
     }
+}
+
+/// Whether the watchlist a session starts on is the one the file keeps: it
+/// is, unless tickers on the command line replaced a saved list. With no
+/// saved list there is nothing to overwrite, and the first `a` saves the
+/// list on screen.
+pub(crate) fn watchlist_is_saved(saved: &[String], symbols: &[String]) -> bool {
+    saved.is_empty()
+        || saved
+            .iter()
+            .map(|s| s.to_uppercase())
+            .eq(symbols.iter().cloned())
 }
 
 /// Whether a ticker's candles differ between regular and extended hours.
