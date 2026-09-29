@@ -30,11 +30,21 @@ struct CachedPrint {
     value: Option<(f64, i64)>,
 }
 
+const DEFAULT_CHART_URL: &str = "https://query1.finance.yahoo.com/v8/finance/chart";
+
 impl Yahoo {
     pub fn new() -> Result<Self> {
+        // `YAHOO_CHART_URL` points the source at a stand-in, the way
+        // `ALPACA_DATA_URL` does for Alpaca: recording the README media
+        // through a caching proxy costs Yahoo each request once instead of
+        // once per take, and Yahoo blocks an address after about ten.
+        let base = std::env::var("YAHOO_CHART_URL")
+            .ok()
+            .filter(|u| !u.trim().is_empty())
+            .unwrap_or_else(|| DEFAULT_CHART_URL.to_string());
         Ok(Self {
             client: http::client_with(BROWSER_UA, None)?,
-            base: "https://query1.finance.yahoo.com/v8/finance/chart".into(),
+            base,
             extended: Mutex::new(HashMap::new()),
         })
     }

@@ -9,7 +9,7 @@
 //! reach the feed later than they were published, and a mark that lies
 //! about when something happened is worse than no mark at all.
 
-use ratatui::style::{Modifier, Style, Stylize};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
 use crate::alphai::Article;
@@ -31,10 +31,14 @@ pub(crate) struct Mark<'a> {
     /// Index into the candles the chart actually draws.
     pub col: usize,
     pub article: &'a Article,
+    /// The article the reader has open next to the chart.
+    pub focused: bool,
 }
 
 /// At most one mark per column: the highest-scoring article published
-/// inside that candle's slot, the newer one on a tie. Rows older than the
+/// inside that candle's slot, the newer one on a tie. The article with uid
+/// `focus` (the one open in the News card) wins its column outright, since
+/// the point of showing it is to find it. Rows older than the
 /// first candle on screen are dropped rather than clamped to the left edge,
 /// and rows without a parsable timestamp are never placed. A candle ends
 /// after its interval, so overnight gaps and missing recent bars cannot
@@ -43,12 +47,14 @@ pub(crate) fn place<'a>(
     articles: &'a [Article],
     candles: &[Candle],
     interval: Interval,
+    focus: Option<&str>,
 ) -> Vec<Mark<'a>> {
     let Some(first) = candles.first() else {
         return Vec::new();
     };
-    // Column -> (score, published, article); the tuple is the tie-break.
-    let mut best: Vec<Option<(i64, i64, &Article)>> = vec![None; candles.len()];
+    // Column -> (focused, score, published, article); the tuple is the
+    // tie-break.
+    let mut best: Vec<Option<(bool, i64, i64, &Article)>> = vec![None; candles.len()];
     for a in articles {
         let Some(ts) = a.published().map(|t| t.timestamp()) else {
             continue;
@@ -60,14 +66,21 @@ pub(crate) fn place<'a>(
         if ts >= candles[col].ts.saturating_add(interval.secs()) {
             continue;
         }
-        let cand = (a.score(), ts, a);
-        if best[col].is_none_or(|(score, at, _)| (score, at) < (cand.0, cand.1)) {
+        let focused = focus.is_some_and(|uid| !uid.is_empty() && a.original.uid == uid);
+        let cand = (focused, a.score(), ts, a);
+        if best[col].is_none_or(|(f, score, at, _)| (f, score, at) < (cand.0, cand.1, cand.2)) {
             best[col] = Some(cand);
         }
     }
     best.into_iter()
         .enumerate()
-        .filter_map(|(col, slot)| slot.map(|(_, _, article)| Mark { col, article }))
+        .filter_map(|(col, slot)| {
+            slot.map(|(focused, _, _, article)| Mark {
+                col,
+                article,
+                focused,
+            })
+        })
         .collect()
 }
 
@@ -136,8 +149,8 @@ pub(crate) fn headline(
     }
     Some(Line::from(vec![
         Span::styled(format!(" {ch}"), style),
-        Span::styled(prefix, Style::new().dim()),
-        Span::raw(ellipsize(&a.original.title, room)).dim(),
+        Span::styled(prefix, theme.subtle()),
+        Span::styled(ellipsize(&a.original.title, room), theme.subtle()),
         Span::raw(" "),
     ]))
 }
@@ -185,7 +198,7 @@ mod tests {
             row(2_300, 7, "negative"), // after the last candle's open: candle 4
             row(1_000, 7, "neutral"),  // exactly on the first candle
         ];
-        let marks = place(&articles, &candles, Interval::M5);
+        let marks = place(&articles, &candles, Interval::M5, None);
         let cols: Vec<usize> = marks.iter().map(|m| m.col).collect();
         assert_eq!(cols, vec![0, 1, 4]);
     }
@@ -194,7 +207,7 @@ mod tests {
     fn history_older_than_the_window_is_dropped_not_clamped() {
         let candles = candles(1_000, 300, 3);
         let old = [row(900, 9, "positive")];
-        let marks = place(&old, &candles, Interval::M5);
+        let marks = place(&old, &candles, Interval::M5, None);
         assert!(marks.is_empty(), "an older row must not stick to the edge");
     }
 
@@ -202,7 +215,7 @@ mod tests {
     fn news_after_the_last_candle_is_not_pinned_to_old_history() {
         let candles = candles(1_000, 300, 3);
         let articles = vec![row(1_899, 6, "positive"), row(1_900, 9, "negative")];
-        let marks = place(&articles, &candles, Interval::M5);
+        let marks = place(&articles, &candles, Interval::M5, None);
         assert_eq!(marks.len(), 1);
         assert_eq!(marks[0].article.score(), 6);
     }
@@ -212,7 +225,7 @@ mod tests {
         let mut candles = candles(1_000, 300, 2);
         candles.extend(self::candles(90_000, 300, 2));
         let articles = vec![row(2_000, 9, "positive")];
-        assert!(place(&articles, &candles, Interval::M5).is_empty());
+        assert!(place(&articles, &candles, Interval::M5, None).is_empty());
     }
 
     #[test]
@@ -223,7 +236,7 @@ mod tests {
             row(1_100, 9, "negative"), // the one that matters
             row(1_200, 6, "neutral"),
         ];
-        let marks = place(&articles, &candles, Interval::M5);
+        let marks = place(&articles, &candles, Interval::M5, None);
         assert_eq!(marks.len(), 1, "one mark per column");
         assert_eq!(marks[0].article.score(), 9);
     }
@@ -248,7 +261,7 @@ mod tests {
     fn the_headline_yields_on_a_narrow_chart() {
         let candles = candles(1_000, 300, 2);
         let articles = vec![row(1_050, 9, "positive")];
-        let marks = place(&articles, &candles, Interval::M5);
+        let marks = place(&articles, &candles, Interval::M5, None);
         let mark = latest(&marks).unwrap();
         let theme = Theme::default();
         assert!(headline(mark, "AAPL", 40, &theme).is_none());

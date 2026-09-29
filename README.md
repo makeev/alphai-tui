@@ -13,7 +13,7 @@ US macro releases into the same workspace. One Rust binary built on
 [ratatui](https://ratatui.rs), no browser tab, and no account needed for the
 prices. Coming from tickrs or ticker? See [how it compares](#how-it-compares).
 
-![alphai-tui demo: the split dashboard with the quote rail, the news list next to the full AI analysis card, the market-wide scope, a year of SEC Form 4 insider filings, the earnings read, the summary grid and the candlestick chart with moving averages, volume and RSI](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/demo.gif)
+![alphai-tui demo: the split dashboard with the quote rail, the news view with the chart over the list and the full AI analysis card beside it, the story read in place under the chart, the market-wide scope, a year of SEC Form 4 insider filings, the earnings read, the summary grid and the candlestick chart with moving averages, volume and RSI](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/demo.gif)
 
 ```sh
 brew install makeev/tap/alphai-tui   # also cargo, apt, AUR, x-cmd, or a prebuilt binary
@@ -31,10 +31,12 @@ both, and after that a bare `alphai-tui` reopens your watchlist.
 Nine views, one keystroke apart (`1` to `9`, or Tab). Some follow the
 selected ticker; Summary, Portfolio and Calendar cover several names.
 One line under the tabs carries the selected ticker's price into all of them.
+The screenshots use the `dracula` preset and `[ui] borders = "none"`,
+tinted panels in place of the default frame lines.
 
 ### The quote rail, in every view
 
-![alphai-tui quote rail: symbol and price, the day's change, the pre-market print measured against the close, what the holding in that ticker has made, the session badge with a countdown to the opening bell, the feed delay and the day range with the price marked in it](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/rail.png)
+![alphai-tui quote rail: symbol and price, the day's change, what the holding in that ticker has made, the session badge with a countdown to the opening bell, the day range with the price marked in it, a sparkline and the rest of the watchlist](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/rail.png)
 
 Price, the change on the day, the extended-hours print measured against the
 regular close, what you are up or down on the ticker if you hold any of it,
@@ -58,11 +60,13 @@ off, and a terminal under 12 rows gives the row back to the view.
 
 ### 1 Split: the default view
 
-![alphai-tui split view before the US open: the watchlist with change, extended-hours change and sparklines, a candlestick chart with moving averages, and the scored news feed underneath](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/split.png)
+![alphai-tui split view: a full-width candlestick chart with moving averages, news marks and shaded pre-market and after-hours sessions on top, the watchlist and the scored news feed side by side underneath](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/split.png)
 
-The watchlist and the chart in the top half, the news feed in the bottom
-half. One screen that says what you follow, what it is doing and what is
-being said about it. On very small terminals the feed steps aside.
+The chart across the top half, the watchlist and the news feed side by
+side in the bottom half. One screen that says what you follow, what it is
+doing and what is being said about it; the chart gets the full width, so
+it shows twice the candles a half-width one could. On very small terminals
+the feed steps aside and the watchlist and the chart share the row.
 
 `a` adds a ticker without leaving the app (type the symbol, Enter), `d`
 drops the selected one. Both write the watchlist to the config straight
@@ -72,7 +76,7 @@ so in the footer; Save in the settings screen keeps such a list on purpose.
 
 ### 2 News: the story and what it means
 
-![alphai-tui news view: the article list on the left, the full AI analysis card on the right with sentiment, price impact, trading value, context, entities and a contrarian view](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/news.png)
+![alphai-tui news view: the ticker's chart over the article list with the selected story marked on it, and the full AI analysis card on the right with sentiment, price impact, trading value and context](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/news.png)
 
 Every article carries a per-ticker analysis: the expected price impact and
 the confidence behind it, relevance and novelty scores, how actionable it
@@ -88,9 +92,16 @@ when the rows below them are newer: a story reaches the feed a while after
 it was published, and at its publish position it would land below the fold
 and never be seen.
 
-`x` flips the layout between side-by-side and list-over-card, `v` blows the
-card up over the screen, `Enter` opens the article in the browser, and down
-on the last row loads the next page.
+The ticker's chart sits over the list and the card beside them. The article
+you are reading is the highlighted mark on the chart and the chart's bottom
+line names it, so the story and the move it came with are on one screen.
+That needs a terminal at least 120 columns wide and the ticker scope;
+elsewhere the list and the card stand side by side. `x` cycles to list over
+card and to list beside card without the chart, and the News layout row in
+the settings screen saves the choice. `v` opens the article for reading:
+under the chart in that layout, over the whole screen in the others.
+`Enter` opens the article in the browser, and down on the last row loads
+the next page.
 
 ![alphai-tui news view in the market-wide scope: filings marked 8-K and 6-K, insider rows, reprints collapsed with an outlet count, and an earnings read available for the selected filing](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/market.png)
 
@@ -109,7 +120,7 @@ session, so it costs no width during the trading day.
 
 ### 4 Chart: candles, averages, volume, RSI
 
-![alphai-tui chart view: NVDA daily candles with SMA20 and SMA100 tracking the price swings, matching volume bars and RSI underneath](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/chart.png)
+![alphai-tui chart view: NVDA 15-minute candles across the pre-market, regular and after-hours sessions, each shaded apart, with SMA20 and SMA100, news marks, matching volume bars and RSI underneath](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/chart.png)
 
 Candlesticks at half-block resolution with a previous-close reference line,
 20 and 100 period moving average overlays threaded through them as thin
@@ -170,7 +181,7 @@ after-hours quote even if the first new trade has not arrived yet.
 
 ### 5 Insider: what the people inside the company did
 
-![alphai-tui insider view: a year of Broadcom Form 4 events as a log-scale scatter over weekly dollar bars, the filing stream underneath and the selected filing broken down in the detail pane](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/insider.png)
+![alphai-tui insider view: a year of Broadcom Form 4 events as a log-scale scatter over weekly dollar bars, the filing stream underneath and the selected filing's full card beside it](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/insider.png)
 
 SEC Form 4 activity for the selected ticker: what its own officers and
 directors did with their shares. A 12-month rollup (buys against
@@ -181,11 +192,13 @@ Every event in the window is a triangle placed by date on a log dollar
 scale (`▲` buy, `▼` sale, a hollow `▽` for shares sold back to the issuer,
 dimmed when the trade ran under a plan), with weekly buy and sell dollar
 bars underneath. The mark of the filing selected in the list renders
-inverted, so the list and the chart always point at each other, and the
-detail pane adds what share of the insider's stake the event moved, how many
-tranches the filing folded into it and whether it was filed late. `g` cycles
-the window between 3 months, 12 months and off; `+` and `-` filter the
-stream by trade size.
+inverted, so the list and the chart always point at each other. Beside the
+list, the selected filing's full card: the trade with shares, price and
+code, who made it, the AI read, and what share of the insider's stake the
+event moved, how many tranches the filing folded into it and whether it was
+filed late. `v` hides the card for a full-width list and brings it back.
+`g` cycles the window between 3 months, 12 months and off; `+` and `-`
+filter the stream by trade size.
 
 ### 6 Earnings: the filing, read
 
@@ -557,7 +570,7 @@ defaults. API keys can also come from env vars, which win over the config:
 | `Enter` / `o` | calendar | open macro source or the company's Earnings view |
 | `v` | news, insider | fullscreen article card; scroll with `↑` `↓`, `Esc` closes |
 | `E` | everywhere | draw pre and post market candles too (Yahoo and Alpaca); says why when there are none |
-| `x` | news | flip the list/card layout: side-by-side or stacked |
+| `x` | news | cycle the layout: chart over the list, stacked, or side-by-side |
 | `PgUp` `PgDn` | news | scroll the article card pane |
 | `PgUp` `PgDn` | earnings | page through the read |
 | `PgUp` `PgDn` | calendar | move ten events |
@@ -812,9 +825,9 @@ alpaca_secret = ""
 default_view = "split"    # split | news | table | chart | insider | earnings | summary | portfolio | calendar
 quote_rail = true         # the price line under the tabs
 bare = false              # start with no header and no footer (--bare, z)
-news_layout = "side"      # side | stacked
+news_layout = "chart"     # chart | stacked | side (also a row in the settings screen)
 news_scope = "ticker"     # ticker | market | trending
-borders = "rounded"       # panel frames: rounded | plain
+borders = "rounded"       # frame lines: rounded | plain, or none for tinted panels (also a settings row)
 news_min_score = 7        # minimum relevance score in news feeds, 1 to 10
 insider_min_score = 4     # insider feed filter; the score tracks trade size
 insider_chart = "3m"      # insider trades chart window at start: 3m | 12m | off
@@ -872,7 +885,27 @@ yourself (or letting `p` overwrite the line).
 preset = "catppuccin-mocha"
 ```
 
-![alphai-tui cycling through its color presets: catppuccin mocha, macchiato and frappe, dracula, gruvbox and nord](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/themes.gif)
+Each preset on a terminal wearing the matching palette (`default` on a plain
+dark one, since it takes the terminal's own colors), with
+`borders = "none"`:
+
+<table>
+<tr>
+<td align="center"><img src="https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/gallerydefault.png" alt="alphai-tui split view in the default preset" width="100%"><br><code>default</code></td>
+<td align="center"><img src="https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/gallerydracula.png" alt="alphai-tui split view in the dracula preset" width="100%"><br><code>dracula</code></td>
+<td align="center"><img src="https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/gallerycatppuccinmocha.png" alt="alphai-tui split view in the catppuccin-mocha preset" width="100%"><br><code>catppuccin-mocha</code></td>
+</tr>
+<tr>
+<td align="center"><img src="https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/gallerycatppuccinmacchiato.png" alt="alphai-tui split view in the catppuccin-macchiato preset" width="100%"><br><code>catppuccin-macchiato</code></td>
+<td align="center"><img src="https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/gallerycatppuccinfrappe.png" alt="alphai-tui split view in the catppuccin-frappe preset" width="100%"><br><code>catppuccin-frappe</code></td>
+<td align="center"><img src="https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/gallerygruvboxdark.png" alt="alphai-tui split view in the gruvbox-dark preset" width="100%"><br><code>gruvbox-dark</code></td>
+</tr>
+<tr>
+<td align="center"><img src="https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/gallerynord.png" alt="alphai-tui split view in the nord preset" width="100%"><br><code>nord</code></td>
+<td align="center"><img src="https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/gallerycatppuccinlatte.png" alt="alphai-tui split view in the catppuccin-latte preset" width="100%"><br><code>catppuccin-latte</code></td>
+<td align="center"><img src="https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/gallerygruvboxlight.png" alt="alphai-tui split view in the gruvbox-light preset" width="100%"><br><code>gruvbox-light</code></td>
+</tr>
+</table>
 
 `}` and `{` walk the presets live, `--theme catppuccin-mocha` picks one
 for a single run, and the Theme row in the settings screen (`s`) does
@@ -881,9 +914,11 @@ both: `←` `→` cycle it with a live preview, Save writes it here.
 Available: `default`, `catppuccin-mocha`, `catppuccin-macchiato`,
 `catppuccin-frappe`, `catppuccin-latte`, `dracula`, `gruvbox-dark`,
 `gruvbox-light`, `nord`. Presets are written in hex, so they want a
-terminal with 24-bit color. Regular-session backgrounds remain the
-terminal's own background; the extended-session tints follow the palette.
-`default` uses ANSI foregrounds and subtle RGB session backgrounds;
+terminal with 24-bit color. With `borders = "none"` they tint the panels
+one step off the palette's background, the regular session sits on that
+tint, and the pre-market and after-hours bands are drawn from it, so the
+three stay apart. `default` uses ANSI foregrounds, no panel tint and
+subtle RGB session backgrounds;
 `session_shading = false` preserves a fully transparent chart background. The two
 light ones (`catppuccin-latte`, `gruvbox-light`) expect a light terminal
 background.
@@ -917,7 +952,18 @@ sma_slow = "magenta"     # slow moving average overlay
 rsi_line = "cyan"        # RSI line
 ref_line = "darkgray"    # previous close and RSI 30/70 reference lines
 border = "reset"         # panel frames; reset keeps the terminal's foreground
+text = "reset"           # body text on tinted panels; reset keeps the terminal's foreground
+subtle = "reset"         # sources, ages, axis labels, key hints; reset means the terminal's dim
+faint = "reset"          # separators and inactive text; reset means the terminal's dim
+selection = "reset"      # background of the cursor row; reset means reverse video
+surface = "reset"        # panel background (borders = "none"); reset paints none
 ```
+
+The presets fill the last five from their own palettes: secondary text in
+the family's subtext shade, a cursor row that keeps each column's color,
+and a panel tint one step off the background. With `default` they follow
+the terminal, which is the only way to stay readable on both a dark and a
+light background.
 
 ### Custom keybindings
 
@@ -961,8 +1007,8 @@ The AlphAI response cache (5 minutes), the feed page sizes, the 2 second
 poll floor and the chart warm-up factors are fixed. They keep the app a
 fair citizen of the free API tiers, and a config knob for them would turn
 an innocent-looking file into an abuse vector. `ALPACA_FEED`,
-`ALPHAI_API_URL` and `ALPACA_DATA_URL` stay env-only debug overrides for
-the same reason.
+`ALPHAI_API_URL`, `ALPACA_DATA_URL` and `YAHOO_CHART_URL` stay env-only
+debug overrides for the same reason.
 
 ## Architecture
 

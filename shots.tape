@@ -8,10 +8,12 @@
 # for the feeds, the earnings reads and the macro calendar. The company
 # dates are fetched one at a time while Calendar is open.
 #
-# The app wears catppuccin-mocha and so does the terminal: the app paints
-# foreground colors only, so the two have to agree. 2400x1300 at font size
-# 28 gives a 137x37 terminal, wide enough for the side-by-side news layout
-# and sharp on a retina README.
+# The app wears dracula and so does the terminal: the gutters between the
+# tinted panels are the terminal's own background, so the two have to
+# agree. 2400x1300 at font size 28 gives a 137x37 terminal, wide enough for
+# the chart-over-list news layout (120 columns) and sharp on a retina
+# README. The window is 5d / 15m rather than daily bars: news marks and
+# the pre-market and after-hours shading need intraday candles.
 #
 # Two vhs quirks are load-bearing here. A path with a dash or a slash in it
 # fails to parse, so the outputs are plain names under assets/. And a
@@ -22,7 +24,7 @@
 
 Output assets/out.gif
 
-Set Theme "Catppuccin Mocha"
+Set Theme "Dracula"
 Set FontSize 28
 Set Width 2400
 Set Height 1300
@@ -31,6 +33,10 @@ Set Framerate 4
 Set TypingSpeed 20ms
 
 Hide
+# The throwaway config below holds an API key: keep it private from the
+# moment it exists.
+Type "umask 077"
+Enter
 Type "clear"
 Enter
 # The Portfolio view (and the two extra columns in the table) need
@@ -39,7 +45,7 @@ Enter
 # watchlist and real positions are private, and these shots are published.
 # Every ticker here is already on the watchlist, so they cost no extra
 # requests.
-Type `printf '[keys]\n' > /tmp/alphaishot.toml`
+Type `printf '[ui]\nborders = "none"\n\n[keys]\n' > /tmp/alphaishot.toml`
 Enter
 Type `grep -m1 ^alphai.= ~/.config/alphai-tui/config.toml >> /tmp/alphaishot.toml`
 Enter
@@ -47,17 +53,19 @@ Type `printf '\n[[positions]]\nsymbol = "NVDA"\nqty = 120\navg_price = 118.40\n\
 Enter
 Type `clear`
 Enter
-Type "env -u NO_COLOR ./target/release/alphai-tui --config /tmp/alphaishot.toml --theme catppuccin-mocha --source yahoo --every 900 --range 6mo --interval 1d NVDA AVGO AAPL MSFT META TSLA AMZN GOOGL MU COST BTC-USD"
+Type "env -u NO_COLOR ./target/release/alphai-tui --config /tmp/alphaishot.toml --theme dracula --source yahoo --every 900 --range 5d --interval 15m NVDA AVGO AAPL MSFT META TSLA AMZN GOOGL MU COST BTC-USD"
 Enter
 Sleep 14s
 Show
 Sleep 1s
 
-# 1:Split, the default view: watchlist and chart over the scored feed.
+# 1:Split, the default view: the chart across the top, the watchlist and
+# the scored feed side by side under it.
 Screenshot assets/split.png
 Sleep 5s
 
-# 2:News for the selected ticker, list next to the full analysis card.
+# 2:News for the selected ticker: the chart over the list, the full
+# analysis card beside them, the selected story marked on the chart.
 Type "2"
 Sleep 7s
 Down
@@ -65,7 +73,8 @@ Sleep 3s
 Screenshot assets/news.png
 Sleep 5s
 
-# v blows the card up to full screen.
+# v reads the story in place: the chart stays, the card takes the list's
+# room.
 Type "v"
 Sleep 3s
 Screenshot assets/article.png
@@ -93,9 +102,10 @@ Sleep 3s
 Screenshot assets/table.png
 Sleep 5s
 
-# 4:Chart, daily candles with enough history for both moving averages.
-# The visible bars keep their daily interval, even if the window is wider
-# than the terminal. Extended hours are already enabled by default.
+# 4:Chart, 15-minute candles across the pre-market, regular and
+# after-hours sessions, with both moving averages, volume and RSI. The
+# visible bars keep their interval, even if the window is wider than the
+# terminal. Extended hours are enabled by default.
 Type "4"
 Sleep 4s
 Screenshot assets/chart.png

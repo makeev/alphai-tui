@@ -13,7 +13,7 @@
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
-use ratatui::style::{Style, Stylize};
+use ratatui::style::Style;
 use ratatui::symbols;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Axis, Block, Chart, Dataset, GraphType, Paragraph};
@@ -123,7 +123,7 @@ fn card(f: &mut Frame, area: Rect, app: &App, symbol: &str, selected: bool) {
     let Some(data) = app.data.get(symbol) else {
         let msg = match app.errors.get(symbol) {
             Some(e) => Line::from(e.clone()).style(Style::new().fg(theme.error)),
-            None => Line::from("…").dim(),
+            None => Line::from("…").style(app.theme.subtle()),
         };
         f.render_widget(Paragraph::new(msg).block(block), area);
         return;
@@ -162,7 +162,7 @@ fn title_line(app: &App, symbol: &str, selected: bool) -> Line<'static> {
                 spans.push(Span::raw(" "));
             }
         }
-        None => spans.push(Span::raw(" ").dim()),
+        None => spans.push(Span::raw(" ").style(app.theme.subtle())),
     }
     Line::from(spans)
 }
@@ -184,7 +184,10 @@ fn plot(f: &mut Frame, area: Rect, app: &App, symbol: &str, data: &TickerData, b
         .map(|(i, c)| (i as f64, c.close))
         .collect();
     if points.len() < 2 {
-        f.render_widget(Paragraph::new(Line::from("…").dim()).block(block), area);
+        f.render_widget(
+            Paragraph::new(Line::from("…").style(app.theme.subtle())).block(block),
+            area,
+        );
         return;
     }
 
@@ -204,6 +207,7 @@ fn plot(f: &mut Frame, area: Rect, app: &App, symbol: &str, data: &TickerData, b
             .data(&points),
     ])
     .block(block)
+    .style(app.theme.fill())
     .x_axis(Axis::default().bounds([0.0, x_hi]))
     .y_axis(Axis::default().bounds([lo - pad, hi + pad]));
     f.render_widget(chart, area);

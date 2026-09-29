@@ -6,8 +6,8 @@ use crate::keymap::Action;
 use crate::ui::{Hint, View, ViewId};
 use crate::ui::{chart, news, table};
 
-/// Below this body height the news half is dropped so the table and chart
-/// keep usable space on tiny terminals.
+/// Below this body height the news strip is dropped and the table and the
+/// chart share the row, so both keep usable space on tiny terminals.
 const NEWS_MIN_BODY_HEIGHT: u16 = 16;
 
 pub struct SplitView;
@@ -58,19 +58,26 @@ impl View for SplitView {
         true
     }
 
+    /// The chart across the full width of the top half, where it shows
+    /// twice the candles a half-width chart could; the watchlist and the
+    /// news strip share the bottom half. A short watchlist used to leave
+    /// half of its panel empty under the chart's full height.
     fn render(&self, f: &mut Frame, area: Rect, app: &mut App) {
-        let top = if area.height >= NEWS_MIN_BODY_HEIGHT {
-            let [top, bottom] =
-                Layout::vertical([Constraint::Percentage(50), Constraint::Percentage(50)])
+        if area.height < NEWS_MIN_BODY_HEIGHT {
+            let [left, right] =
+                Layout::horizontal([Constraint::Percentage(45), Constraint::Percentage(55)])
                     .areas(area);
-            news::render_panel(f, bottom, app);
-            top
-        } else {
-            area
-        };
+            table::render_table(f, left, app);
+            chart::render_chart(f, right, app);
+            return;
+        }
+        let [top, bottom] =
+            Layout::vertical([Constraint::Percentage(50), Constraint::Percentage(50)]).areas(area);
+        chart::render_chart(f, top, app);
         let [left, right] =
-            Layout::horizontal([Constraint::Percentage(45), Constraint::Percentage(55)]).areas(top);
+            Layout::horizontal([Constraint::Percentage(45), Constraint::Percentage(55)])
+                .areas(bottom);
         table::render_table(f, left, app);
-        chart::render_chart(f, right, app);
+        news::render_panel(f, right, app);
     }
 }

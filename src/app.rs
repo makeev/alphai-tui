@@ -90,6 +90,9 @@ impl NewsScope {
 pub struct ArticleOverlay {
     pub open: bool,
     pub scroll: u16,
+    /// Set by the view during a frame when it drew the card in place (the
+    /// News chart layout), so `ui::draw` skips the fullscreen one.
+    pub inline: bool,
 }
 
 /// Which line the one-line prompt is taking.
@@ -125,22 +128,50 @@ pub struct HelpOverlay {
 }
 
 /// Where the News view puts the article card pane relative to the list
-/// (x cycles). Session-only, like the chart options.
+/// (x cycles, and so does the settings row). Seeded from
+/// `[ui] news_layout`; Save in the settings screen writes it back.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum NewsLayout {
     /// List on the left, card on the right.
-    #[default]
     Side,
+    /// Side, plus the ticker's chart above the list with the selected
+    /// article marked on it: the story and the move it went with on one
+    /// screen. Ticker scope on a wide terminal only; elsewhere it reads as
+    /// Side, since a market-wide story has no one chart to belong to.
+    #[default]
+    Chart,
     /// List on top, card below.
     Stacked,
 }
 
 impl NewsLayout {
+    /// Every layout in cycle order: the default first.
+    pub const ALL: [Self; 3] = [Self::Chart, Self::Stacked, Self::Side];
+
     pub fn next(self) -> Self {
+        self.step(1)
+    }
+
+    /// The neighbour in cycle order, `dir` 1 forward and -1 back, wrapping.
+    pub fn step(self, dir: isize) -> Self {
+        let n = Self::ALL.len() as isize;
+        let i = Self::ALL.iter().position(|l| *l == self).unwrap_or(0) as isize;
+        Self::ALL[(i + dir).rem_euclid(n) as usize]
+    }
+
+    /// The name `[ui] news_layout` spells it with.
+    pub fn name(self) -> &'static str {
         match self {
-            Self::Side => Self::Stacked,
-            Self::Stacked => Self::Side,
+            Self::Side => "side",
+            Self::Chart => "chart",
+            Self::Stacked => "stacked",
         }
+    }
+
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|l| l.name().eq_ignore_ascii_case(name.trim()))
     }
 }
 
@@ -360,6 +391,13 @@ pub struct App {
     pub insider_min_score: u8,
     /// Window of the Insider view's chart panel (g cycles off/3m/12m).
     pub insider_chart: InsiderChartWindow,
+    /// The Insider view's card column beside the filing list; v toggles it.
+    /// Session-only, on at start.
+    pub insider_card: bool,
+    /// Set by the Insider view each frame: whether the terminal is wide
+    /// enough for that column, so v knows whether to toggle it or fall back
+    /// to the fullscreen card.
+    pub insider_card_fits: bool,
     /// Whether the quote rail is drawn (`[ui] quote_rail`).
     pub show_rail: bool,
     /// Bare mode (`z`, `--bare`, `[ui] bare`): the header and footer give
@@ -473,6 +511,8 @@ impl App {
             news_min_score: init.ui.news_min_score,
             insider_min_score: init.ui.insider_min_score,
             insider_chart: init.ui.insider_chart,
+            insider_card: true,
+            insider_card_fits: false,
             show_rail: init.ui.quote_rail,
             bare: init.ui.bare,
             earnings: HashMap::new(),
@@ -873,12 +913,8 @@ impl App {
             Action::PageDown if earnings_view => {
                 self.earnings_scroll = self.earnings_scroll.saturating_add(10)
             }
-            Action::PageUp if self.view_id() == ui::ViewId::News => {
-                self.card_scroll = self.card_scroll.saturating_sub(10)
-            }
-            Action::PageDown if self.view_id() == ui::ViewId::News => {
-                self.card_scroll = self.card_scroll.saturating_add(10)
-            }
+            Action::PageUp if news_view => self.card_scroll = self.card_scroll.saturating_sub(10),
+            Action::PageDown if news_view => self.card_scroll = self.card_scroll.saturating_add(10),
             Action::CycleLayout if self.view_id() == ui::ViewId::News => {
                 self.news_layout = self.news_layout.next();
                 self.card_scroll = 0;
@@ -899,12 +935,18 @@ impl App {
                     open_url(&url);
                 }
             }
+            // Insider: v shows and hides the card column beside the list,
+            // where there is room for one.
+            Action::Card if self.view_id() == ui::ViewId::Insider && self.insider_card_fits => {
+                self.insider_card = !self.insider_card;
+                self.card_scroll = 0;
+            }
             Action::Card
                 if news_view && self.visible_articles().is_some_and(|list| !list.is_empty()) =>
             {
                 self.article_overlay = ArticleOverlay {
                     open: true,
-                    scroll: 0,
+                    ..Default::default()
                 };
             }
             Action::CycleScope if news_feed => {
@@ -1276,11 +1318,11 @@ impl App {
     /// from `[ui] borders` and does not belong to the preset. Session-only
     /// until Save writes the name into the config.
     pub(crate) fn set_theme(&mut self, name: &'static str) {
-        let border_type = self.theme.border_type;
+        let panels = self.theme.panels;
         let mut warnings = Vec::new();
         let (mut theme, name) =
             Theme::resolve(self.config.theme.as_ref(), Some(name), &mut warnings);
-        theme.border_type = border_type;
+        theme.panels = panels;
         self.theme = theme;
         self.theme_name = name;
     }

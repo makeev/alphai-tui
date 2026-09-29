@@ -8,7 +8,7 @@
 use chrono::{Datelike, Days, NaiveDate};
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::style::{Modifier, Style, Stylize};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
@@ -89,14 +89,18 @@ pub fn render(
     let block = theme
         .panel()
         .title(title(&in_window, label, theme))
-        .title_bottom(Line::from(" ▲ buy · ▼ sell · ▽ to issuer · dim = plan ").dim());
+        .title_bottom(
+            Line::from(" ▲ buy · ▼ sell · ▽ to issuer · dim = plan ").style(theme.subtle()),
+        );
     let inner = block.inner(area);
     f.render_widget(block, area);
 
     if in_window.is_empty() {
         f.render_widget(
-            Paragraph::new(Line::from(format!("no Form 4 events in the last {label}")).dim())
-                .centered(),
+            Paragraph::new(
+                Line::from(format!("no Form 4 events in the last {label}")).style(theme.subtle()),
+            )
+            .centered(),
             Rect {
                 y: inner.y + inner.height / 2,
                 height: 1,
@@ -132,7 +136,7 @@ pub fn render(
     };
 
     let buf = f.buffer_mut();
-    let dim = Style::new().dim();
+    let dim = theme.subtle();
 
     // Decade labels: top and bottom always, the middle decade when distinct.
     let row_of = |exp: f64| plot.y + value_row(10f64.powf(exp), lo_exp, hi_exp, SCATTER_ROWS);
@@ -232,14 +236,14 @@ fn title(events: &[&TradeEvent], label: &str, theme: &Theme) -> Line<'static> {
         Style::new().fg(theme.accent).add_modifier(Modifier::BOLD),
     )];
     if buys > 0.0 {
-        spans.push(Span::raw("· ").dim());
+        spans.push(Span::styled("· ", theme.faint()));
         spans.push(Span::styled(
             format!("▲ {} ", fmt_usd(&buys.to_string())),
             Style::new().fg(theme.pos),
         ));
     }
     if sells > 0.0 {
-        spans.push(Span::raw("· ").dim());
+        spans.push(Span::styled("· ", theme.faint()));
         spans.push(Span::styled(
             format!("▼ {} ", fmt_usd(&sells.to_string())),
             Style::new().fg(theme.neg),
@@ -249,7 +253,7 @@ fn title(events: &[&TradeEvent], label: &str, theme: &Theme) -> Line<'static> {
         let pct = (plans * 100 + events.len() / 2) / events.len();
         spans.push(Span::styled(
             format!("· {} events · {pct}% plan ", events.len()),
-            Style::new().dim(),
+            theme.subtle(),
         ));
     }
     Line::from(spans)
@@ -403,7 +407,7 @@ fn render_bars(
         let text = fmt_usd(&vmax.to_string());
         let len = text.chars().count() as u16;
         if len < gutter {
-            buf.set_string(area.x - 1 - len, area.y, &text, Style::new().dim());
+            buf.set_string(area.x - 1 - len, area.y, &text, theme.subtle());
         }
     }
 }

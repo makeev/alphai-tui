@@ -18,7 +18,7 @@ mod time_axis;
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
-use ratatui::style::{Modifier, Style, Stylize};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
@@ -179,11 +179,12 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     if rail_h > 0 {
         rail::render(f, rail_area, app);
     }
+    app.article_overlay.inline = false;
     VIEWS[app.view_idx].render(f, body, app);
     if chrome_h > 0 {
         f.render_widget(footer_line(app), footer);
     }
-    if app.article_overlay.open {
+    if app.article_overlay.open && !app.article_overlay.inline {
         article::render(f, app);
     }
     if app.help.open {
@@ -225,7 +226,7 @@ pub(crate) fn centered(r: Rect, width: u16, height: u16) -> Rect {
 fn header_line(app: &App, width: u16) -> Paragraph<'static> {
     let mut spans = vec![
         Span::styled(" alphai-tui ", Style::new().bold().fg(app.theme.accent)),
-        Span::raw(format!("· {} ", app.source_name)).dim(),
+        Span::styled(format!("· {} ", app.source_name), app.theme.subtle()),
     ];
     let key = app.keymap.labels(&[Action::NextPreset]);
     let window = format!("{} / {}", app.range.as_str(), app.interval.as_str());
@@ -257,7 +258,7 @@ fn header_line(app: &App, width: u16) -> Paragraph<'static> {
         let style = if active {
             Style::new().fg(app.theme.accent_text).bg(app.theme.accent)
         } else {
-            Style::new().dim()
+            app.theme.subtle()
         };
         let label = if compact && !active {
             format!(" {} ", i + 1)
@@ -273,10 +274,10 @@ fn header_line(app: &App, width: u16) -> Paragraph<'static> {
             + interval.chars().count()
             <= width as usize
         {
-            spans.push(Span::raw(status.to_string()).dim());
+            spans.push(Span::styled(status.to_string(), app.theme.subtle()));
         }
     }
-    spans.push(Span::raw(interval).dim());
+    spans.push(Span::styled(interval, app.theme.subtle()));
     Paragraph::new(Line::from(spans))
 }
 
@@ -320,7 +321,7 @@ fn footer_line(app: &App) -> Paragraph<'static> {
     } else {
         hints_text(app)
     };
-    let mut spans = vec![Span::raw(hints).dim()];
+    let mut spans = vec![Span::styled(hints, app.theme.subtle())];
     // What the app did on its own outranks what a source is complaining
     // about: after a fallback the errors are gone anyway, and the notice is
     // the only place the swap is explained. It goes in front of the hints

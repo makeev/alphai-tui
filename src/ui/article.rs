@@ -33,7 +33,7 @@ pub fn render(f: &mut Frame, app: &mut App) {
     f.render_widget(Clear, area);
     let block = app
         .theme
-        .panel()
+        .modal()
         .title(app.theme.heading(" Article "))
         .border_style(Style::new().fg(app.theme.accent));
     let earnings = app.find_earnings_by_uid(&a.original.uid);
@@ -54,9 +54,62 @@ pub fn render_pane(
     scroll: &mut u16,
     theme: &Theme,
 ) {
+    render_pane_with(
+        f,
+        area,
+        article,
+        symbol,
+        earnings,
+        None,
+        "· pgup/pgdn scroll · v expand ",
+        scroll,
+        theme,
+    );
+}
+
+/// The card pane with the caller's own key hint and, for Form 4 filings,
+/// the extras the chart bundle knows (stake moved, tranches, late filing)
+/// appended to the meta line.
+#[allow(clippy::too_many_arguments)]
+pub fn render_pane_with(
+    f: &mut Frame,
+    area: Rect,
+    article: Option<&Article>,
+    symbol: &str,
+    earnings: Option<&EarningsRead>,
+    extra: Option<String>,
+    hint: &str,
+    scroll: &mut u16,
+    theme: &Theme,
+) {
+    let block = theme.panel().title(news::hint_title(" card ", hint, theme));
+    let Some(a) = article else {
+        f.render_widget(block, area);
+        return;
+    };
+    let mut lines = card_lines(a, symbol, earnings, theme);
+    if let Some(extra) = extra {
+        // The meta line is the second one; the extras belong at its end.
+        let meta = news::meta_line(a, symbol).join(" · ");
+        lines[1] = Line::from(format!("{meta} · {extra}")).style(theme.subtle());
+    }
+    render_card(f, area, block, lines, scroll);
+}
+
+/// The card read in place in the News chart layout (v there): the full
+/// width under the chart, scrolled by the overlay's own keys.
+pub fn render_reading(
+    f: &mut Frame,
+    area: Rect,
+    article: Option<&Article>,
+    symbol: &str,
+    earnings: Option<&EarningsRead>,
+    scroll: &mut u16,
+    theme: &Theme,
+) {
     let block = theme.panel().title(news::hint_title(
-        " card ",
-        "· pgup/pgdn scroll · v full ",
+        " article ",
+        "· ↑↓ scroll · ⏎ open · v back ",
         theme,
     ));
     let Some(a) = article else {
@@ -101,7 +154,7 @@ fn card_lines(
 ) -> Vec<Line<'static>> {
     let mut lines = vec![
         Line::from(a.original.title.clone()).bold(),
-        Line::from(news::meta_line(a, symbol).join(" · ")).dim(),
+        Line::from(news::meta_line(a, symbol).join(" · ")).style(theme.subtle()),
     ];
     if !a.original.summary.is_empty() {
         lines.push(Line::from(""));
@@ -147,12 +200,12 @@ fn card_lines(
                 alphai::short_metric(revenue.1)
             )));
         }
-        lines.push(Line::from("  press 6 for the full read").dim());
+        lines.push(Line::from("  press 6 for the full read").style(theme.subtle()));
     } else if alphai::is_earnings_filing(a) {
         lines.push(Line::from(""));
         lines.push(Line::from(vec![
             Span::styled("Earnings read", Style::new().fg(theme.accent)),
-            Span::raw(" · press 6").dim(),
+            Span::styled(" · press 6", theme.subtle()),
         ]));
     }
 
@@ -200,7 +253,7 @@ fn card_lines(
                 lines.push(Line::from(format!("  {}", trade.join(" "))));
             }
             if !who.is_empty() {
-                lines.push(Line::from(format!("  {}", who.join(" · "))).dim());
+                lines.push(Line::from(format!("  {}", who.join(" · "))).style(theme.subtle()));
             }
         }
     }
@@ -217,14 +270,14 @@ fn card_lines(
             )];
             head.push(sentiment_span(i.sentiment.as_deref(), theme));
             if let Some(c) = &i.confidence {
-                head.push(Span::raw(format!(" · {c} confidence")).dim());
+                head.push(Span::styled(format!(" · {c} confidence"), theme.subtle()));
             }
             lines.push(Line::from(head));
             if let Some(p) = &i.price_impact_prediction {
                 lines.push(Line::from(format!("  price: {p}")));
             }
             if let Some(text) = i.summary.as_ref().or(i.reasoning.as_ref()) {
-                lines.push(Line::from(format!("  {text}")).dim());
+                lines.push(Line::from(format!("  {text}")));
             }
         }
 
@@ -271,10 +324,10 @@ fn card_lines(
                     format!("{}{kind}{desc}", e.name)
                 })
                 .collect();
-            body.push(Line::from(format!("  entities: {}", entities.join("; "))).dim());
+            body.push(Line::from(format!("  entities: {}", entities.join("; "))));
         }
         if let Some(m) = &ctx.market_relevance_summary {
-            body.push(Line::from(format!("  market: {m}")).dim());
+            body.push(Line::from(format!("  market: {m}")));
         }
         if !body.is_empty() {
             lines.push(Line::from(""));
@@ -365,7 +418,7 @@ fn verdict_span(verdict: &str, theme: &Theme) -> Span<'static> {
     let style = match verdict {
         "strong" | "solid" => Style::new().fg(theme.pos),
         "weak" => Style::new().fg(theme.neg),
-        _ => Style::new().dim(),
+        _ => theme.subtle(),
     };
     Span::styled(format!(" {verdict}"), style)
 }
@@ -374,7 +427,7 @@ fn sentiment_span(sentiment: Option<&str>, theme: &Theme) -> Span<'static> {
     match sentiment {
         Some("positive") => Span::styled(" ▲ positive", Style::new().fg(theme.pos)),
         Some("negative") => Span::styled(" ▼ negative", Style::new().fg(theme.neg)),
-        Some(other) => Span::raw(format!(" · {other}")).dim(),
+        Some(other) => Span::styled(format!(" · {other}"), theme.subtle()),
         None => Span::raw(""),
     }
 }

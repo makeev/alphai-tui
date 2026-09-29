@@ -14,7 +14,8 @@ use crossterm::event::{KeyCode, KeyEvent};
 use crate::config::{self, ALPHAI_KEY_FIELD, Config, KeyField};
 use crate::source::{make_source, registry};
 
-use super::App;
+use super::{App, NewsLayout};
+use crate::theme::Panels;
 
 /// State of the settings overlay; the cursor walks `settings_rows()`.
 #[derive(Default)]
@@ -36,6 +37,12 @@ pub struct SettingsState {
     /// Name of the color preset on screen; applies live as it cycles, and
     /// Save writes it to `[theme] preset`.
     pub theme_choice: &'static str,
+    /// The News layout on screen; applies live as it cycles, and Save
+    /// writes it to `[ui] news_layout`.
+    pub news_layout_choice: NewsLayout,
+    /// The panel look on screen; applies live as it cycles, and Save
+    /// writes it to `[ui] borders`.
+    pub borders_choice: Panels,
     pub message: Option<String>,
 }
 
@@ -50,6 +57,10 @@ pub enum SettingsRow {
     PollEvery,
     /// Where Enter opens a news article.
     NewsOpen,
+    /// The News view layout (cycles the same list as the x key, live).
+    NewsLayout,
+    /// Tinted panels or frame lines (live).
+    Borders,
     /// The color preset (cycles the same list as the p key, live).
     ThemeChoice,
     /// The save button.
@@ -72,6 +83,8 @@ pub fn settings_rows() -> &'static [SettingsRow] {
         rows.push(SettingsRow::Key(&ALPHAI_KEY_FIELD));
         rows.push(SettingsRow::PollEvery);
         rows.push(SettingsRow::NewsOpen);
+        rows.push(SettingsRow::NewsLayout);
+        rows.push(SettingsRow::Borders);
         rows.push(SettingsRow::ThemeChoice);
         rows.push(SettingsRow::Save);
         rows
@@ -109,6 +122,8 @@ impl App {
             "alphai".to_string()
         };
         s.theme_choice = self.theme_name;
+        s.news_layout_choice = self.news_layout;
+        s.borders_choice = self.theme.panels;
     }
 
     pub(super) fn handle_settings_key(&mut self, key: KeyEvent) -> bool {
@@ -151,9 +166,11 @@ impl App {
             KeyCode::Left => self.cycle_row(-1),
             KeyCode::Right | KeyCode::Char(' ') => self.cycle_row(1),
             KeyCode::Enter => match settings_rows()[self.settings.cursor] {
-                SettingsRow::SourceChoice | SettingsRow::NewsOpen | SettingsRow::ThemeChoice => {
-                    self.cycle_row(1)
-                }
+                SettingsRow::SourceChoice
+                | SettingsRow::NewsOpen
+                | SettingsRow::NewsLayout
+                | SettingsRow::Borders
+                | SettingsRow::ThemeChoice => self.cycle_row(1),
                 SettingsRow::Key(field) => {
                     let s = &mut self.settings;
                     s.input = s
@@ -185,6 +202,19 @@ impl App {
                 s.source_choice = step_source(&s.source_choice, dir).to_string();
             }
             SettingsRow::NewsOpen => self.toggle_news_open_choice(),
+            SettingsRow::NewsLayout => {
+                // Live, like the theme row: the view behind the overlay is
+                // the preview.
+                let layout = self.settings.news_layout_choice.step(dir);
+                self.settings.news_layout_choice = layout;
+                self.news_layout = layout;
+                self.card_scroll = 0;
+            }
+            SettingsRow::Borders => {
+                let panels = self.settings.borders_choice.step(dir);
+                self.settings.borders_choice = panels;
+                self.theme.panels = panels;
+            }
             SettingsRow::ThemeChoice => self.cycle_theme_choice(dir),
             _ => {}
         }
@@ -232,6 +262,14 @@ impl App {
             theme.insert("preset".to_string(), self.settings.theme_choice.to_string());
         }
         cfg.theme = (!theme.is_empty()).then_some(theme);
+        // Same for the News layout: the default is no line at all, and a
+        // `[ui]` table left with nothing in it goes too.
+        let mut ui = cfg.ui.take().unwrap_or_default();
+        let layout = self.settings.news_layout_choice;
+        ui.news_layout = (layout != NewsLayout::default()).then(|| layout.name().to_string());
+        let panels = self.settings.borders_choice;
+        ui.borders = (panels != Panels::default()).then(|| panels.name().to_string());
+        cfg.ui = (ui != config::UiConfig::default()).then_some(ui);
         if let Some(secs) = parse_every(&self.settings.every_input) {
             cfg.every = Some(secs);
         }

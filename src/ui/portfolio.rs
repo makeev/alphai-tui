@@ -12,7 +12,7 @@
 use chrono::{DateTime, Utc};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Rect};
-use ratatui::style::{Modifier, Style, Stylize};
+use ratatui::style::{Style, Stylize};
 use ratatui::text::{Line, Text};
 use ratatui::widgets::{Cell, Paragraph, Row, Table};
 
@@ -184,7 +184,7 @@ pub(crate) fn render_portfolio_at(f: &mut Frame, area: Rect, app: &mut App, now:
                 .panel_titled(" Portfolio ")
                 .title_bottom(footnote(app, &totals, area.width)),
         )
-        .row_highlight_style(Style::new().add_modifier(Modifier::REVERSED))
+        .row_highlight_style(app.theme.selected())
         .highlight_symbol("▶ ");
 
     app.portfolio_state.select(Some(app.portfolio_selected));
@@ -228,7 +228,7 @@ fn row(
             Some(day) => Cell::from(right(fmt_signed(day)))
                 .style(Style::new().fg(move_color(Some(day), &app.theme))),
             // No reference close, so there is no day to measure.
-            None => Cell::from(right("—")).dim(),
+            None => Cell::from(right("—")).style(app.theme.faint()),
         };
         cells.push(cell);
     }
@@ -237,13 +237,13 @@ fn row(
     }
     let pct = match position.pnl_pct(price) {
         Some(pct) => Cell::from(right(format!("{pct:+.2}%"))).style(Style::new().fg(pnl_color)),
-        None => Cell::from(right("—")).dim(),
+        None => Cell::from(right("—")).style(app.theme.faint()),
     };
     cells.push(pct);
     if cols.weight {
         let cell = match portfolio::weight(position.value(price), total_value) {
             Some(w) => Cell::from(right(format!("{w:.1}%"))),
-            None => Cell::from(right("—")).dim(),
+            None => Cell::from(right("—")).style(app.theme.faint()),
         };
         cells.push(cell);
     }
@@ -254,7 +254,7 @@ fn row(
 fn pending_row(app: &App, position: &Position) -> Row<'static> {
     let status = match app.errors.get(&position.symbol) {
         Some(_) => Cell::from("error").style(Style::new().fg(app.theme.error)),
-        None => Cell::from("…").dim(),
+        None => Cell::from("…").style(app.theme.subtle()),
     };
     Row::new(vec![Cell::from(position.symbol.clone()).bold(), status])
 }
@@ -279,7 +279,7 @@ fn totals_row(app: &App, totals: &portfolio::Totals, cols: Columns) -> Row<'stat
             Some(day) => Cell::from(right(fmt_signed(day)))
                 .style(Style::new().fg(move_color(Some(day), &app.theme)))
                 .bold(),
-            None => Cell::from(right("—")).dim(),
+            None => Cell::from(right("—")).style(app.theme.faint()),
         };
         cells.push(cell);
     }
@@ -294,11 +294,11 @@ fn totals_row(app: &App, totals: &portfolio::Totals, cols: Columns) -> Row<'stat
         Some(pct) => Cell::from(right(format!("{pct:+.2}%")))
             .style(Style::new().fg(color))
             .bold(),
-        None => Cell::from(right("—")).dim(),
+        None => Cell::from(right("—")).style(app.theme.faint()),
     };
     cells.push(pct);
     if cols.weight {
-        cells.push(Cell::from(right("100%")).dim());
+        cells.push(Cell::from(right("100%")).style(app.theme.subtle()));
     }
     Row::new(cells)
 }
@@ -326,7 +326,7 @@ fn footnote(app: &App, totals: &portfolio::Totals, width: u16) -> Line<'static> 
     if text.chars().count() as u16 > width.saturating_sub(4) {
         return Line::from("");
     }
-    Line::from(text).dim().right_aligned()
+    Line::from(text).style(app.theme.subtle()).right_aligned()
 }
 
 fn mixed_currencies(app: &App) -> bool {
@@ -360,14 +360,15 @@ fn render_empty(f: &mut Frame, area: Rect, app: &App) {
         Line::from(format!(
             " Press {key} to record what you own of the selected ticker:"
         ))
-        .dim(),
-        Line::from(" a quantity and the average price you paid, e.g. 12 182.31.").dim(),
+        .style(app.theme.subtle()),
+        Line::from(" a quantity and the average price you paid, e.g. 12 182.31.")
+            .style(app.theme.subtle()),
         Line::from(""),
-        Line::from(" The same thing in the config file:").dim(),
-        Line::from("   [[positions]]").dim(),
-        Line::from("   symbol = \"AAPL\"").dim(),
-        Line::from("   qty = 12").dim(),
-        Line::from("   avg_price = 182.31").dim(),
+        Line::from(" The same thing in the config file:").style(app.theme.subtle()),
+        Line::from("   [[positions]]").style(app.theme.subtle()),
+        Line::from("   symbol = \"AAPL\"").style(app.theme.subtle()),
+        Line::from("   qty = 12").style(app.theme.subtle()),
+        Line::from("   avg_price = 182.31").style(app.theme.subtle()),
     ];
     f.render_widget(
         Paragraph::new(lines).block(app.theme.panel_titled(" Portfolio ")),

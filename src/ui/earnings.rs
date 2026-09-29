@@ -106,7 +106,7 @@ impl View for EarningsView {
         // With a read on screen the date belongs in the frame; without one
         // the body already answers with it, and twice reads as a glitch.
         if let Some(next) = next_report(data).filter(|_| latest.is_some()) {
-            block = block.title_bottom(Line::from(next.dim()).right_aligned());
+            block = block.title_bottom(Line::styled(next, theme.subtle()).right_aligned());
         }
 
         let inner = block.inner(area);
@@ -129,7 +129,7 @@ impl View for EarningsView {
             f.render_widget(
                 Paragraph::new(Line::from(vec![
                     Span::styled("Ahead ", Style::new().fg(theme.accent)),
-                    Span::styled(ellipsize(&text, room), Style::new().dim()),
+                    Span::styled(ellipsize(&text, room), theme.subtle()),
                 ])),
                 strip,
             );
@@ -144,7 +144,7 @@ fn verdict_span(verdict: &str, theme: &Theme) -> Span<'static> {
     let style = match verdict {
         "strong" | "solid" => Style::new().fg(theme.pos),
         "weak" => Style::new().fg(theme.neg),
-        _ => Style::new().dim(),
+        _ => theme.subtle(),
     };
     Span::styled(format!(" {verdict} "), style.add_modifier(Modifier::BOLD))
 }
@@ -176,8 +176,9 @@ fn body_lines(
             Line::from(""),
             Line::from(format!("  AlphAI has no earnings coverage for {symbol}.")).bold(),
             Line::from(""),
-            Line::from("  Reads are built from a company's own SEC filing, so they exist").dim(),
-            Line::from("  for listed companies only.").dim(),
+            Line::from("  Reads are built from a company's own SEC filing, so they exist")
+                .style(theme.subtle()),
+            Line::from("  for listed companies only.").style(theme.subtle()),
         ];
     }
     let Some(read) = data.latest() else {
@@ -185,14 +186,19 @@ fn body_lines(
             Line::from(""),
             Line::from(format!("  No earnings read for {symbol} yet.")).bold(),
             Line::from(""),
-            Line::from("  A read is AlphAI's structured analysis of the company's own").dim(),
-            Line::from("  earnings filing, with every figure checked against the filing").dim(),
-            Line::from("  text. It lands minutes after the filing reaches SEC EDGAR.").dim(),
+            Line::from("  A read is AlphAI's structured analysis of the company's own")
+                .style(theme.subtle()),
+            Line::from("  earnings filing, with every figure checked against the filing")
+                .style(theme.subtle()),
+            Line::from("  text. It lands minutes after the filing reaches SEC EDGAR.")
+                .style(theme.subtle()),
             Line::from(""),
         ];
         lines.push(match next_report(data) {
-            Some(next) => Line::from(format!("  {}", next.trim())).dim(),
-            None => Line::from("  The next report date is not confirmed yet.").dim(),
+            Some(next) => Line::from(format!("  {}", next.trim())).style(theme.subtle()),
+            None => {
+                Line::from("  The next report date is not confirmed yet.").style(theme.subtle())
+            }
         });
         return lines;
     };
@@ -205,7 +211,10 @@ fn body_lines(
     }
     if older.len() > HISTORY_CAP {
         lines.push(Line::from(""));
-        lines.push(Line::from(format!("  +{} older reads", older.len() - HISTORY_CAP)).dim());
+        lines.push(
+            Line::from(format!("  +{} older reads", older.len() - HISTORY_CAP))
+                .style(theme.subtle()),
+        );
     }
     lines
 }
@@ -241,7 +250,7 @@ fn read_lines(
             }
             lines.push(Line::from(ellipsize(&head, width)));
             if !s.driver.is_empty() {
-                lines.extend(wrap(&s.driver, width, "    ", Some(Style::new().dim())));
+                lines.extend(wrap(&s.driver, width, "    ", Some(theme.subtle())));
             }
         }
     }
@@ -305,7 +314,7 @@ fn read_lines(
             lines.extend(wrap(item, width, "  · ", None));
         }
         if items.len() > cap {
-            lines.push(Line::from(format!("  +{} more", items.len() - cap)).dim());
+            lines.push(Line::from(format!("  +{} more", items.len() - cap)).style(theme.subtle()));
         }
     }
 
@@ -317,7 +326,7 @@ fn read_lines(
                 Some(role) => format!("{}, {role}", q.speaker),
                 None => q.speaker.clone(),
             };
-            lines.push(Line::from(ellipsize(&format!("  {who}"), width)).dim());
+            lines.push(Line::from(ellipsize(&format!("  {who}"), width)).style(theme.subtle()));
             lines.extend(wrap(&q.text, width, "    ", None));
         }
     }
@@ -339,10 +348,13 @@ fn read_lines(
         lines.push(Line::from(""));
         lines.push(section("Not in the filing", theme));
         for item in r.missing_items.iter().take(LIST_CAP) {
-            lines.extend(wrap(item, width, "  · ", Some(Style::new().dim())));
+            lines.extend(wrap(item, width, "  · ", Some(theme.subtle())));
         }
         if r.missing_items.len() > LIST_CAP {
-            lines.push(Line::from(format!("  +{} more", r.missing_items.len() - LIST_CAP)).dim());
+            lines.push(
+                Line::from(format!("  +{} more", r.missing_items.len() - LIST_CAP))
+                    .style(theme.subtle()),
+            );
         }
     }
     lines
@@ -362,7 +374,7 @@ fn short_read_lines(read: &EarningsRead, width: usize, theme: &Theme) -> Vec<Lin
                 .fg(theme.accent)
                 .add_modifier(Modifier::BOLD | Modifier::REVERSED),
         ),
-        Span::styled(format!(" {} {filed}", read.form()), Style::new().dim()),
+        Span::styled(format!(" {} {filed}", read.form()), theme.subtle()),
     ])];
     if !r.verdict.is_empty() {
         lines.push(Line::from(vec![
@@ -371,12 +383,7 @@ fn short_read_lines(read: &EarningsRead, width: usize, theme: &Theme) -> Vec<Lin
         ]));
     }
     if !r.verdict_reason.is_empty() {
-        lines.extend(wrap(
-            &r.verdict_reason,
-            width,
-            "  ",
-            Some(Style::new().dim()),
-        ));
+        lines.extend(wrap(&r.verdict_reason, width, "  ", Some(theme.subtle())));
     }
     let head: Vec<KeyMetric> = r.key_metrics.iter().take(LIST_CAP).cloned().collect();
     lines.extend(metric_lines(&head, width, theme));
@@ -520,7 +527,7 @@ pub fn metric_columns(metrics: &[KeyMetric], inner: usize) -> Cols {
 fn metric_lines(metrics: &[KeyMetric], width: usize, theme: &Theme) -> Vec<Line<'static>> {
     let mut lines = vec![Line::from("")];
     if metrics.is_empty() {
-        lines.push(Line::from("  no metric table in this filing").dim());
+        lines.push(Line::from("  no metric table in this filing").style(theme.subtle()));
         return lines;
     }
     // The table is indented like the prose around it.
@@ -563,7 +570,7 @@ fn metric_lines(metrics: &[KeyMetric], width: usize, theme: &Theme) -> Vec<Line<
         // and any background chosen here would fight whatever the terminal
         // actually has behind it.
         let style = if n % 2 == 1 {
-            Style::new().add_modifier(Modifier::DIM)
+            theme.subtle()
         } else {
             Style::new()
         };
@@ -575,7 +582,7 @@ fn metric_lines(metrics: &[KeyMetric], width: usize, theme: &Theme) -> Vec<Line<
         }
         lines.push(Line::from(vec![
             Span::styled(format!("{pad}{name}"), style),
-            Span::styled(leader(name.chars().count(), cols.name), Style::new().dim()),
+            Span::styled(leader(name.chars().count(), cols.name), theme.subtle()),
             Span::styled(figures, style),
         ]));
     }

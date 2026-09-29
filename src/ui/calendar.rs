@@ -7,7 +7,7 @@ use std::time::Instant;
 use chrono::{DateTime, Duration, NaiveDate, Timelike, Utc};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Rect};
-use ratatui::style::{Modifier, Style, Stylize};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Cell, Paragraph, Row, Table};
 
@@ -16,6 +16,7 @@ use crate::app::App;
 use crate::config::ChartTimezone;
 use crate::keymap::Action;
 use crate::market;
+use crate::theme::Theme;
 use crate::ui::{Hint, View, ViewId, time_axis};
 
 static HINTS: &[Hint] = &[
@@ -596,7 +597,7 @@ fn event_row(row: &AgendaRow, cols: &[(Col, u16)], app: &App, now: DateTime<Utc>
         style = style.fg(theme.warn);
     }
     if row.elapsed || row.status == Status::Cancelled || row.importance == "low" {
-        style = style.remove_modifier(Modifier::BOLD).dim();
+        style = app.theme.fade(style.remove_modifier(Modifier::BOLD));
     }
     let notes_visible = cols.iter().any(|(c, _)| *c == Col::Notes);
     let zone = app.chart.timezone;
@@ -635,6 +636,7 @@ fn separator(
     now: DateTime<Utc>,
     zone: ChartTimezone,
     undated: bool,
+    theme: &Theme,
 ) -> Row<'static> {
     let cells: Vec<Cell> = cols
         .iter()
@@ -649,7 +651,7 @@ fn separator(
             Cell::from(fit(&text, width.saturating_sub(1)))
         })
         .collect();
-    Row::new(cells).dim()
+    Row::new(cells).style(theme.faint())
 }
 
 fn age(at: Instant) -> String {
@@ -746,7 +748,9 @@ pub(crate) fn render_calendar_at(f: &mut Frame, area: Rect, app: &mut App, now: 
         .theme
         .panel_titled(fit(&title, area.width.saturating_sub(2)));
     if area.width >= 38 {
-        block = block.title_bottom(Line::from(" report dates: ET · time not provided ").dim());
+        block = block.title_bottom(
+            Line::from(" report dates: ET · time not provided ").style(app.theme.subtle()),
+        );
     }
     if !app.alphai_enabled {
         super::news::render_gate_with(f, area, &block, app, alphai::CALENDAR_KEY, true);
@@ -780,7 +784,7 @@ pub(crate) fn render_calendar_at(f: &mut Frame, area: Rect, app: &mut App, now: 
         {
             Style::new().fg(app.theme.warn)
         } else {
-            Style::new().dim()
+            app.theme.subtle()
         };
         f.render_widget(
             Paragraph::new(fit(&status, inner.width)).style(style),
@@ -805,7 +809,7 @@ pub(crate) fn render_calendar_at(f: &mut Frame, area: Rect, app: &mut App, now: 
             "No macro events or confirmed report dates in this window."
         };
         f.render_widget(
-            Paragraph::new(fit(text, table_area.width)).dim(),
+            Paragraph::new(fit(text, table_area.width)).style(app.theme.subtle()),
             table_area,
         );
         return;
@@ -817,13 +821,13 @@ pub(crate) fn render_calendar_at(f: &mut Frame, area: Rect, app: &mut App, now: 
     let mut undated = false;
     for i in 0..=rows.len() {
         if i == anchor {
-            displayed.push(separator(&cols, now, app.chart.timezone, false));
+            displayed.push(separator(&cols, now, app.chart.timezone, false, &app.theme));
         }
         let Some(row) = rows.get(i) else {
             break;
         };
         if row.when == When::Unknown && !undated {
-            displayed.push(separator(&cols, now, app.chart.timezone, true));
+            displayed.push(separator(&cols, now, app.chart.timezone, true, &app.theme));
             undated = true;
         }
         if selected == Some(i) {
@@ -848,9 +852,9 @@ pub(crate) fn render_calendar_at(f: &mut Frame, area: Rect, app: &mut App, now: 
         })
         .collect();
     let table = Table::new(displayed, cols.iter().map(|(_, w)| Constraint::Length(*w)))
-        .header(Row::new(headers).dim())
+        .header(Row::new(headers).style(app.theme.subtle()))
         .column_spacing(0)
-        .row_highlight_style(Style::new().add_modifier(Modifier::REVERSED))
+        .row_highlight_style(app.theme.selected())
         .highlight_symbol("▶ ");
     app.calendar_state.select(selected_display);
     f.render_stateful_widget(table, table_area, &mut app.calendar_state);

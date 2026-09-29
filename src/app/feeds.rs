@@ -243,6 +243,23 @@ impl App {
         self.feeds.get(&key).map(|b| b.articles.as_slice())
     }
 
+    /// The article the chart should single out: the one open in the News
+    /// card while the chart layout shows the two together. None anywhere
+    /// else, so the Chart and Split views keep their plain marks.
+    pub(crate) fn chart_focus(&self, symbol: &str) -> Option<String> {
+        if self.view_id() != ui::ViewId::News
+            || self.news_layout != crate::app::NewsLayout::Chart
+            || self.news_scope != crate::app::NewsScope::Ticker
+            || self.selected_symbol() != symbol
+        {
+            return None;
+        }
+        self.visible_articles()?
+            .get(self.news_selected)
+            .map(|a| a.original.uid.clone())
+            .filter(|uid| !uid.is_empty())
+    }
+
     /// The ticker-scoped news rows already in the cache, for the price
     /// chart's news marks. Read-only on purpose: the chart never asks for a
     /// feed of its own, it garnishes what the News and Split views have
@@ -355,6 +372,23 @@ impl App {
                             .get(&key)
                             .is_some_and(|old| old.min_score != min_relevance);
                         let first_sight = !self.feed_seen.contains_key(&key);
+                        // The article under the cursor stays under it: a
+                        // head refetch that slipped a new story into row 0
+                        // must not swap the card someone is reading. Gone
+                        // from the new page, the row index stays and the
+                        // card starts from its top.
+                        let reading = (active.as_deref() == Some(key.as_str()))
+                            .then(|| self.feeds.get(&key))
+                            .flatten()
+                            .and_then(|old| old.articles.get(self.news_selected))
+                            .map(|a| a.original.uid.clone())
+                            .filter(|uid| !uid.is_empty());
+                        if let Some(uid) = reading {
+                            match b.articles.iter().position(|a| a.original.uid == uid) {
+                                Some(i) => self.news_selected = i,
+                                None => self.card_scroll = 0,
+                            }
+                        }
                         let seen = self.feed_seen.entry(key.clone()).or_default();
                         if first_sight || filter_moved {
                             seen.extend(uids(&b.articles));

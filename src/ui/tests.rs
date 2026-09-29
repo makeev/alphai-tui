@@ -1184,8 +1184,9 @@ fn a_narrow_chart_shows_the_newest_bars_and_says_so() {
     );
 }
 
-/// The split view's half-width chart draws the same bars as the chart view,
-/// fewer of them: a narrower plot never means larger candles.
+/// A chart narrower than its bars draws the same bars as a wide one, fewer
+/// of them: a narrower plot never means larger candles. The Split chart
+/// spans the full width, so the narrow case is a narrow terminal.
 #[test]
 fn split_and_chart_views_draw_the_same_bars() {
     let mut app = fake_app();
@@ -1194,8 +1195,10 @@ fn split_and_chart_views_draw_the_same_bars() {
     assert!(!chart.contains(" of 30 bars "), "screen:\n{chart}");
     app.view_idx = ui::view_index(ui::ViewId::Split);
     let split = render_sized(&mut app, 120, 40);
-    assert!(split.contains(" of 30 bars "), "screen:\n{split}");
-    assert!(has_candles(&split), "screen:\n{split}");
+    assert!(!split.contains(" of 30 bars "), "screen:\n{split}");
+    let narrow = render_sized(&mut app, 60, 40);
+    assert!(narrow.contains(" of 30 bars "), "screen:\n{narrow}");
+    assert!(has_candles(&narrow), "screen:\n{narrow}");
 }
 
 /// Every bar sits under its candle: both panels end in the same column, and
@@ -2127,15 +2130,39 @@ fn insider_structured_block_drives_row_and_card() {
         screen.contains("10b5-1 plan"),
         "meta plan flag missing:\n{screen}"
     );
-    // The fullscreen card shows the full structured trade.
-    press(&mut app, KeyCode::Char('v'));
-    let card = render(&mut app);
+    // The card column beside the list shows the full structured trade.
     assert!(
-        card.contains("SELL 25,000 sh @ $187.32 = $4.7M (code S)"),
-        "card:\n{card}"
+        screen.contains("SELL 25,000 sh @ $187.32 = $4.7M (code S)"),
+        "card:\n{screen}"
     );
+    assert!(
+        screen.contains("STEVENS MARK A (Director)"),
+        "card:\n{screen}"
+    );
+    assert!(screen.contains("2026-07-09"), "card:\n{screen}");
+
+    // v hides the column and brings it back; the list takes the width.
+    press(&mut app, KeyCode::Char('v'));
+    assert!(!app.insider_card && !app.article_overlay.open);
+    let list = render(&mut app);
+    assert!(
+        !list.contains(" card · pgup"),
+        "column still shown:\n{list}"
+    );
+    press(&mut app, KeyCode::Char('v'));
+    assert!(app.insider_card);
+
+    // Too narrow for the column: the short detail pane under the list, and
+    // v opens the fullscreen card with the same trade.
+    let narrow = render_sized(&mut app, 80, 30);
+    assert!(
+        !narrow.contains(" card · pgup"),
+        "column on a narrow terminal:\n{narrow}"
+    );
+    press(&mut app, KeyCode::Char('v'));
+    assert!(app.article_overlay.open);
+    let card = render_sized(&mut app, 80, 30);
     assert!(card.contains("STEVENS MARK A (Director)"), "card:\n{card}");
-    assert!(card.contains("2026-07-09"), "card:\n{card}");
 }
 
 /// An Insider bundle with the trades chart payload, its events placed
@@ -2512,7 +2539,32 @@ fn x_cycles_news_layout() {
             None,
         ),
     );
-    assert_eq!(app.news_layout, NewsLayout::Side);
+    // The chart layout is the default.
+    assert_eq!(app.news_layout, NewsLayout::Chart);
+    // Wide enough: the ticker's chart sits over the list, the card beside.
+    let screen = render_sized(&mut app, 140, 40);
+    assert!(screen.contains("╭ AAPL"), "chart missing:\n{screen}");
+    assert!(screen.contains(" card ·"), "card missing:\n{screen}");
+    // Too narrow for three panes: it reads as Side, card and all.
+    let screen = render_sized(&mut app, 110, 40);
+    assert!(!screen.contains("╭ AAPL"), "chart squeezed in:\n{screen}");
+    assert!(screen.contains(" card ·"), "card missing:\n{screen}");
+    // A market-wide feed has no one chart to belong to.
+    app.news_scope = NewsScope::Market;
+    app.feeds.insert(
+        alphai::MARKET_KEY.into(),
+        FeedBundle::new(
+            vec![article("Stocks drift", "SPY", 8, "neutral")],
+            None,
+            None,
+        ),
+    );
+    let screen = render_sized(&mut app, 140, 40);
+    assert!(
+        !screen.contains("╭ AAPL"),
+        "chart in market scope:\n{screen}"
+    );
+    app.news_scope = NewsScope::Ticker;
     press(&mut app, KeyCode::Char('x'));
     assert_eq!(app.news_layout, NewsLayout::Stacked);
     let screen = render(&mut app);
@@ -2522,6 +2574,133 @@ fn x_cycles_news_layout() {
     );
     press(&mut app, KeyCode::Char('x'));
     assert_eq!(app.news_layout, NewsLayout::Side);
+    press(&mut app, KeyCode::Char('x'));
+    assert_eq!(app.news_layout, NewsLayout::Chart);
+}
+
+/// A scored row with a uid and a publication time, for the chart marks.
+fn marked_article(uid: &str, title: &str, score: i64, published: &str) -> Article {
+    serde_json::from_str(&format!(
+        r#"{{"original": {{"uid": "{uid}", "title": "{title}", "time_published": "{published}"}},
+             "enrichment": {{"tickers": ["AAPL"], "relevance_score": {score}}}}}"#
+    ))
+    .unwrap()
+}
+
+/// Cells of the rendered screen drawn inverted with one of the mark glyphs.
+fn inverted_marks(app: &mut App, width: u16, height: u16) -> usize {
+    use ratatui::style::Modifier;
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+    terminal.draw(|f| ui::draw(f, app)).unwrap();
+    let buffer = terminal.backend().buffer().clone();
+    buffer
+        .content()
+        .iter()
+        .filter(|c| {
+            c.modifier.contains(Modifier::REVERSED) && ["▲", "▼", "◆"].contains(&c.symbol())
+        })
+        .count()
+}
+
+/// In the chart layout the article open in the card is the mark that
+/// stands out, even against a higher-scoring story in the same candle, and
+/// the chart's border names it. The plain Chart view keeps plain marks.
+#[test]
+fn chart_layout_marks_the_selected_article() {
+    let mut app = fake_app();
+    app.view_idx = ui::view_index(ui::ViewId::News);
+    app.news_layout = NewsLayout::Chart;
+    // Both inside the 26th of fake_app's five-minute candles.
+    let at = "2023-11-15T00:18:30Z";
+    app.feeds.insert(
+        "AAPL".into(),
+        FeedBundle::new(
+            vec![
+                marked_article("big", "Big story", 9, at),
+                marked_article("small", "Small story", 6, at),
+            ],
+            None,
+            None,
+        ),
+    );
+    app.news_selected = 1;
+    assert_eq!(app.chart_focus("AAPL").as_deref(), Some("small"));
+    assert_eq!(inverted_marks(&mut app, 140, 40), 1);
+    let screen = render_sized(&mut app, 140, 40);
+    assert!(
+        screen.contains("· Small story"),
+        "border names another story:\n{screen}"
+    );
+
+    // Another ticker's chart, or another view, has nothing in focus.
+    assert_eq!(app.chart_focus("MSFT"), None);
+    app.view_idx = ui::view_index(ui::ViewId::Chart);
+    assert_eq!(app.chart_focus("AAPL"), None);
+    assert_eq!(inverted_marks(&mut app, 140, 40), 0);
+}
+
+/// v in the chart layout reads the card in place: the chart stays, the
+/// card takes the list's room, and nothing is drawn over the screen. Where
+/// the chart layout does not fit, v opens the fullscreen card as before.
+#[test]
+fn v_in_the_chart_layout_reads_under_the_chart() {
+    let mut app = fake_app();
+    app.view_idx = ui::view_index(ui::ViewId::News);
+    app.feeds.insert(
+        "AAPL".into(),
+        FeedBundle::new(
+            vec![article("Apple beats expectations", "AAPL", 9, "positive")],
+            None,
+            None,
+        ),
+    );
+    assert_eq!(app.news_layout, NewsLayout::Chart);
+    press(&mut app, KeyCode::Char('v'));
+    assert!(app.article_overlay.open);
+    let screen = render_sized(&mut app, 140, 40);
+    assert!(screen.contains("╭ AAPL"), "chart gone:\n{screen}");
+    assert!(
+        screen.contains(" article ·"),
+        "card not in place:\n{screen}"
+    );
+    assert!(!screen.contains(" Article "), "modal drawn too:\n{screen}");
+    assert!(
+        !screen.contains("News · AAPL"),
+        "list still shown:\n{screen}"
+    );
+    // Scrolling and closing are the overlay's own keys.
+    press(&mut app, KeyCode::Down);
+    assert_eq!(app.news_selected, 0, "the list must not move while reading");
+    press(&mut app, KeyCode::Char('v'));
+    assert!(!app.article_overlay.open);
+
+    // Too narrow for the chart layout: the fullscreen card.
+    press(&mut app, KeyCode::Char('v'));
+    let screen = render_sized(&mut app, 110, 40);
+    assert!(screen.contains(" Article "), "no modal:\n{screen}");
+}
+
+/// A head refetch that slips a new story into the top row keeps the
+/// article being read under the cursor, card scroll included.
+#[test]
+fn head_refetch_keeps_the_article_under_the_cursor() {
+    let mut app = empty_app(vec!["AAPL".into()]);
+    app.view_idx = ui::view_index(ui::ViewId::News);
+    head_fetch(&mut app, "AAPL", vec![uid_article("a", "Read me")], Some(7));
+    app.card_scroll = 4;
+    head_fetch(
+        &mut app,
+        "AAPL",
+        vec![uid_article("new", "Breaking"), uid_article("a", "Read me")],
+        Some(7),
+    );
+    assert_eq!(app.news_selected, 1);
+    assert_eq!(app.card_scroll, 4);
+    // Gone from the new page: the row index stays (the list clamps it on
+    // the next frame) and the card starts over.
+    head_fetch(&mut app, "AAPL", vec![uid_article("x", "Other")], Some(7));
+    assert_eq!(app.news_selected, 1);
+    assert_eq!(app.card_scroll, 0);
 }
 
 /// +/- move the score filter; the cached bundle's recorded filter stops
@@ -3516,6 +3695,7 @@ fn ellipsize_counts_characters_not_bytes() {
 /// frame style from `[ui] borders` survives.
 #[test]
 fn theme_key_cycles_presets_over_explicit_slots() {
+    use crate::theme::Panels;
     use ratatui::style::Color;
     use ratatui::widgets::BorderType;
 
@@ -3524,7 +3704,7 @@ fn theme_key_cycles_presets_over_explicit_slots() {
         "up".to_string(),
         "#00c853".to_string(),
     )]));
-    app.theme.border_type = BorderType::Plain;
+    app.theme.panels = Panels::Lines(BorderType::Plain);
     app.set_theme("catppuccin-mocha");
     assert_eq!(app.theme.accent, Color::Rgb(0xcb, 0xa6, 0xf7));
     assert_eq!(
@@ -3533,8 +3713,8 @@ fn theme_key_cycles_presets_over_explicit_slots() {
         "explicit slot lost"
     );
     assert_eq!(
-        app.theme.border_type,
-        BorderType::Plain,
+        app.theme.panels,
+        Panels::Lines(BorderType::Plain),
         "[ui] borders lost"
     );
 
@@ -3602,6 +3782,71 @@ fn settings_theme_row_persists_the_preset() {
     assert_eq!(app.settings_merged_config().theme, None);
 }
 
+/// The News layout row switches the view live and Save writes it to
+/// `[ui] news_layout`; the default layout writes nothing, and a `[ui]`
+/// table that only held it goes away with it.
+#[test]
+fn settings_news_layout_row_persists_the_layout() {
+    let mut app = empty_app(vec!["AAPL".into()]);
+    // What `config::resolve` gives a file without `[ui] borders`.
+    app.theme.panels = crate::theme::Panels::default();
+    press(&mut app, KeyCode::Char('s'));
+    while !matches!(
+        settings_rows()[app.settings.cursor],
+        SettingsRow::NewsLayout
+    ) {
+        press(&mut app, KeyCode::Down);
+    }
+    let screen = render(&mut app);
+    assert!(screen.contains("‹ chart ›"), "screen:\n{screen}");
+
+    press(&mut app, KeyCode::Right);
+    assert_eq!(app.news_layout, NewsLayout::Stacked, "the row applies live");
+    press(&mut app, KeyCode::Left);
+    press(&mut app, KeyCode::Left);
+    assert_eq!(app.news_layout, NewsLayout::Side, "left walks back");
+    let ui = app.settings_merged_config().ui.expect("[ui] written");
+    assert_eq!(ui.news_layout.as_deref(), Some("side"));
+
+    press(&mut app, KeyCode::Right);
+    assert_eq!(app.news_layout, NewsLayout::Chart);
+    assert_eq!(app.settings_merged_config().ui, None);
+}
+
+/// The Panels row switches between frame lines and tinted panels live, and
+/// Save writes `[ui] borders`; the default (rounded lines) writes nothing.
+#[test]
+fn settings_borders_row_persists_the_look() {
+    use crate::theme::Panels;
+    use ratatui::widgets::BorderType;
+
+    let mut app = empty_app(vec!["AAPL".into()]);
+    app.theme.panels = Panels::default();
+    press(&mut app, KeyCode::Char('s'));
+    while !matches!(settings_rows()[app.settings.cursor], SettingsRow::Borders) {
+        press(&mut app, KeyCode::Down);
+    }
+    let screen = render(&mut app);
+    assert!(screen.contains("‹ rounded ›"), "screen:\n{screen}");
+
+    press(&mut app, KeyCode::Right);
+    assert_eq!(app.theme.panels, Panels::Lines(BorderType::Plain), "live");
+    press(&mut app, KeyCode::Right);
+    assert_eq!(app.theme.panels, Panels::Surface);
+    let ui = app.settings_merged_config().ui.expect("[ui] written");
+    assert_eq!(ui.borders.as_deref(), Some("none"));
+    // A theme switch keeps the look the row picked.
+    app.set_theme("dracula");
+    assert_eq!(app.theme.panels, Panels::Surface);
+    press(&mut app, KeyCode::Right);
+    assert_eq!(
+        app.theme.panels,
+        Panels::Lines(BorderType::Rounded),
+        "wraps"
+    );
+    assert_eq!(app.settings_merged_config().ui, None);
+}
+
 /// Every framed panel must come from `Theme::panel`, so a theme really
 /// recolors the whole frame. Corners are the tell: nothing but a block
 /// border draws them, and a panel built with a bare `Block::bordered()`
@@ -3657,6 +3902,63 @@ fn borders_are_themed() {
             }
         }
         assert!(corners >= 4, "{:?}: no framed panel rendered", view.id());
+    }
+}
+
+/// `[ui] borders = "none"`: every view draws its panels as surfaces, with
+/// no frame line anywhere, and the gutter the frame leaves stays on the
+/// terminal's own background so two panels never merge into one.
+#[test]
+fn surface_panels_draw_no_lines() {
+    use crate::theme::Panels;
+    use ratatui::style::Color;
+    // Frame corners and the vertical edge. Horizontal dashes are left out:
+    // chart grids and the calendar's "now" row draw their own.
+    const EDGES: [&str; 9] = ["╭", "╮", "╰", "╯", "┌", "┐", "└", "┘", "│"];
+
+    let mut app = fake_app();
+    app.feeds.insert(
+        "AAPL".into(),
+        FeedBundle::new(
+            vec![article("Apple beats expectations", "AAPL", 9, "positive")],
+            None,
+            None,
+        ),
+    );
+    app.theme = crate::theme::PRESETS[1].1;
+    app.theme.panels = Panels::Surface;
+    let surface = app.theme.surface;
+    assert_ne!(surface, Color::Reset);
+
+    for view in ui::VIEWS {
+        app.view_idx = ui::view_index(view.id());
+        let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+        terminal.draw(|f| ui::draw(f, &mut app)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let mut painted = 0;
+        for y in buffer.area.top()..buffer.area.bottom() {
+            for x in buffer.area.left()..buffer.area.right() {
+                let cell = buffer.cell((x, y)).unwrap();
+                assert!(
+                    !EDGES.contains(&cell.symbol()),
+                    "{:?}: frame line {:?} at {x},{y}",
+                    view.id(),
+                    cell.symbol()
+                );
+                if cell.bg == surface {
+                    painted += 1;
+                }
+            }
+        }
+        assert!(painted > 0, "{:?}: no surface painted", view.id());
+        // Column 0 is the gutter of the leftmost panel.
+        let gutter = buffer.cell((0, 5)).unwrap();
+        assert_ne!(
+            gutter.bg,
+            surface,
+            "{:?}: gutter took the surface",
+            view.id()
+        );
     }
 }
 

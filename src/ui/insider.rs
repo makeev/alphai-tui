@@ -1,7 +1,7 @@
 use chrono::Utc;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
-use ratatui::style::{Modifier, Style, Stylize};
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Cell, Paragraph, Row, Table};
 
@@ -86,13 +86,28 @@ impl View for InsiderView {
             }
             _ => 0,
         };
-        let [head, chart_area, list_area, detail] = Layout::vertical([
+        // Under the chart the list and the card share the row, like the
+        // News view; v hides the card column for a full-width list. Too
+        // narrow for two readable panes, the old short detail pane stays
+        // under the list and v opens the fullscreen card instead.
+        let fits = area.width >= CARD_COLUMN_MIN_WIDTH;
+        app.insider_card_fits = fits;
+        let detail_h = if fits { 0 } else { 6 };
+        let [head, chart_area, rest, detail] = Layout::vertical([
             Constraint::Length(2),
             Constraint::Length(chart_h),
             Constraint::Min(3),
-            Constraint::Length(6),
+            Constraint::Length(detail_h),
         ])
         .areas(area);
+        let (list_area, card_area) = if fits && app.insider_card {
+            let [l, r] =
+                Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
+                    .areas(rest);
+            (l, Some(r))
+        } else {
+            (rest, None)
+        };
 
         f.render_widget(summary_lines(trades, &theme), head);
         if let (true, Some(t)) = (chart_h > 0, trades) {
@@ -125,7 +140,7 @@ impl View for InsiderView {
                 format!("no Form 4 activity for {symbol} in the feed")
             };
             f.render_widget(
-                Paragraph::new(Line::from(msg).dim()).block(block),
+                Paragraph::new(Line::from(msg).style(theme.subtle())).block(block),
                 list_area,
             );
             return;
@@ -149,7 +164,7 @@ impl View for InsiderView {
             .collect();
         let table = Table::new(rows, widths)
             .block(block)
-            .row_highlight_style(Style::new().add_modifier(Modifier::REVERSED))
+            .row_highlight_style(theme.selected())
             .highlight_symbol("▶ ");
         app.news_selected = app.news_selected.min(bundle.articles.len() - 1);
         app.news_table_state.select(Some(app.news_selected));
@@ -163,16 +178,29 @@ impl View for InsiderView {
             .get(app.news_selected)
             .filter(|a| !a.original.uid.is_empty())
             .and_then(|a| event_extra(trades, &a.original.uid));
-        render_detail(
-            f,
-            detail,
-            bundle.articles.get(app.news_selected),
-            &symbol,
-            extra,
-            &theme,
-        );
+        let selected = bundle.articles.get(app.news_selected);
+        if let Some(card_area) = card_area {
+            let mut scroll = app.card_scroll;
+            crate::ui::article::render_pane_with(
+                f,
+                card_area,
+                selected,
+                &symbol,
+                None,
+                extra,
+                "· pgup/pgdn scroll · v hide ",
+                &mut scroll,
+                &theme,
+            );
+            app.card_scroll = scroll;
+        } else if detail.height > 0 {
+            render_detail(f, detail, selected, &symbol, extra, &theme);
+        }
     }
 }
+
+/// Below this width the card column does not fit beside a readable list.
+const CARD_COLUMN_MIN_WIDTH: u16 = 90;
 
 /// Detail-pane extras for one filing, joined from the chart bundle by the
 /// article uid: the stake share it moved, the tranche count of the folded
@@ -220,23 +248,23 @@ fn filing_row(
     let age = if is_fresh(a, now) {
         Cell::from(a.age(now)).style(Style::new().fg(theme.accent))
     } else {
-        Cell::from(a.age(now)).dim()
+        Cell::from(a.age(now)).style(theme.subtle())
     };
     let plan = match &a.insider {
-        Some(t) if t.is_10b5_1 => Cell::from("p").dim(),
+        Some(t) if t.is_10b5_1 => Cell::from("p").style(theme.subtle()),
         _ => Cell::from(" "),
     };
     let value = a
         .insider
         .as_ref()
         .and_then(|t| t.total_value_usd.as_deref())
-        .map(|v| Cell::from(format!("{:>8}", fmt_usd(v))).dim())
+        .map(|v| Cell::from(format!("{:>8}", fmt_usd(v))).style(theme.subtle()))
         .unwrap_or_else(|| Cell::from(" "));
     Row::new(vec![
         age,
         score_cell(a.score(), theme),
         sentiment_cell(side.as_deref(), theme),
-        ownership_cell(a.original.ownership_form.as_deref()),
+        ownership_cell(a.original.ownership_form.as_deref(), theme),
         plan,
         value,
         title_cell(
@@ -284,10 +312,10 @@ fn side_from_title(title: &str) -> Option<String> {
 }
 
 /// Which holding pool the filing touched: dim "D" (direct) / "I" (indirect).
-fn ownership_cell(form: Option<&str>) -> Cell<'static> {
+fn ownership_cell(form: Option<&str>, theme: &Theme) -> Cell<'static> {
     match form {
-        Some("direct") => Cell::from("D").dim(),
-        Some("indirect") => Cell::from("I").dim(),
+        Some("direct") => Cell::from("D").style(theme.subtle()),
+        Some("indirect") => Cell::from("I").style(theme.subtle()),
         _ => Cell::from(" "),
     }
 }
@@ -297,7 +325,7 @@ fn summary_lines(trades: Option<&InsiderTrades>, theme: &Theme) -> Paragraph<'st
         .and_then(|t| t.summary.as_ref())
         .and_then(|s| s.last_12m.as_ref())
     else {
-        return Paragraph::new(Line::from(" Form 4 rollup unavailable").dim());
+        return Paragraph::new(Line::from(" Form 4 rollup unavailable").style(theme.subtle()));
     };
     let buys = w
         .buy_value_usd
@@ -310,13 +338,13 @@ fn summary_lines(trades: Option<&InsiderTrades>, theme: &Theme) -> Paragraph<'st
         .map(|v| format!(" {}", fmt_usd(v)))
         .unwrap_or_default();
     let stats = Line::from(vec![
-        Span::raw(" 12m  ").dim(),
+        Span::raw(" 12m  ").style(theme.subtle()),
         Span::raw(format!("{} events · ", w.buy_count + w.sell_count)),
         Span::styled(
             format!("▲ {} buys{buys}", w.buy_count),
             Style::new().fg(theme.pos),
         ),
-        Span::raw(" · ").dim(),
+        Span::styled(" · ", theme.faint()),
         Span::styled(
             format!("▼ {} sells{sells}", w.sell_count),
             Style::new().fg(theme.neg),
@@ -325,7 +353,7 @@ fn summary_lines(trades: Option<&InsiderTrades>, theme: &Theme) -> Paragraph<'st
             " · {}% under 10b5-1 plans · {} insiders",
             w.pct_10b5_1, w.unique_insiders
         ))
-        .dim(),
+        .style(theme.subtle()),
     ]);
     let top: Vec<String> = trades
         .and_then(|t| t.summary.as_ref())
@@ -355,7 +383,7 @@ fn summary_lines(trades: Option<&InsiderTrades>, theme: &Theme) -> Paragraph<'st
     let top_line = if top.is_empty() {
         Line::from("")
     } else {
-        Line::from(format!(" top: {}", top.join(" · "))).dim()
+        Line::from(format!(" top: {}", top.join(" · "))).style(theme.subtle())
     };
     Paragraph::new(vec![stats, top_line])
 }

@@ -15,7 +15,7 @@
 use chrono::{DateTime, Utc};
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Style, Stylize};
+use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
@@ -97,7 +97,7 @@ fn head(app: &App, symbol: &str) -> Vec<Span<'static>> {
         None if app.errors.contains_key(symbol) => {
             out.push(Span::styled("error", Style::new().fg(theme.error)));
         }
-        None => out.push(Span::raw("…").dim()),
+        None => out.push(Span::styled("…", theme.subtle())),
     }
     out
 }
@@ -157,7 +157,7 @@ fn optional_zones(app: &App, symbol: &str, now: DateTime<Utc>) -> Vec<Vec<Vec<Sp
     let closes: Vec<f64> = data.candles.iter().map(|c| c.close).collect();
     if !closes.is_empty() {
         zones.push(vec![vec![
-            Span::raw("  ").dim(),
+            Span::raw("  "),
             Span::styled(spark_line(&closes, SPARK), Style::new().fg(color)),
         ]]);
     }
@@ -168,13 +168,13 @@ fn optional_zones(app: &App, symbol: &str, now: DateTime<Utc>) -> Vec<Vec<Vec<Sp
     if let Some((lo, hi)) = quote.fifty_two_week {
         zones.push(vec![vec![Span::styled(
             format!("  52w {}–{}", fmt_price(lo), fmt_price(hi)),
-            Style::new().dim(),
+            theme.subtle(),
         )]]);
     }
     if let Some(volume) = quote.volume.filter(|v| *v > 0.0) {
         zones.push(vec![vec![Span::styled(
             format!("  vol {}", fmt_volume(volume)),
-            Style::new().dim(),
+            theme.subtle(),
         )]]);
     }
     zones
@@ -328,13 +328,13 @@ fn session_zone(app: &App, symbol: &str, now: DateTime<Utc>) -> Vec<Vec<Span<'st
     let style = match clock.session {
         Session::Open => Style::new().fg(theme.pos),
         Session::Pre | Session::Post => Style::new().fg(theme.warn),
-        Session::Closed => Style::new().dim(),
+        Session::Closed => theme.subtle(),
     };
     let badge = Span::styled(format!("  {}", clock.session.label()), style);
     vec![
         vec![
             badge.clone(),
-            Span::styled(format!(" {}", clock.countdown()), Style::new().dim()),
+            Span::styled(format!(" {}", clock.countdown()), theme.subtle()),
         ],
         vec![badge],
     ]
@@ -375,12 +375,9 @@ fn range_zone(
             ),
         ]
     };
-    let mut labelled = vec![Span::styled(
-        format!("  {}", fmt_price(lo)),
-        Style::new().dim(),
-    )];
+    let mut labelled = vec![Span::styled(format!("  {}", fmt_price(lo)), theme.subtle())];
     labelled.extend(bars(""));
-    labelled.push(Span::styled(fmt_price(hi), Style::new().dim()));
+    labelled.push(Span::styled(fmt_price(hi), theme.subtle()));
     // The bare track keeps the position when the numbers do not fit; the
     // watchlist table carries the low and high anyway.
     vec![labelled, bars("  ")]
@@ -415,10 +412,10 @@ fn peers(app: &App, selected: &str, room: usize) -> Vec<Span<'static>> {
                 format!("{pct:+.2}%"),
                 Style::new().fg(dir_color(&app.data[symbol].quote, theme)),
             ),
-            None => ("—".to_string(), Style::new().dim()),
+            None => ("—".to_string(), theme.faint()),
         };
         let group = vec![
-            Span::styled(format!("  {symbol} "), Style::new().dim()),
+            Span::styled(format!("  {symbol} "), theme.subtle()),
             Span::styled(text, style),
         ];
         let w = total_width(&group);

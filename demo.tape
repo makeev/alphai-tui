@@ -1,10 +1,11 @@
 # Records assets/demo.gif for the README. Run `vhs demo.tape` from the
-# repo root with alphai-tui installed and an AlphAI key configured; one
+# repo root after `cargo build --release`, with an AlphAI key configured; one
 # take costs one price request per ticker (the poll interval is parked at
 # 900s: Yahoo rate-limits by IP) and about eight AlphAI requests.
 #
-# The app wears catppuccin-mocha and the terminal wears the matching
-# theme: the app only paints foreground colors, so the two have to agree.
+# The app wears dracula and the terminal wears the matching theme: the
+# gutters between the tinted panels are the terminal's own background, so
+# the two have to agree.
 # Prices come from the keyless source, which is what a first run gets.
 #
 # The Portfolio scene needs holdings, and those live in the config. The
@@ -15,7 +16,7 @@
 
 Output assets/demo.gif
 
-Set Theme "Catppuccin Mocha"
+Set Theme "Dracula"
 Set FontSize 14
 Set Width 1200
 Set Height 700
@@ -24,9 +25,13 @@ Set Framerate 12
 Set TypingSpeed 40ms
 
 Hide
+# The throwaway config below holds an API key: keep it private from the
+# moment it exists.
+Type "umask 077"
+Enter
 Type `mkdir -p /tmp/alphaidemo/alphai-tui`
 Enter
-Type `printf '[keys]\n' > /tmp/alphaidemo/alphai-tui/config.toml`
+Type `printf '[ui]\nborders = "none"\n\n[keys]\n' > /tmp/alphaidemo/alphai-tui/config.toml`
 Enter
 Type `grep -m1 ^alphai.= ~/.config/alphai-tui/config.toml >> /tmp/alphaidemo/alphai-tui/config.toml`
 Enter
@@ -34,20 +39,33 @@ Type `printf '\n[[positions]]\nsymbol = "NVDA"\nqty = 120\navg_price = 118.40\n\
 Enter
 Type `export XDG_CONFIG_HOME=/tmp/alphaidemo; clear`
 Enter
-Show
-Sleep 500ms
 
-Type "alphai-tui --theme catppuccin-mocha --source yahoo --every 900 NVDA AVGO AAPL META BTC-USD"
+# The launch and the first load happen off camera: the first frame of the
+# gif is what GitHub shows before it plays (and what a reader with reduced
+# motion sees for good), so it has to be the loaded dashboard, not a shell
+# prompt.
+Type "./target/release/alphai-tui --theme dracula --source yahoo --every 900 NVDA AVGO AAPL META BTC-USD"
 Enter
-Sleep 6s
+Sleep 8s
+Show
 
-# News: the scored list next to the full AI analysis of the story
+# Split: watchlist, chart with the news marks, the scored feed
+Sleep 4s
+
+# News: the chart over the scored list, the full AI analysis beside them;
+# the story under the cursor is the highlighted mark on the chart
 Type "2"
 Sleep 4.5s
 Down
 Sleep 1.5s
 Down
 Sleep 3s
+
+# v reads it in place, under the chart
+Type "v"
+Sleep 3.5s
+Type "v"
+Sleep 1s
 
 # f cycles the scope: market-wide, with reprints collapsed
 Type "f"

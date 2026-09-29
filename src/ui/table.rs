@@ -124,14 +124,21 @@ fn columns(avail: u16, extended: bool, held: bool) -> Columns {
     }
 }
 
-/// Shared by TableView and SplitView.
-pub fn render_table(f: &mut Frame, area: Rect, app: &mut App) {
+/// Whether any row has an extended-hours print, and whether any is held:
+/// the two conditional column pairs.
+fn conditional_columns(app: &App) -> (bool, bool) {
     let extended = app.symbols.iter().any(|s| {
         app.data
             .get(s)
             .is_some_and(|d| d.quote.extended_price().is_some())
     });
     let held = app.symbols.iter().any(|s| app.position(s).is_some());
+    (extended, held)
+}
+
+/// Shared by TableView and SplitView.
+pub fn render_table(f: &mut Frame, area: Rect, app: &mut App) {
+    let (extended, held) = conditional_columns(app);
     let cols = columns(area.width.saturating_sub(2 + MARKER), extended, held);
     let spark_width = cols.spark as usize;
     let rows: Vec<Row> = app
@@ -142,7 +149,7 @@ pub fn render_table(f: &mut Frame, area: Rect, app: &mut App) {
                 let status = if app.errors.contains_key(symbol) {
                     Cell::from("error").style(Style::new().fg(app.theme.error))
                 } else {
-                    Cell::from("…").dim()
+                    Cell::from("…").style(app.theme.subtle())
                 };
                 return Row::new(vec![Cell::from(symbol.clone()).bold(), status]);
             };
@@ -151,7 +158,7 @@ pub fn render_table(f: &mut Frame, area: Rect, app: &mut App) {
             let dir_style = match q.change() {
                 Some(c) if c > 0.0 => Style::new().fg(app.theme.up),
                 Some(c) if c < 0.0 => Style::new().fg(app.theme.down),
-                _ => Style::new().dim(),
+                _ => app.theme.subtle(),
             };
             // Freshly updated price pulses in the tick's color (see
             // `App::price_flash_dir`), so the table reads as live too.
@@ -226,7 +233,7 @@ pub fn render_table(f: &mut Frame, area: Rect, app: &mut App) {
                 });
             }
             if cols.range {
-                cells.push(Cell::from(right(range)).dim());
+                cells.push(Cell::from(right(range)).style(app.theme.subtle()));
             }
             if cols.spark > 0 {
                 cells.push(Cell::from(spark_line(&closes, spark_width)).style(dir_style));
@@ -269,7 +276,7 @@ pub fn render_table(f: &mut Frame, area: Rect, app: &mut App) {
     let table = Table::new(rows, widths)
         .header(Row::new(header).style(Style::new().bold().underlined()))
         .block(app.theme.panel_titled(" Watchlist "))
-        .row_highlight_style(Style::new().add_modifier(Modifier::REVERSED))
+        .row_highlight_style(app.theme.selected())
         .highlight_symbol("▶ ");
 
     app.table_state.select(Some(app.selected));

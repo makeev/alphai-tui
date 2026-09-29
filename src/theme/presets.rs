@@ -2,7 +2,7 @@
 //!
 //! Every family has its own color vocabulary, so the map from palette
 //! names to semantic slots is written once, in `theme_from`, and a family
-//! only fills in eleven values. Adding a preset is one `Palette` constant
+//! only fills in fourteen values. Adding a preset is one `Palette` constant
 //! plus one row in `PRESETS`; `presets_are_coherent` fails if that leaves
 //! any slot behind.
 //!
@@ -13,18 +13,34 @@
 use ratatui::style::Color;
 use ratatui::widgets::BorderType;
 
-use super::Theme;
+use super::{Panels, Theme};
 
 const fn rgb(hex: u32) -> Color {
     Color::Rgb((hex >> 16) as u8, (hex >> 8) as u8, hex as u8)
 }
 
-const fn tint(base: Color, accent: Color) -> Color {
-    match (base, accent) {
-        (Color::Rgb(r, g, b), Color::Rgb(ar, ag, ab)) => Color::Rgb(
-            ((r as u16 * 9 + ar as u16) / 10) as u8,
-            ((g as u16 * 9 + ag as u16) / 10) as u8,
-            ((b as u16 * 9 + ab as u16) / 10) as u8,
+/// A session background: the panel surface pulled 14% toward a hue. The
+/// regular session is drawn on the surface, so that is what the extended
+/// ones have to stand apart from; tinted from the terminal background, as
+/// they were while panels had frames, the after-hours band of mocha, frappe
+/// and nord came within 2 ΔE of the surface and vanished into it.
+const fn tint(surface: Color, hue: Color) -> Color {
+    mix(surface, hue, 14)
+}
+
+/// A step off the terminal background toward the text: enough to read as a
+/// panel, little enough to leave room for the session tints above it.
+const fn surface(p: &Palette) -> Color {
+    mix(p.base, p.text, 7)
+}
+
+/// `base` moved `pct` percent of the way to `toward`, per channel.
+const fn mix(base: Color, toward: Color, pct: u16) -> Color {
+    match (base, toward) {
+        (Color::Rgb(r, g, b), Color::Rgb(tr, tg, tb)) => Color::Rgb(
+            ((r as u16 * (100 - pct) + tr as u16 * pct) / 100) as u8,
+            ((g as u16 * (100 - pct) + tg as u16 * pct) / 100) as u8,
+            ((b as u16 * (100 - pct) + tb as u16 * pct) / 100) as u8,
         ),
         _ => base,
     }
@@ -39,6 +55,13 @@ struct Palette {
     /// The background the palette was drawn for: accent text and the base
     /// of the subtle pre-market and after-hours tints.
     base: Color,
+    /// The family's body text.
+    text: Color,
+    /// Its secondary text shade (catppuccin subtext, gruvbox fg3): meant
+    /// for metadata, so it keeps a readable contrast on `base`.
+    subtext: Color,
+    /// The quietest shade still meant as text rather than structure.
+    faint: Color,
     green: Color,
     red: Color,
     /// A second red so an app error reads apart from a falling price.
@@ -71,18 +94,26 @@ const fn theme_from(p: Palette) -> Theme {
         sma_slow: p.violet,
         rsi_line: p.cyan,
         ref_line: p.dim,
-        pre_market_bg: tint(p.base, p.yellow),
-        post_market_bg: tint(p.base, p.violet),
+        pre_market_bg: tint(surface(&p), p.yellow),
+        post_market_bg: tint(surface(&p), p.violet),
         border: p.dim,
+        text: p.text,
+        subtle: p.subtext,
+        faint: p.faint,
+        selection: mix(p.base, p.text, 22),
+        surface: surface(&p),
         // Frames are shaped by `[ui] borders`, which `config::resolve`
         // stamps on afterwards; a preset never decides that.
-        border_type: BorderType::Rounded,
+        panels: Panels::Lines(BorderType::Rounded),
     }
 }
 
 const CATPPUCCIN_MOCHA: Palette = Palette {
     accent: rgb(0xcba6f7),
     base: rgb(0x1e1e2e),
+    text: rgb(0xcdd6f4),
+    subtext: rgb(0xa6adc8),
+    faint: rgb(0x7f849c),
     green: rgb(0xa6e3a1),
     red: rgb(0xf38ba8),
     red_alt: rgb(0xeba0ac),
@@ -97,6 +128,9 @@ const CATPPUCCIN_MOCHA: Palette = Palette {
 const CATPPUCCIN_MACCHIATO: Palette = Palette {
     accent: rgb(0xc6a0f6),
     base: rgb(0x24273a),
+    text: rgb(0xcad3f5),
+    subtext: rgb(0xa5adcb),
+    faint: rgb(0x8087a2),
     green: rgb(0xa6da95),
     red: rgb(0xed8796),
     red_alt: rgb(0xee99a0),
@@ -111,6 +145,9 @@ const CATPPUCCIN_MACCHIATO: Palette = Palette {
 const CATPPUCCIN_FRAPPE: Palette = Palette {
     accent: rgb(0xca9ee6),
     base: rgb(0x303446),
+    text: rgb(0xc6d0f5),
+    subtext: rgb(0xa5adce),
+    faint: rgb(0x838ba7),
     green: rgb(0xa6d189),
     red: rgb(0xe78284),
     red_alt: rgb(0xea999c),
@@ -125,6 +162,9 @@ const CATPPUCCIN_FRAPPE: Palette = Palette {
 const CATPPUCCIN_LATTE: Palette = Palette {
     accent: rgb(0x8839ef),
     base: rgb(0xeff1f5),
+    text: rgb(0x4c4f69),
+    subtext: rgb(0x5c5f77),
+    faint: rgb(0x7c7f93),
     green: rgb(0x40a02b),
     red: rgb(0xd20f39),
     red_alt: rgb(0xe64553),
@@ -136,10 +176,15 @@ const CATPPUCCIN_LATTE: Palette = Palette {
     dim: rgb(0xacb0be),
 };
 
-/// One red in the palette, so errors and falling prices share it.
+/// One red in the palette, so errors and falling prices share it. Dracula
+/// (like Nord below) names no secondary text shades; the two here are the
+/// foreground a little over a quarter and halfway to the background.
 const DRACULA: Palette = Palette {
     accent: rgb(0xbd93f9),
     base: rgb(0x282a36),
+    text: rgb(0xf8f8f2),
+    subtext: mix(rgb(0xf8f8f2), rgb(0x282a36), 28),
+    faint: mix(rgb(0xf8f8f2), rgb(0x282a36), 50),
     green: rgb(0x50fa7b),
     red: rgb(0xff5555),
     red_alt: rgb(0xff5555),
@@ -156,6 +201,9 @@ const DRACULA: Palette = Palette {
 const GRUVBOX_DARK: Palette = Palette {
     accent: rgb(0x83a598),
     base: rgb(0x282828),
+    text: rgb(0xebdbb2),
+    subtext: rgb(0xbdae93),
+    faint: rgb(0x928374),
     green: rgb(0xb8bb26),
     red: rgb(0xfb4934),
     red_alt: rgb(0xcc241d),
@@ -170,6 +218,9 @@ const GRUVBOX_DARK: Palette = Palette {
 const GRUVBOX_LIGHT: Palette = Palette {
     accent: rgb(0x076678),
     base: rgb(0xfbf1c7),
+    text: rgb(0x3c3836),
+    subtext: rgb(0x665c54),
+    faint: rgb(0x7c6f64),
     green: rgb(0x79740e),
     red: rgb(0x9d0006),
     red_alt: rgb(0xcc241d),
@@ -186,6 +237,9 @@ const GRUVBOX_LIGHT: Palette = Palette {
 const NORD: Palette = Palette {
     accent: rgb(0x88c0d0),
     base: rgb(0x2e3440),
+    text: rgb(0xd8dee9),
+    subtext: mix(rgb(0xd8dee9), rgb(0x2e3440), 28),
+    faint: mix(rgb(0xd8dee9), rgb(0x2e3440), 50),
     green: rgb(0xa3be8c),
     red: rgb(0xbf616a),
     red_alt: rgb(0xbf616a),
@@ -277,7 +331,12 @@ mod tests {
             rsi_line,
             ref_line,
             border,
-            border_type: _,
+            text,
+            subtle,
+            faint,
+            selection,
+            surface,
+            panels: _,
             pre_market_bg,
             post_market_bg,
         } = theme;
@@ -299,6 +358,11 @@ mod tests {
             ("pre_market_bg", pre_market_bg),
             ("post_market_bg", post_market_bg),
             ("border", border),
+            ("text", text),
+            ("subtle", subtle),
+            ("faint", faint),
+            ("selection", selection),
+            ("surface", surface),
         ]
     }
 
@@ -330,6 +394,112 @@ mod tests {
                     matches!(color, Color::Rgb(..)),
                     "{name}: slot {slot} is not part of the palette ({color:?})"
                 );
+            }
+        }
+    }
+
+    /// WCAG contrast ratio of two sRGB colors.
+    fn contrast(a: Color, b: Color) -> f64 {
+        fn lum(c: Color) -> f64 {
+            let Color::Rgb(r, g, b) = c else {
+                panic!("{c:?} is not rgb")
+            };
+            let ch = |v: u8| {
+                let v = f64::from(v) / 255.0;
+                if v <= 0.03928 {
+                    v / 12.92
+                } else {
+                    ((v + 0.055) / 1.055).powf(2.4)
+                }
+            };
+            0.2126 * ch(r) + 0.7152 * ch(g) + 0.0722 * ch(b)
+        }
+        let (x, y) = (lum(a), lum(b));
+        (x.max(y) + 0.05) / (x.min(y) + 0.05)
+    }
+
+    /// The text tiers exist so metadata stays legible: secondary text
+    /// must clear WCAG AA for body text on the palette's own background
+    /// and on the panel surface, and faint text must still clear the bar
+    /// for large text rather than vanish.
+    #[test]
+    fn text_tiers_stay_readable() {
+        for (name, t) in PRESETS.iter().skip(1) {
+            // accent_text is the palette's base background.
+            for (bg_name, bg) in [("base", t.accent_text), ("surface", t.surface)] {
+                let body = contrast(t.text, bg);
+                let subtle = contrast(t.subtle, bg);
+                let faint = contrast(t.faint, bg);
+                assert!(body >= 6.0, "{name}: text on {bg_name} is {body:.2}");
+                assert!(subtle >= 4.5, "{name}: subtle on {bg_name} is {subtle:.2}");
+                assert!(faint >= 3.0, "{name}: faint on {bg_name} is {faint:.2}");
+                assert!(
+                    body > subtle && subtle > faint,
+                    "{name}: tiers out of order"
+                );
+            }
+            // The cursor row keeps its text readable, secondary columns too.
+            let on_sel = contrast(t.subtle, t.selection);
+            assert!(on_sel >= 3.0, "{name}: subtle on selection is {on_sel:.2}");
+        }
+    }
+
+    /// CIE76 distance of two sRGB colors: under ~3 the eye takes them for
+    /// one color.
+    fn delta_e(a: Color, b: Color) -> f64 {
+        fn lab(c: Color) -> [f64; 3] {
+            let Color::Rgb(r, g, b) = c else {
+                panic!("{c:?} is not rgb")
+            };
+            let lin = |v: u8| {
+                let v = f64::from(v) / 255.0;
+                if v <= 0.04045 {
+                    v / 12.92
+                } else {
+                    ((v + 0.055) / 1.055).powf(2.4)
+                }
+            };
+            let (r, g, b) = (lin(r), lin(g), lin(b));
+            let x = (0.4124 * r + 0.3576 * g + 0.1805 * b) / 0.95047;
+            let y = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+            let z = (0.0193 * r + 0.1192 * g + 0.9505 * b) / 1.08883;
+            let f = |t: f64| {
+                if t > 0.008856 {
+                    t.cbrt()
+                } else {
+                    7.787 * t + 16.0 / 116.0
+                }
+            };
+            [
+                116.0 * f(y) - 16.0,
+                500.0 * (f(x) - f(y)),
+                200.0 * (f(y) - f(z)),
+            ]
+        }
+        let (a, b) = (lab(a), lab(b));
+        a.iter()
+            .zip(b)
+            .map(|(x, y)| (x - y).powi(2))
+            .sum::<f64>()
+            .sqrt()
+    }
+
+    /// The pre-market and after-hours bands must read apart from the
+    /// regular session on either background it can have (the panel surface
+    /// or, with frames, the terminal's own) and from each other.
+    #[test]
+    fn session_tints_stand_apart() {
+        for (name, t) in PRESETS.iter().skip(1) {
+            let pairs = [
+                ("pre/surface", t.pre_market_bg, t.surface),
+                ("post/surface", t.post_market_bg, t.surface),
+                ("pre/base", t.pre_market_bg, t.accent_text),
+                ("post/base", t.post_market_bg, t.accent_text),
+                ("pre/post", t.pre_market_bg, t.post_market_bg),
+            ];
+            for (what, a, b) in pairs {
+                let d = delta_e(a, b);
+                assert!(d >= 5.5, "{name}: {what} is only {d:.1} ΔE apart");
             }
         }
     }

@@ -5,6 +5,57 @@ the crates.io releases; from 0.7.0 on each one is also a git tag and a
 GitHub release with prebuilt binaries. The Homebrew tap, the AUR and the
 apt repository joined later, and carry every version since.
 
+## 0.26.0 - 2026-09-29
+
+- `[ui] borders = "none"` draws panels as tinted surfaces separated by a
+  small gutter, with the title above each one, instead of frame lines.
+  Rounded frames stay the default; a new Panels row in the settings screen
+  switches between the three looks live. Overlays keep their frame either
+  way. On the `default` theme, which cannot know the terminal's
+  background, tinted panels are told apart by the gutter and their titles
+  alone.
+- News shows the ticker's chart over the list, next to the article card.
+  The article under the cursor is the highlighted mark on the chart and the
+  chart's bottom line names it, so the story and the move it came with are
+  on one screen. It costs no requests. It needs 120 columns and the ticker
+  scope; elsewhere the list and the card stand side by side as before. `x`
+  cycles to the stacked and the side-by-side layouts, and a new News layout
+  row in the settings screen saves the choice to `[ui] news_layout`.
+  There `v` reads the article in place: the chart stays on top, full
+  width, and the card takes the list's room below it, instead of a card
+  over the whole screen.
+- The Split view puts the chart across the full width of the top half, with
+  the watchlist and the news feed side by side under it. The chart shows
+  twice the candles, and a short watchlist no longer leaves half of its
+  panel empty.
+- The Insider view shows the selected filing's full card beside the list:
+  the trade, who made it, the AI read and the stake it moved. `v` hides the
+  card for a full-width list and brings it back; on a terminal too narrow
+  for both, the short pane under the list stays and `v` opens the card
+  over the screen as before.
+- Secondary text is readable. Sources, ages, axis labels, key hints and the
+  analysis in the article card used the terminal's dim attribute, which
+  several terminals render close to the background. The presets now draw
+  them in their palette's secondary text color (catppuccin's subtext,
+  gruvbox's fg3), checked against WCAG contrast in the tests. The analysis
+  text in the card is body text again. The `default` theme keeps dim, the
+  one muted shade that works on both dark and light terminals.
+- The cursor row in lists keeps its colors: presets mark it with a
+  background instead of reverse video, so a green arrow or a yellow score
+  stays green or yellow under the cursor.
+- Pre-market and after-hours shading is tinted from the panel color, so
+  it stands apart from the regular session on tinted panels as well.
+- Five new `[theme]` slots (`text`, `subtle`, `faint`, `selection`,
+  `surface`) cover the new colors.
+- A feed refresh that brings a new story to the top no longer swaps the
+  article being read: the cursor stays on it.
+- The Theme row in the settings screen named the old `p` key; it now says
+  `}` and `{`.
+- The README shows every preset side by side, each on a terminal wearing
+  its palette, instead of a gif cycling them on one. `YAHOO_CHART_URL`
+  joins the env-only debug overrides, and the recording tapes write their
+  throwaway key file with private permissions.
+
 ## 0.25.0 - 2026-09-27
 
 - `a` and `d` save the watchlist to the config straight away, the way a

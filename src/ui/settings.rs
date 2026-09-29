@@ -1,11 +1,12 @@
 use ratatui::Frame;
-use ratatui::style::{Modifier, Style, Stylize};
+use ratatui::style::{Style, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, Paragraph, Wrap};
 
-use crate::app::{App, SettingsRow, settings_rows};
+use crate::app::{App, NewsLayout, SettingsRow, settings_rows};
 use crate::config::{ALPHAI_KEY_FIELD, KeyField};
 use crate::source::registry;
+use crate::theme::Panels;
 use crate::ui::centered;
 
 /// Modal overlay drawn on top of whatever view is active.
@@ -46,7 +47,7 @@ pub fn render(f: &mut Frame, app: &App) {
         if let SettingsRow::Save = row {
             lines.push(Line::from(""));
             let save_style = if selected {
-                Style::new().add_modifier(Modifier::REVERSED)
+                app.theme.selected()
             } else {
                 Style::new()
             };
@@ -87,10 +88,24 @@ pub fn render(f: &mut Frame, app: &App) {
                 format!("‹ {} ›", s.news_open_choice),
                 news_open_hint(s.news_open_choice.as_str()),
             ),
+            SettingsRow::NewsLayout => (
+                "News layout",
+                format!("‹ {} ›", s.news_layout_choice.name()),
+                news_layout_hint(s.news_layout_choice),
+            ),
+            SettingsRow::Borders => (
+                "Panels",
+                format!("‹ {} ›", s.borders_choice.name()),
+                match s.borders_choice {
+                    Panels::Surface => "tinted panels, no frame lines",
+                    Panels::Lines(_) => "frame lines around every panel",
+                }
+                .to_string(),
+            ),
             SettingsRow::ThemeChoice => (
                 "Theme",
                 format!("‹ {} ›", s.theme_choice),
-                "color preset; p / P cycle it anywhere".to_string(),
+                "color preset; } / { cycle it anywhere".to_string(),
             ),
             SettingsRow::Save => unreachable!(),
         };
@@ -98,7 +113,7 @@ pub fn render(f: &mut Frame, app: &App) {
         let value_style = if editing {
             Style::new().fg(app.theme.warn)
         } else if selected {
-            Style::new().add_modifier(Modifier::REVERSED)
+            app.theme.selected()
         } else {
             Style::new()
         };
@@ -107,7 +122,7 @@ pub fn render(f: &mut Frame, app: &App) {
             Span::styled(format!("{label:<14}"), Style::new().bold()),
             Span::styled(value, value_style),
             Span::raw(" "),
-            Span::raw(hint).dim(),
+            Span::raw(hint).style(app.theme.subtle()),
         ]));
         // The interval only means something against the watchlist length:
         // spell out the budget it lands on when it overruns the plan.
@@ -130,14 +145,20 @@ pub fn render(f: &mut Frame, app: &App) {
     } else {
         lines.push(Line::from(""));
     }
-    lines.push(Line::from("  ↑↓ move · ←→ change · enter edit / save · esc close").dim());
+    lines.push(
+        Line::from("  ↑↓ move · ←→ change · enter edit / save · esc close")
+            .style(app.theme.subtle()),
+    );
     if let Some(p) = &app.config_path {
-        lines.push(Line::from(format!("  config: {}", tilde(&p.display().to_string()))).dim());
+        lines.push(
+            Line::from(format!("  config: {}", tilde(&p.display().to_string())))
+                .style(app.theme.subtle()),
+        );
     }
 
     let block = app
         .theme
-        .panel()
+        .modal()
         .title(app.theme.heading(" Settings "))
         .border_style(Style::new().fg(app.theme.accent));
     f.render_widget(
@@ -146,6 +167,15 @@ pub fn render(f: &mut Frame, app: &App) {
             .block(block),
         area,
     );
+}
+
+fn news_layout_hint(layout: NewsLayout) -> String {
+    match layout {
+        NewsLayout::Chart => "chart over the list; x cycles it",
+        NewsLayout::Side => "list beside the card; x cycles it",
+        NewsLayout::Stacked => "list over the card; x cycles it",
+    }
+    .to_string()
 }
 
 /// The request budget the settings on screen would land on: the source

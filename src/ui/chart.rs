@@ -1,6 +1,6 @@
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style, Stylize};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
@@ -92,12 +92,23 @@ fn panel_split(height: u16, volume: bool, rsi: bool) -> (u16, u16) {
 /// (`m`, simple or exponential by `e`), a volume panel (`b`) and an RSI(14)
 /// panel (`i`). Shared by ChartView and SplitView.
 pub fn render_chart(f: &mut Frame, area: Rect, app: &App) {
+    render_chart_with(f, area, app, app.show_volume, app.show_rsi);
+}
+
+/// The price panel alone, for the News chart layout: it shares the screen
+/// with the list and the card, and the keys that toggle the lower panels
+/// do not reach it there, so it keeps every row for the candles.
+pub fn render_price_chart(f: &mut Frame, area: Rect, app: &App) {
+    render_chart_with(f, area, app, false, false);
+}
+
+fn render_chart_with(f: &mut Frame, area: Rect, app: &App, show_volume: bool, show_rsi: bool) {
     let symbol = app.selected_symbol().to_string();
 
     let Some(data) = app.data.get(&symbol) else {
         let msg = match app.errors.get(&symbol) {
             Some(e) => Line::from(format!("{symbol}: {e}")).style(Style::new().fg(app.theme.error)),
-            None => Line::from(format!("{symbol}: loading…")).dim(),
+            None => Line::from(format!("{symbol}: loading…")).style(app.theme.subtle()),
         };
         f.render_widget(
             Paragraph::new(msg).block(app.theme.panel_titled(format!(" {symbol} "))),
@@ -107,7 +118,7 @@ pub fn render_chart(f: &mut Frame, area: Rect, app: &App) {
     };
     if data.candles.len() < 2 {
         f.render_widget(
-            Paragraph::new(Line::from("not enough history for a chart").dim())
+            Paragraph::new(Line::from("not enough history for a chart").style(app.theme.subtle()))
                 .block(app.theme.panel_titled(format!(" {symbol} "))),
             area,
         );
@@ -118,9 +129,9 @@ pub fn render_chart(f: &mut Frame, area: Rect, app: &App) {
     let cut = visible_from(&data.candles, drawn.range);
     // An empty volume panel would only steal rows from the price chart:
     // finnhub synthesizes candles from ticks and carries no volume at all.
-    let has_volume = app.show_volume && data.candles[cut..].iter().any(|c| c.volume.is_some());
+    let has_volume = show_volume && data.candles[cut..].iter().any(|c| c.volume.is_some());
     let single_venue = single_venue_volume(&data.candles);
-    let (volume_h, rsi_h) = panel_split(area.height, has_volume, app.show_rsi);
+    let (volume_h, rsi_h) = panel_split(area.height, has_volume, show_rsi);
     let [price_area, volume_area, rsi_area] = Layout::vertical([
         Constraint::Min(0),
         Constraint::Length(volume_h),
@@ -332,13 +343,26 @@ fn chart_title(
 
 /// The chart's bottom border when the news marks have something to name:
 /// the freshest of them, with its headline. Shared by both chart modes.
+/// With an article in focus (the News card) the border names that one
+/// instead, or says it is not on this chart, so the highlighted mark never
+/// sits under somebody else's headline.
 fn headline(
     marks: &[news_marks::Mark],
+    focus: bool,
     symbol: &str,
     width: u16,
     theme: &Theme,
 ) -> Option<Line<'static>> {
-    news_marks::headline(news_marks::latest(marks)?, symbol, width, theme)
+    if !focus {
+        return news_marks::headline(news_marks::latest(marks)?, symbol, width, theme);
+    }
+    match marks.iter().find(|m| m.focused) {
+        Some(mark) => news_marks::headline(mark, symbol, width, theme),
+        None => Some(Line::styled(
+            " selected story is outside this window ",
+            theme.subtle(),
+        )),
+    }
 }
 
 // -- candle mode --------------------------------------------------------------
@@ -467,12 +491,19 @@ fn render_price_candles(
     // The ticker's news, placed on the candles on screen; rows older than
     // the first of them are dropped by `place`. Read from the cache the News
     // and Split views fill, so this costs nothing.
+    let focus = app.chart_focus(symbol);
     let marks = if app.show_news_markers {
-        news_marks::place(app.ticker_articles(symbol), &display, drawn.interval)
+        news_marks::place(
+            app.ticker_articles(symbol),
+            &display,
+            drawn.interval,
+            focus.as_deref(),
+        )
     } else {
         Vec::new()
     };
-    let block = match headline(&marks, symbol, area.width, &app.theme) {
+    let focus = focus.is_some() && app.show_news_markers;
+    let block = match headline(&marks, focus, symbol, area.width, &app.theme) {
         Some(line) => block.title_bottom(line),
         None => block,
     };
@@ -577,7 +608,12 @@ fn render_price_candles(
     for mark in &marks {
         let x = xs[mark.col] + body_w / 2;
         let top = (scale(display[mark.col].high, y_lo, y_hi, plot.height as usize * 2) / 2) as u16;
-        let (ch, style) = news_marks::glyph(mark.article, symbol, &app.theme);
+        let (ch, mut style) = news_marks::glyph(mark.article, symbol, &app.theme);
+        if mark.focused {
+            style = style
+                .remove_modifier(Modifier::DIM)
+                .add_modifier(Modifier::REVERSED | Modifier::BOLD);
+        }
         let ch = if app.chart_style == ChartStyle::Line {
             '•'
         } else {
@@ -615,7 +651,7 @@ fn render_price_candles(
     }
 
     // Price labels in the gutter; the shared adaptive time axis below.
-    let dim = Style::new().dim();
+    let dim = app.theme.subtle();
     let label_ys = [plot.y, plot.y + plot.height / 2, plot.y + plot.height - 1];
     for (label, y) in y_labels.iter().zip(label_ys) {
         let x = (plot.x - 1)
@@ -623,7 +659,7 @@ fn render_price_candles(
             .max(inner.x);
         buf.set_string(x, y, label, dim);
     }
-    axis.render(buf, plot);
+    axis.render(buf, plot, app.theme.subtle());
 
     Some(CandleGeom {
         gutter,
@@ -925,7 +961,7 @@ fn render_volume_candles(
     let label = fmt_volume(vmax);
     let len = label.chars().count() as u16;
     if len < geom.gutter {
-        buf.set_string(geom.plot_x - 1 - len, inner.y, &label, Style::new().dim());
+        buf.set_string(geom.plot_x - 1 - len, inner.y, &label, theme.subtle());
     }
 }
 
@@ -945,8 +981,10 @@ fn render_rsi(
     let values = indicators::rsi(&closes, period);
     let Some(last) = values.last().copied().flatten() else {
         f.render_widget(
-            Paragraph::new(Line::from(format!("not enough history for RSI({period})")).dim())
-                .block(theme.panel_titled(format!(" RSI({period}) "))),
+            Paragraph::new(
+                Line::from(format!("not enough history for RSI({period})")).style(theme.subtle()),
+            )
+            .block(theme.panel_titled(format!(" RSI({period}) "))),
             area,
         );
         return;
@@ -990,7 +1028,7 @@ fn render_rsi(
     for value in [0.0, 50.0, 100.0] {
         let y = plot.y + (scale(value, 0.0, 100.0, plot.height as usize * 2) / 2) as u16;
         let text = format!("{value:.0}");
-        buf.set_string(plot.x - 1 - text.len() as u16, y, text, Style::new().dim());
+        buf.set_string(plot.x - 1 - text.len() as u16, y, text, theme.subtle());
     }
     let mut line = BrailleOverlay::new(plot.width, plot.height);
     let mut prev = None;

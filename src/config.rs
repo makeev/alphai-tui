@@ -5,7 +5,6 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use clap::ValueEnum;
-use ratatui::widgets::BorderType;
 use serde::{Deserialize, Serialize};
 
 use crate::alphai;
@@ -14,7 +13,7 @@ use crate::domain::{Interval, Range};
 use crate::indicators::{self, MaType};
 use crate::keymap::Keymap;
 use crate::portfolio::Position;
-use crate::theme::Theme;
+use crate::theme::{Panels, Theme};
 use crate::ui;
 
 /// Used when neither the CLI nor the config file provides symbols.
@@ -109,7 +108,8 @@ pub struct UiConfig {
     pub default_view: Option<String>,
     pub news_layout: Option<String>,
     pub news_scope: Option<String>,
-    /// Line set of the panel frames: "rounded" (default) or "plain".
+    /// Panel look: "rounded" (the default) or "plain" frame lines, or
+    /// "none" for tinted panels without lines.
     pub borders: Option<String>,
     /// Raw i64 rather than u8: an out-of-range number must degrade to a
     /// warning in `resolve`, not fail deserializing the whole file.
@@ -288,7 +288,7 @@ impl Default for UiDefaults {
 pub fn resolve(cfg: &Config, cli_theme: Option<&str>) -> (Resolved, Vec<String>) {
     let mut warnings = Vec::new();
     let (mut theme, theme_name) = Theme::resolve(cfg.theme.as_ref(), cli_theme, &mut warnings);
-    theme.border_type = resolve_borders(
+    theme.panels = resolve_borders(
         cfg.ui.as_ref().and_then(|u| u.borders.as_deref()),
         &mut warnings,
     );
@@ -353,20 +353,23 @@ fn resolve_positions(raw: &[Position], warnings: &mut Vec<String>) -> Vec<Positi
     out
 }
 
-/// `[ui] borders`: the line set panel frames draw with. Lives in `[ui]`
-/// rather than `[theme]` because it is not a color, but it resolves onto
-/// the theme, which every renderer already has at hand.
-fn resolve_borders(raw: Option<&str>, warnings: &mut Vec<String>) -> BorderType {
-    match raw.map(str::to_lowercase).as_deref() {
-        None | Some("rounded") => BorderType::Rounded,
-        Some("plain") => BorderType::Plain,
-        Some(other) => {
+/// `[ui] borders`: the line set frames draw with (`rounded`, the default,
+/// or `plain`), or `none` for tinted panels without lines. Lives in `[ui]` rather than `[theme]`
+/// because it is not a color, but it resolves onto the theme, which every
+/// renderer already has at hand.
+fn resolve_borders(raw: Option<&str>, warnings: &mut Vec<String>) -> Panels {
+    let Some(raw) = raw else {
+        return Panels::default();
+    };
+    Panels::ALL
+        .into_iter()
+        .find(|p| p.name().eq_ignore_ascii_case(raw.trim()))
+        .unwrap_or_else(|| {
             warnings.push(format!(
-                "[ui] borders: unknown \"{other}\" (rounded or plain), keeping rounded"
+                "[ui] borders: unknown \"{raw}\" (rounded, plain or none), keeping rounded"
             ));
-            BorderType::Rounded
-        }
-    }
+            Panels::default()
+        })
 }
 
 fn resolve_chart(raw: Option<&ChartConfig>, warnings: &mut Vec<String>) -> ChartDefaults {
@@ -517,11 +520,10 @@ fn resolve_ui(raw: Option<&UiConfig>, warnings: &mut Vec<String>) -> UiDefaults 
         out.bare = on;
     }
     if let Some(layout) = &raw.news_layout {
-        match layout.to_lowercase().as_str() {
-            "side" => out.news_layout = NewsLayout::Side,
-            "stacked" => out.news_layout = NewsLayout::Stacked,
-            other => warnings.push(format!(
-                "[ui] news_layout: unknown \"{other}\" (side or stacked), keeping side"
+        match NewsLayout::from_name(layout) {
+            Some(l) => out.news_layout = l,
+            None => warnings.push(format!(
+                "[ui] news_layout: unknown \"{layout}\" (chart, side or stacked), keeping chart"
             )),
         }
     }
@@ -688,6 +690,7 @@ pub fn save_to(p: &Path, cfg: &Config) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ratatui::widgets::BorderType;
 
     /// A key field whose env var can never be set, so tests exercise the
     /// file side of the resolution deterministically.
@@ -909,17 +912,22 @@ avg_price = 100
         let cfg: Config = toml::from_str("[ui]\nborders = \"plain\"").unwrap();
         let (resolved, warnings) = resolve(&cfg, None);
         assert!(warnings.is_empty(), "{warnings:?}");
-        assert_eq!(resolved.theme.border_type, BorderType::Plain);
+        assert_eq!(resolved.theme.panels, Panels::Lines(BorderType::Plain));
 
         // Unknown value warns and keeps the rounded default; so does no
         // section at all (silently).
         let cfg: Config = toml::from_str("[ui]\nborders = \"fancy\"").unwrap();
         let (resolved, warnings) = resolve(&cfg, None);
         assert_eq!(warnings.len(), 1, "{warnings:?}");
-        assert_eq!(resolved.theme.border_type, BorderType::Rounded);
+        assert_eq!(resolved.theme.panels, Panels::Lines(BorderType::Rounded));
         let (resolved, warnings) = resolve(&Config::default(), None);
         assert!(warnings.is_empty(), "{warnings:?}");
-        assert_eq!(resolved.theme.border_type, BorderType::Rounded);
+        assert_eq!(resolved.theme.panels, Panels::Lines(BorderType::Rounded));
+
+        let cfg: Config = toml::from_str("[ui]\nborders = \"none\"").unwrap();
+        let (resolved, warnings) = resolve(&cfg, None);
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(resolved.theme.panels, Panels::Surface);
     }
 
     #[test]

@@ -8,7 +8,7 @@
 //! it fits the same line rather than earning a screen.
 
 use ratatui::Frame;
-use ratatui::style::{Style, Stylize};
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, Paragraph};
 
@@ -38,7 +38,7 @@ pub fn render(f: &mut Frame, app: &App) {
             format!(" {err}"),
             Style::new().fg(theme.error),
         )),
-        None => Line::from(Span::raw(" ").dim()),
+        None => Line::from(Span::raw(" ").style(app.theme.subtle())),
     };
     let (title, hint) = match prompt.kind {
         PromptKind::Ticker => (
@@ -52,10 +52,10 @@ pub fn render(f: &mut Frame, app: &App) {
             " qty avg · enter save · empty clears · esc cancel",
         ),
     };
-    let hint = Line::from(Span::raw(hint).dim());
+    let hint = Line::from(Span::raw(hint).style(app.theme.subtle()));
 
     f.render_widget(
-        Paragraph::new(vec![typed, message, hint]).block(theme.panel_titled(title)),
+        Paragraph::new(vec![typed, message, hint]).block(theme.modal().title(theme.heading(title))),
         area,
     );
 }

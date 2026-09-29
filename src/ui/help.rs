@@ -3,12 +3,13 @@
 //! render over the live `Keymap`, so a remap shows up here too.
 
 use ratatui::Frame;
-use ratatui::style::{Style, Stylize};
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, Paragraph};
 
 use crate::app::App;
 use crate::keymap::{Action, action_name};
+use crate::theme::Theme;
 use crate::ui::centered;
 
 /// One line of the table. The coverage test walks `ACTIONS` against this
@@ -44,10 +45,10 @@ static ROWS: &[Row] = &[
     Row::Act(Action::PageUp, "page up (card, earnings or calendar)"),
     Row::Act(Action::PageDown, "page down (card, earnings or calendar)"),
     Row::Act(Action::Open, "open source or the event's earnings"),
-    Row::Act(Action::Card, "full-screen article card"),
+    Row::Act(Action::Card, "article card (Insider: its column)"),
     Row::Group("News & Insider"),
     Row::Act(Action::CycleScope, "news scope: ticker, market, trending"),
-    Row::Act(Action::CycleLayout, "news layout: side or stacked"),
+    Row::Act(Action::CycleLayout, "news layout: side, chart or stacked"),
     Row::Act(Action::ScoreUp, "raise the feed score filter"),
     Row::Act(Action::ScoreDown, "lower the feed score filter"),
     Row::Act(Action::InsiderChart, "insider trades chart: 3m, 12m, off"),
@@ -83,8 +84,9 @@ pub fn render(f: &mut Frame, app: &mut App) {
                 app.keymap.action_labels(*action),
                 what,
                 action_name(*action),
+                &app.theme,
             )),
-            Row::Fixed(keys, what) => lines.push(help_line(keys.to_string(), what, "")),
+            Row::Fixed(keys, what) => lines.push(help_line(keys.to_string(), what, "", &app.theme)),
         }
     }
 
@@ -99,9 +101,12 @@ pub fn render(f: &mut Frame, app: &mut App) {
     f.render_widget(Clear, area);
     let block = app
         .theme
-        .panel()
+        .modal()
         .title(app.theme.heading(" Keys "))
-        .title_bottom(Line::from(" remap: [keybindings] in config.toml · esc close ").dim())
+        .title_bottom(
+            Line::from(" remap: [keybindings] in config.toml · esc close ")
+                .style(app.theme.subtle()),
+        )
         .border_style(Style::new().fg(app.theme.accent));
     let max_scroll = (lines.len() as u16).saturating_sub(area.height.saturating_sub(2));
     app.help.scroll = app.help.scroll.min(max_scroll);
@@ -115,10 +120,10 @@ pub fn render(f: &mut Frame, app: &mut App) {
 
 /// " keys        description                          config_name" with the
 /// name dimmed; fixed rows have no name (they are not remappable).
-fn help_line(keys: String, what: &str, name: &'static str) -> Line<'static> {
+fn help_line(keys: String, what: &str, name: &'static str, theme: &Theme) -> Line<'static> {
     Line::from(vec![
         Span::raw(format!(" {keys:<10} ")),
         Span::raw(format!("{what:<39}")),
-        Span::raw(name).dim(),
+        Span::styled(name, theme.subtle()),
     ])
 }

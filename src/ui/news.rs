@@ -6,7 +6,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Cell, Paragraph, Row, Table, Wrap};
 
 use crate::alphai::{self, Article, fmt_usd};
-use crate::app::{App, FeedKind, NewsScope};
+use crate::app::{App, FeedKind, NewsLayout, NewsScope};
 use crate::keymap::Action;
 use crate::theme::Theme;
 use crate::ui::{Hint, View, ViewId};
@@ -14,6 +14,16 @@ use crate::ui::{Hint, View, ViewId};
 /// Below this width the Side layout drops the card pane so the list keeps
 /// readable columns; v still opens the fullscreen card.
 const SIDE_CARD_MIN_WIDTH: u16 = 90;
+
+/// The Chart layout needs this much width for three panes (a chart under
+/// ~65 columns shows too few candles to place a story on); narrower, it
+/// reads as Side.
+const CHART_LAYOUT_MIN_WIDTH: u16 = 120;
+
+/// Rows the list keeps under the chart before the chart gives way. The
+/// chart itself wants `CHART_MIN_HEIGHT` for a readable price axis.
+const CHART_LIST_MIN_HEIGHT: u16 = 6;
+const CHART_MIN_HEIGHT: u16 = 10;
 
 pub struct NewsView;
 
@@ -73,26 +83,58 @@ impl View for NewsView {
 
         if bundle.articles.is_empty() {
             let msg = empty_feed_message(scope, &label, app.news_min_score);
-            f.render_widget(Paragraph::new(Line::from(msg).dim()).block(block), main);
+            f.render_widget(
+                Paragraph::new(Line::from(msg).style(app.theme.subtle())).block(block),
+                main,
+            );
             return;
         }
 
-        // List and card side by side (x flips to list over card); a terminal
-        // too narrow for two readable panes drops the card, v still opens the
-        // fullscreen one. The side list drops the novelty column; the card
-        // carries it in its meta.
-        let (list_area, card_area, full) = match app.news_layout {
-            crate::app::NewsLayout::Side if main.width < SIDE_CARD_MIN_WIDTH => (main, None, false),
-            crate::app::NewsLayout::Side => {
-                let [l, r] =
-                    Layout::horizontal([Constraint::Percentage(55), Constraint::Percentage(45)])
-                        .areas(main);
-                (l, Some(r), false)
-            }
-            crate::app::NewsLayout::Stacked => {
-                let [t, b] =
-                    Layout::vertical([Constraint::Min(3), Constraint::Percentage(45)]).areas(main);
-                (t, Some(b), true)
+        // List and card side by side (x cycles to chart-over-list, then to
+        // list over card); a terminal too narrow for two readable panes drops
+        // the card, v still opens the fullscreen one. The side list drops the
+        // novelty column; the card carries it in its meta.
+        let panes = panes(app.news_layout, scope, main);
+        // v in the chart layout reads in place instead of over the screen:
+        // the chart stays on top, the card takes the list's room and the
+        // card's width below it. The overlay state (open, scroll, the keys it
+        // takes) is the same one the fullscreen card uses; `inline` tells
+        // `ui::draw` not to paint that one on top.
+        if app.article_overlay.open && matches!(panes, NewsPanes::Chart { .. }) {
+            let chart_h = (main.height * 40 / 100)
+                .max(CHART_MIN_HEIGHT)
+                .min(main.height.saturating_sub(CHART_LIST_MIN_HEIGHT));
+            let [chart, card] =
+                Layout::vertical([Constraint::Length(chart_h), Constraint::Min(0)]).areas(main);
+            crate::ui::chart::render_price_chart(f, chart, app);
+            let selected = bundle
+                .articles
+                .get(app.news_selected.min(bundle.articles.len() - 1));
+            let uid = selected.map(|a| a.original.uid.clone()).unwrap_or_default();
+            let mut scroll = app.article_overlay.scroll;
+            let theme = app.theme;
+            crate::ui::article::render_reading(
+                f,
+                card,
+                selected,
+                &symbol,
+                app.find_earnings_by_uid(&uid),
+                &mut scroll,
+                &theme,
+            );
+            app.article_overlay.scroll = scroll;
+            app.article_overlay.inline = true;
+            return;
+        }
+        let (list_area, card_area, full) = match panes {
+            NewsPanes::List => (main, None, false),
+            NewsPanes::Side { list, card } => (list, Some(card), false),
+            NewsPanes::Stacked { list, card } => (list, Some(card), true),
+            NewsPanes::Chart { chart, list, card } => {
+                // Prices come from the poller, marks from this very bundle:
+                // the chart costs no request of its own.
+                crate::ui::chart::render_price_chart(f, chart, app);
+                (list, Some(card), false)
             }
         };
 
@@ -127,7 +169,7 @@ impl View for NewsView {
 
         let table = Table::new(rows, widths)
             .block(block)
-            .row_highlight_style(Style::new().add_modifier(Modifier::REVERSED))
+            .row_highlight_style(theme.selected())
             .highlight_symbol("▶ ");
         app.news_selected = app.news_selected.min(bundle.articles.len() - 1);
         app.news_table_state.select(Some(app.news_selected));
@@ -149,6 +191,54 @@ impl View for NewsView {
                 &theme,
             );
             app.card_scroll = scroll;
+        }
+    }
+}
+
+/// Where the News view's panes go.
+enum NewsPanes {
+    List,
+    Side { list: Rect, card: Rect },
+    Stacked { list: Rect, card: Rect },
+    Chart { chart: Rect, list: Rect, card: Rect },
+}
+
+/// The panes for `layout` in `main`, degrading on small terminals: the
+/// Chart layout first drops its chart (outside the ticker scope, too
+/// narrow, too short), then the Side one its card.
+fn panes(layout: NewsLayout, scope: NewsScope, main: Rect) -> NewsPanes {
+    let side = |main: Rect| {
+        if main.width < SIDE_CARD_MIN_WIDTH {
+            return NewsPanes::List;
+        }
+        let [list, card] =
+            Layout::horizontal([Constraint::Percentage(55), Constraint::Percentage(45)])
+                .areas(main);
+        NewsPanes::Side { list, card }
+    };
+    match layout {
+        NewsLayout::Side => side(main),
+        NewsLayout::Stacked => {
+            let [list, card] =
+                Layout::vertical([Constraint::Min(3), Constraint::Percentage(45)]).areas(main);
+            NewsPanes::Stacked { list, card }
+        }
+        NewsLayout::Chart => {
+            let fits = scope == NewsScope::Ticker
+                && main.width >= CHART_LAYOUT_MIN_WIDTH
+                && main.height >= CHART_MIN_HEIGHT + CHART_LIST_MIN_HEIGHT;
+            match side(main) {
+                NewsPanes::Side { list: left, card } if fits => {
+                    let chart_h = (left.height * 45 / 100)
+                        .max(CHART_MIN_HEIGHT)
+                        .min(left.height - CHART_LIST_MIN_HEIGHT);
+                    let [chart, list] =
+                        Layout::vertical([Constraint::Length(chart_h), Constraint::Min(0)])
+                            .areas(left);
+                    NewsPanes::Chart { chart, list, card }
+                }
+                other => other,
+            }
         }
     }
 }
@@ -175,7 +265,7 @@ pub(crate) fn feed_bottom_hint(
         return Some(Line::from(format!(" {e} ")).style(Style::new().fg(theme.error)));
     }
     if loading {
-        return Some(Line::from(" loading… ").dim());
+        return Some(Line::from(" loading… ").style(theme.subtle()));
     }
     if !has_more {
         return None;
@@ -184,7 +274,7 @@ pub(crate) fn feed_bottom_hint(
     Some(if at_edge {
         hint.style(Style::new().fg(theme.accent))
     } else {
-        hint.dim()
+        hint.style(theme.subtle())
     })
 }
 
@@ -224,8 +314,13 @@ pub fn render_panel(f: &mut Frame, area: Rect, app: &mut App) {
         let line = Line::from(
             " AI news needs a free AlphAI key from https://alphai.io, press s to add it",
         )
-        .dim();
-        f.render_widget(Paragraph::new(line).block(block), area);
+        .style(app.theme.subtle());
+        // The strip shares its row with the watchlist, so the hint wraps
+        // rather than losing its second half to the edge.
+        f.render_widget(
+            Paragraph::new(line).wrap(Wrap { trim: true }).block(block),
+            area,
+        );
         return;
     }
     if render_gate(f, area, &block, app, &key) {
@@ -234,7 +329,10 @@ pub fn render_panel(f: &mut Frame, area: Rect, app: &mut App) {
     let bundle = &app.feeds[&key];
     if bundle.articles.is_empty() {
         let msg = empty_feed_message(scope, &label, app.news_min_score);
-        f.render_widget(Paragraph::new(Line::from(msg).dim()).block(block), area);
+        f.render_widget(
+            Paragraph::new(Line::from(msg).style(app.theme.subtle())).block(block),
+            area,
+        );
         return;
     }
 
@@ -287,11 +385,11 @@ fn article_row(a: &Article, ctx: &RowCtx, unseen: bool) -> Row<'static> {
     let age = if is_fresh(a, now) {
         Cell::from(a.age(now)).style(Style::new().fg(theme.accent))
     } else {
-        Cell::from(a.age(now)).dim()
+        Cell::from(a.age(now)).style(theme.subtle())
     };
     let mut cells = vec![age, score_cell(a.score(), theme)];
     if full {
-        cells.push(novelty_cell(a.novelty()));
+        cells.push(novelty_cell(a.novelty(), theme));
     }
     if scope == NewsScope::Ticker {
         cells.push(sentiment_cell(a.sentiment_for(symbol), theme));
@@ -304,7 +402,7 @@ fn article_row(a: &Article, ctx: &RowCtx, unseen: bool) -> Row<'static> {
             .map(String::as_str)
             .collect();
         cells.push(Cell::from(tickers.join(",")).bold());
-        cells.push(sources_cell(a.sources_badge()));
+        cells.push(sources_cell(a.sources_badge(), theme));
     }
     cells.push(category_cell(a, theme));
     cells.push(title_cell(
@@ -378,7 +476,7 @@ fn head_line(app: &App, sentiment: Option<&crate::alphai::SentimentSummary>) -> 
         NewsScope::Market => {
             return Paragraph::new(
                 Line::from(" market-wide feed · reprints collapsed (×N = outlets) · f: trending")
-                    .dim(),
+                    .style(app.theme.subtle()),
             );
         }
         NewsScope::Trending => {
@@ -387,7 +485,7 @@ fn head_line(app: &App, sentiment: Option<&crate::alphai::SentimentSummary>) -> 
                     " trending · top 10 of the last 48h · f: back to {}",
                     app.selected_symbol()
                 ))
-                .dim(),
+                .style(app.theme.subtle()),
             );
         }
         NewsScope::Ticker => {}
@@ -395,20 +493,22 @@ fn head_line(app: &App, sentiment: Option<&crate::alphai::SentimentSummary>) -> 
     let Some(s) = sentiment else {
         return Paragraph::new(Line::from(""));
     };
+    let subtle = app.theme.subtle();
+    let faint = app.theme.faint();
     Paragraph::new(Line::from(vec![
-        Span::raw(format!(" {}d sentiment  ", s.days)).dim(),
+        Span::styled(format!(" {}d sentiment  ", s.days), subtle),
         Span::styled(
             format!("▲ {} bullish", s.bullish),
             Style::new().fg(app.theme.pos),
         ),
-        Span::raw(" · ").dim(),
-        Span::raw(format!("{} neutral", s.neutral)).dim(),
-        Span::raw(" · ").dim(),
+        Span::styled(" · ", faint),
+        Span::styled(format!("{} neutral", s.neutral), subtle),
+        Span::styled(" · ", faint),
         Span::styled(
             format!("▼ {} bearish", s.bearish),
             Style::new().fg(app.theme.neg),
         ),
-        Span::raw(format!("  ({} scored)", s.total)).dim(),
+        Span::styled(format!("  ({} scored)", s.total), subtle),
     ]))
 }
 
@@ -448,7 +548,7 @@ pub fn render_gate_with(
                 Style::new().fg(app.theme.error),
             )),
             Line::from(""),
-            Line::from("  press r to retry").dim(),
+            Line::from("  press r to retry").style(app.theme.subtle()),
         ];
         f.render_widget(
             Paragraph::new(lines)
@@ -460,7 +560,7 @@ pub fn render_gate_with(
     }
     if missing {
         f.render_widget(
-            Paragraph::new(Line::from("loading…").dim()).block(block.clone()),
+            Paragraph::new(Line::from("loading…").style(app.theme.subtle())).block(block.clone()),
             area,
         );
         return true;
@@ -495,7 +595,7 @@ pub fn render_detail(
     meta.extend(extra);
     let lines = vec![
         Line::from(a.original.title.clone()).bold(),
-        Line::from(meta.join(" · ")).dim(),
+        Line::from(meta.join(" · ")).style(theme.subtle()),
         Line::from(a.original.summary.clone()),
     ];
     f.render_widget(
@@ -514,7 +614,7 @@ pub(crate) fn hint_title(heading: &str, hint: &str, theme: &Theme) -> Line<'stat
             heading.to_string(),
             Style::new().fg(theme.accent).add_modifier(Modifier::BOLD),
         ),
-        Span::styled(hint.to_string(), Style::new().dim()),
+        Span::styled(hint.to_string(), theme.subtle()),
     ])
 }
 
@@ -584,7 +684,7 @@ pub fn score_cell(score: i64, theme: &Theme) -> Cell<'static> {
     let style = match score {
         8..=10 => Style::new().fg(theme.score_high).bold(),
         6..=7 => Style::new(),
-        _ => Style::new().dim(),
+        _ => theme.faint(),
     };
     Cell::from(format!("{score:>2}")).style(style)
 }
@@ -593,23 +693,23 @@ pub(crate) fn sentiment_cell(sentiment: Option<&str>, theme: &Theme) -> Cell<'st
     match sentiment {
         Some("positive") => Cell::from("▲").style(Style::new().fg(theme.pos)),
         Some("negative") => Cell::from("▼").style(Style::new().fg(theme.neg)),
-        Some(_) => Cell::from("·").dim(),
+        Some(_) => Cell::from("·").style(theme.faint()),
         None => Cell::from(" "),
     }
 }
 
-/// Novelty 1-10, always dim so it reads apart from the styled score.
-fn novelty_cell(novelty: Option<i64>) -> Cell<'static> {
+/// Novelty 1-10, always muted so it reads apart from the styled score.
+fn novelty_cell(novelty: Option<i64>, theme: &Theme) -> Cell<'static> {
     match novelty {
-        Some(n) => Cell::from(format!("{n:>2}")).dim(),
+        Some(n) => Cell::from(format!("{n:>2}")).style(theme.subtle()),
         None => Cell::from("  "),
     }
 }
 
 /// Outlet count on story-collapsed rows: "×7" when more than one outlet.
-fn sources_cell(count: Option<i64>) -> Cell<'static> {
+fn sources_cell(count: Option<i64>, theme: &Theme) -> Cell<'static> {
     match count {
-        Some(n) => Cell::from(format!("×{n}")).dim(),
+        Some(n) => Cell::from(format!("×{n}")).style(theme.subtle()),
         None => Cell::from("   "),
     }
 }
@@ -628,7 +728,7 @@ fn category_cell(a: &Article, theme: &Theme) -> Cell<'static> {
         };
         return Cell::from(form).style(Style::new().fg(theme.accent));
     }
-    Cell::from(short_category(a)).dim()
+    Cell::from(short_category(a)).style(theme.subtle())
 }
 
 fn short_category(a: &Article) -> &'static str {

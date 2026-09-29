@@ -304,8 +304,10 @@ impl TimeAxis {
         }
     }
 
-    pub fn render(&self, buf: &mut Buffer, plot: Rect) {
-        let dim = Style::new().add_modifier(ratatui::style::Modifier::DIM);
+    /// Tick and date labels under `plot`, in `style` (the theme's
+    /// secondary text: a reader has to be able to read the dates).
+    pub fn render(&self, buf: &mut Buffer, plot: Rect, style: Style) {
+        let dim = style;
         for (row, ticks, reserve) in [
             (plot.bottom(), &self.ticks, 0),
             (plot.bottom() + 1, &self.dates, self.zone.len() as u16 + 2),
@@ -389,7 +391,7 @@ mod tests {
                 bars.last().unwrap().ts,
             );
             let mut buf = Buffer::empty(Rect::new(0, 0, width, 7));
-            axis.render(&mut buf, plot);
+            axis.render(&mut buf, plot, Style::new());
             assert!(axis.shades.is_empty());
         }
     }

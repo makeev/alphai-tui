@@ -11,13 +11,59 @@ use std::collections::BTreeMap;
 use std::str::FromStr;
 
 use ratatui::style::{Color, Modifier, Style};
+use ratatui::symbols::border;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType};
 
+/// How panels are told apart: a line frame, or a tinted surface with a
+/// blank gutter around it. Chosen by `[ui] borders` rather than by the
+/// preset, and carried on the theme because `panel()` needs both halves.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Panels {
+    Lines(BorderType),
+    /// No lines: the frame cells stay blank on the terminal's background,
+    /// the inside takes `surface`. The frame keeps its cell, so every
+    /// "minus two for the borders" in the layouts still holds and titles
+    /// still sit on the top and bottom edges.
+    Surface,
+}
+
+/// Rounded frame lines, what `[ui] borders` gives when it is not set.
+impl Default for Panels {
+    fn default() -> Self {
+        Self::Lines(BorderType::Rounded)
+    }
+}
+
+impl Panels {
+    /// Every choice `[ui] borders` offers, in the settings row's cycle
+    /// order: the default first.
+    pub const ALL: [Self; 3] = [
+        Self::Lines(BorderType::Rounded),
+        Self::Lines(BorderType::Plain),
+        Self::Surface,
+    ];
+
+    /// The name `[ui] borders` spells it with.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Surface => "none",
+            Self::Lines(BorderType::Plain) => "plain",
+            Self::Lines(_) => "rounded",
+        }
+    }
+
+    /// The neighbour in cycle order, `dir` 1 forward and -1 back, wrapping.
+    pub fn step(self, dir: isize) -> Self {
+        let n = Self::ALL.len() as isize;
+        let i = Self::ALL.iter().position(|p| *p == self).unwrap_or(0) as isize;
+        Self::ALL[(i + dir).rem_euclid(n) as usize]
+    }
+}
+
 /// One slot per meaning, not per widget: the same red means "price down"
-/// everywhere it appears. Deliberately not themeable: the selection
-/// highlight (Modifier::REVERSED) and dim/bold text, which already track
-/// the terminal's own palette.
+/// everywhere it appears. Deliberately not themeable: bold text, which
+/// already tracks the terminal's own palette.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Theme {
     /// Brand accent: header title, active tab, overlay borders, headings.
@@ -46,10 +92,26 @@ pub struct Theme {
     /// Panel frames. `Reset` keeps the terminal's own foreground, which is
     /// what the app looked like before this slot existed; themes dim it.
     pub border: Color,
-    /// Not a color slot: which line set panel frames draw with, resolved
-    /// from `[ui] borders`. It rides on the theme because every renderer
-    /// already carries one, and `panel()` needs both halves.
-    pub border_type: BorderType,
+    /// Body text where the app paints its own background (the surface
+    /// panels). `Reset` leaves the terminal's foreground.
+    pub text: Color,
+    /// Secondary text that still has to be read: sources, ages, axis
+    /// labels, key hints. `Reset` falls back to the terminal's DIM, the
+    /// only muted shade an ANSI palette can promise on any background.
+    pub subtle: Color,
+    /// Inactive or decorative text: separators, low-score rows, the past.
+    /// `Reset` falls back to DIM, like `subtle`.
+    pub faint: Color,
+    /// Background of the selected row. `Reset` falls back to REVERSED,
+    /// which is all an ANSI palette can promise; a color keeps the row's
+    /// own colors (a green ▲, a yellow score) readable under the cursor.
+    pub selection: Color,
+    /// Panel background under `[ui] borders = "none"`. `Reset` paints
+    /// nothing, so on the ANSI theme panels are told apart by the blank
+    /// gutter and their titles alone.
+    pub surface: Color,
+    /// Not a color slot: frame or surface, resolved from `[ui] borders`.
+    pub panels: Panels,
 }
 
 impl Theme {
@@ -74,7 +136,12 @@ impl Theme {
         pre_market_bg: Color::Rgb(38, 33, 24),
         post_market_bg: Color::Rgb(25, 28, 42),
         border: Color::Reset,
-        border_type: BorderType::Rounded,
+        text: Color::Reset,
+        subtle: Color::Reset,
+        faint: Color::Reset,
+        selection: Color::Reset,
+        surface: Color::Reset,
+        panels: Panels::Lines(BorderType::Rounded),
     };
 }
 
@@ -157,6 +224,11 @@ impl Theme {
                 "pre_market_bg" => &mut theme.pre_market_bg,
                 "post_market_bg" => &mut theme.post_market_bg,
                 "border" => &mut theme.border,
+                "text" => &mut theme.text,
+                "subtle" => &mut theme.subtle,
+                "faint" => &mut theme.faint,
+                "selection" => &mut theme.selection,
+                "surface" => &mut theme.surface,
                 _ => {
                     warnings.push(format!(
                         "[theme] unknown slot \"{slot}\" (the README lists the slots)"
@@ -178,9 +250,75 @@ impl Theme {
     /// one source of truth (`borders_are_themed` in `ui::tests` fails if a
     /// panel is built any other way).
     pub fn panel(&self) -> Block<'static> {
-        Block::bordered()
-            .border_type(self.border_type)
-            .border_style(Style::new().fg(self.border))
+        match self.panels {
+            Panels::Lines(kind) => Block::bordered()
+                .border_type(kind)
+                .border_style(Style::new().fg(self.border)),
+            // The frame is still there, drawn in spaces on the terminal's
+            // own background: a one-cell gutter between two surfaces, and a
+            // row for the titles above and below.
+            Panels::Surface => Block::bordered()
+                .border_set(border::EMPTY)
+                .style(Style::new().fg(self.text).bg(self.surface))
+                .border_style(Style::new().bg(Color::Reset)),
+        }
+    }
+
+    /// Modal overlays (article card, help, settings, prompt) keep a line
+    /// frame in every panel style: they float over other panels, and on a
+    /// surface of the same tint nothing else would say where they end.
+    pub fn modal(&self) -> Block<'static> {
+        let kind = match self.panels {
+            Panels::Lines(kind) => kind,
+            Panels::Surface => BorderType::Rounded,
+        };
+        let block = Block::bordered()
+            .border_type(kind)
+            .border_style(Style::new().fg(self.border));
+        match self.panels {
+            Panels::Lines(_) => block,
+            Panels::Surface => block.style(Style::new().fg(self.text).bg(self.surface)),
+        }
+    }
+
+    /// The panel background for widgets that paint their own (ratatui's
+    /// `Chart` clears its plot to its style's background, which would
+    /// punch a hole in a surface panel).
+    pub fn fill(&self) -> Style {
+        match self.panels {
+            Panels::Lines(_) => Style::new(),
+            Panels::Surface => Style::new().bg(self.surface),
+        }
+    }
+
+    /// The cursor row in lists and tables.
+    pub fn selected(&self) -> Style {
+        if self.selection == Color::Reset {
+            Style::new().add_modifier(Modifier::REVERSED)
+        } else {
+            Style::new().bg(self.selection)
+        }
+    }
+
+    /// Secondary text: metadata a reader still needs (source, age, axis
+    /// labels, key hints).
+    pub fn subtle(&self) -> Style {
+        tier(self.subtle)
+    }
+
+    /// Inactive or decorative text: it may recede, nobody has to read it.
+    pub fn faint(&self) -> Style {
+        tier(self.faint)
+    }
+
+    /// `faint` for a style that may already carry a meaning color (a
+    /// warning, a direction): the color stays and only fades, since
+    /// swapping it for the faint shade would drop what it says.
+    pub fn fade(&self, style: Style) -> Style {
+        match style.fg {
+            Some(c) if c != Color::Reset => style.add_modifier(Modifier::DIM),
+            _ => style.patch(self.faint()),
+        }
     }
 
     /// A panel whose title reads as a heading, e.g. " Watchlist ".
@@ -194,6 +332,17 @@ impl Theme {
             text.into(),
             Style::new().fg(self.accent).add_modifier(Modifier::BOLD),
         ))
+    }
+}
+
+/// A text tier as a style: the slot's color, or the terminal's DIM when
+/// the slot is `Reset` (the ANSI theme cannot know what reads as muted on
+/// the background the terminal has).
+fn tier(color: Color) -> Style {
+    if color == Color::Reset {
+        Style::new().add_modifier(Modifier::DIM)
+    } else {
+        Style::new().fg(color)
     }
 }
 
