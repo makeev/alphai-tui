@@ -45,7 +45,7 @@ Enter
 # watchlist and real positions are private, and these shots are published.
 # Every ticker here is already on the watchlist, so they cost no extra
 # requests.
-Type `printf '[ui]\nborders = "none"\n\n[keys]\n' > /tmp/alphaishot.toml`
+Type `printf '[keys]\n' > /tmp/alphaishot.toml`
 Enter
 Type `grep -m1 ^alphai.= ~/.config/alphai-tui/config.toml >> /tmp/alphaishot.toml`
 Enter

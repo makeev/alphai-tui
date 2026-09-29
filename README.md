@@ -31,8 +31,7 @@ both, and after that a bare `alphai-tui` reopens your watchlist.
 Nine views, one keystroke apart (`1` to `9`, or Tab). Some follow the
 selected ticker; Summary, Portfolio and Calendar cover several names.
 One line under the tabs carries the selected ticker's price into all of them.
-The screenshots use the `dracula` preset and `[ui] borders = "none"`,
-tinted panels in place of the default frame lines.
+The screenshots use the `dracula` preset.
 
 ### The quote rail, in every view
 
@@ -613,6 +612,11 @@ status bar has little use for, and hands both rows to the view; `z` toggles
 it in a running instance and `[ui] bare = true` makes it the default. The
 quote rail stays, so a bare pane still names its ticker and its price.
 
+Tiled panes put frames next to frames, so the shot below also sets
+`[ui] borders = "none"`: each panel becomes a tinted surface with a small
+gutter and its title above, and the panes read as one desk. The Panels row
+in the settings screen switches it live.
+
 Press `4` in the three chart panes and `2` in the tall one, and you get a
 wall of charts next to a live scored feed:
 
@@ -886,8 +890,7 @@ preset = "catppuccin-mocha"
 ```
 
 Each preset on a terminal wearing the matching palette (`default` on a plain
-dark one, since it takes the terminal's own colors), with
-`borders = "none"`:
+dark one, since it takes the terminal's own colors):
 
 <table>
 <tr>
@@ -906,6 +909,12 @@ dark one, since it takes the terminal's own colors), with
 <td align="center"><img src="https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/gallerygruvboxlight.png" alt="alphai-tui split view in the gruvbox-light preset" width="100%"><br><code>gruvbox-light</code></td>
 </tr>
 </table>
+
+The panel look is a separate choice. Frame lines are the default (`rounded`,
+or `plain`); `[ui] borders = "none"`, or the Panels row in the settings
+screen, draws tinted panels with a gutter instead:
+
+![alphai-tui split view in the dracula preset with borders = "none": tinted panels separated by a small gutter, each titled above, in place of frame lines](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/borderless.png)
 
 `}` and `{` walk the presets live, `--theme catppuccin-mocha` picks one
 for a single run, and the Theme row in the settings screen (`s`) does

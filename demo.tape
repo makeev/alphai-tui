@@ -31,7 +31,7 @@ Type "umask 077"
 Enter
 Type `mkdir -p /tmp/alphaidemo/alphai-tui`
 Enter
-Type `printf '[ui]\nborders = "none"\n\n[keys]\n' > /tmp/alphaidemo/alphai-tui/config.toml`
+Type `printf '[keys]\n' > /tmp/alphaidemo/alphai-tui/config.toml`
 Enter
 Type `grep -m1 ^alphai.= ~/.config/alphai-tui/config.toml >> /tmp/alphaidemo/alphai-tui/config.toml`
 Enter
