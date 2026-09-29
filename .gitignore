@@ -5,6 +5,7 @@
 .DS_Store
 
 # local working docs, never published
+/docs/
 CLAUDE.md
 *_PLAN.md
 
