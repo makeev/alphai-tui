@@ -44,7 +44,8 @@ impl View for CalendarView {
         true
     }
     fn render(&self, f: &mut Frame, area: Rect, app: &mut App) {
-        render_calendar_at(f, area, app, Utc::now());
+        let now = app.now();
+        render_calendar_at(f, area, app, now);
     }
 }
 

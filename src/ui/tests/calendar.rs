@@ -39,6 +39,9 @@ fn report(app: &mut App, symbol: &str, date: Option<&str>) {
 fn fixture() -> (App, tokio::sync::mpsc::UnboundedReceiver<alphai::Cmd>) {
     let (mut app, cmds) = empty_app_with_cmds(vec!["NVDA".into(), "AVGO".into(), "BTC-USD".into()]);
     app.view_idx = ui::view_index(ui::ViewId::Calendar);
+    // Keys and the view read the app's clock; the agenda below is built
+    // around this date, and today's would not contain it.
+    app.frozen_now = Some(now());
     let mut fomc = macro_event("FOMC rate decision", "2026-09-23T18:00:00Z");
     fomc.event_key = "fomc_decision".into();
     fomc.press_conference_at = Some("2026-09-23T18:30:00Z".into());
@@ -469,7 +472,9 @@ fn macro_and_date_empty_success_is_not_rendered_as_failure() {
 fn paging_skips_the_now_separator_and_reentry_resets_table_offset() {
     let (mut app, _cmds) = fixture();
     app.earnings.clear();
-    let clock = Utc::now();
+    // The fixture's clock: the loaded window ends on 2 November, so the
+    // wall clock would walk these events out of it.
+    let clock = now();
     let events = (-5..30)
         .map(|day| {
             macro_event(

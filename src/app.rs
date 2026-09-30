@@ -338,6 +338,10 @@ pub struct App {
     /// Whether the source has extended-hours candles at all, cached like
     /// `source_delay` (see `extended_unavailable`).
     pub source_extended: bool,
+    /// A test's frozen clock, read through `now`. The app itself always
+    /// runs on the wall clock.
+    #[cfg(test)]
+    pub(crate) frozen_now: Option<DateTime<Utc>>,
     pub range: Range,
     pub interval: Interval,
     /// Whether the chart draws the pre and post market candles too.
@@ -488,6 +492,8 @@ impl App {
             source_name: init.source_name,
             source_delay,
             source_extended,
+            #[cfg(test)]
+            frozen_now: None,
             range: init.range,
             interval: init.interval,
             sessions: init.sessions,
@@ -1327,6 +1333,18 @@ impl App {
         self.theme_name = name;
     }
 
+    /// The time the Calendar reads, for its rows, its cursor and what
+    /// Enter opens alike. A test that pins its agenda to a date freezes
+    /// this too; otherwise the keys would act on today's agenda instead of
+    /// the one the test built.
+    pub(crate) fn now(&self) -> DateTime<Utc> {
+        #[cfg(test)]
+        if let Some(now) = self.frozen_now {
+            return now;
+        }
+        Utc::now()
+    }
+
     fn switch_view(&mut self, idx: usize) {
         if idx != self.view_idx {
             self.view_idx = idx;
@@ -1341,7 +1359,7 @@ impl App {
     }
 
     fn move_calendar(&mut self, delta: isize) {
-        let rows = ui::calendar::agenda(self, Utc::now());
+        let rows = ui::calendar::agenda(self, self.now());
         let Some(current) = self.calendar_selection.resolve(&rows) else {
             return;
         };
@@ -1355,7 +1373,7 @@ impl App {
     }
 
     fn open_calendar_row(&mut self) {
-        match ui::calendar::open_target(self, Utc::now()) {
+        match ui::calendar::open_target(self, self.now()) {
             Some(ui::calendar::OpenTarget::Url(url)) => open_url(&url),
             Some(ui::calendar::OpenTarget::Earnings(symbol)) => {
                 if let Some(idx) = self.symbols.iter().position(|s| s == &symbol) {
