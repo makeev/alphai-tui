@@ -17,6 +17,7 @@ use crate::config::{ChartDefaults, Config, UiDefaults};
 use crate::domain::{Candle, Interval, Quote, Range, Sessions, TickerData};
 use crate::poller::SourceEvent;
 use crate::portfolio::Position;
+use crate::source::extended::ExtendedSource;
 use crate::source::make_source;
 use crate::theme::Theme;
 use crate::ui;
@@ -4099,9 +4100,12 @@ fn settings_overlay_masks_keys() {
     app.open_settings();
     let screen = render(&mut app);
     assert!(screen.contains("Settings"), "screen:\n{screen}");
-    assert!(screen.contains("Price source"), "screen:\n{screen}");
+    for heading in ["Prices", "API keys", "News", "Look"] {
+        assert!(screen.contains(heading), "no {heading}:\n{screen}");
+    }
+    assert!(screen.contains("Pre/after hours"), "screen:\n{screen}");
     assert!(screen.contains("Alpaca secret"), "screen:\n{screen}");
-    assert!(screen.contains("News opens"), "screen:\n{screen}");
+    assert!(screen.contains("Enter opens"), "screen:\n{screen}");
     assert!(screen.contains("‹ alphai ›"), "screen:\n{screen}");
     assert!(screen.contains("ak_liv…1234"), "screen:\n{screen}");
     assert!(
@@ -4152,6 +4156,113 @@ fn first_run_opens_settings_with_welcome() {
         "screen:\n{screen}"
     );
     assert!(screen.contains("https://alphai.io"), "screen:\n{screen}");
+}
+
+/// The pre/after hours row says what its choice comes to under the source
+/// on screen, and so do the key rows; Save writes `extended_source`
+/// (nothing for auto), and alpaca without the Alpaca keys blocks Save
+/// rather than saving a choice that would quietly read as the source's own.
+#[test]
+fn settings_pre_after_hours_row_explains_and_persists() {
+    if ["APCA_API_KEY_ID", "APCA_API_SECRET_KEY", "TIINGO_API_KEY"]
+        .iter()
+        .any(|v| std::env::var(v).is_ok())
+    {
+        return; // env keys change what the hints say
+    }
+    let mut app = empty_app(vec!["AAPL".into()]);
+    press(&mut app, KeyCode::Char('s'));
+    app.settings.source_choice = "tiingo".into();
+    app.settings
+        .key_values
+        .insert("tiingo", "tiingo-key-abcdef".into());
+    while !matches!(
+        settings_rows()[app.settings.cursor],
+        SettingsRow::ExtendedSource
+    ) {
+        press(&mut app, KeyCode::Down);
+    }
+    let screen = render_sized(&mut app, 110, 36);
+    assert!(screen.contains("‹ auto ›"), "screen:\n{screen}");
+    assert!(
+        screen.contains("→ Yahoo, all exchanges"),
+        "no Alpaca keys, so auto is Yahoo:\n{screen}"
+    );
+    assert!(screen.contains("Whole-market prints"), "screen:\n{screen}");
+    assert!(screen.contains("used for prices"), "screen:\n{screen}");
+
+    app.settings
+        .key_values
+        .insert("alpaca_key_id", "PKTEST1234567".into());
+    app.settings
+        .key_values
+        .insert("alpaca_secret", "secret-abcdefgh".into());
+    let screen = render_sized(&mut app, 110, 36);
+    assert!(
+        screen.contains("→ Alpaca SIP, all exchanges, 15 min late"),
+        "screen:\n{screen}"
+    );
+    assert!(
+        screen.contains("used for pre/after hours"),
+        "the Alpaca rows say why they matter:\n{screen}"
+    );
+
+    press(&mut app, KeyCode::Right);
+    assert_eq!(app.settings.extended_choice, ExtendedSource::Same);
+    let screen = render_sized(&mut app, 110, 36);
+    assert!(
+        screen.contains("→ tiingo's own, IEX only"),
+        "screen:\n{screen}"
+    );
+    assert_eq!(
+        app.settings_merged_config().extended_source.as_deref(),
+        Some("same")
+    );
+
+    press(&mut app, KeyCode::Right);
+    assert_eq!(app.settings.extended_choice, ExtendedSource::Alpaca);
+    app.settings
+        .key_values
+        .insert("alpaca_secret", String::new());
+    let screen = render_sized(&mut app, 110, 36);
+    assert!(
+        screen.contains("needs the Alpaca keys below"),
+        "screen:\n{screen}"
+    );
+    while !matches!(settings_rows()[app.settings.cursor], SettingsRow::Save) {
+        press(&mut app, KeyCode::Down);
+    }
+    press(&mut app, KeyCode::Enter);
+    assert!(app.settings.open, "Save went through without the keys");
+    assert!(
+        app.settings
+            .message
+            .as_deref()
+            .is_some_and(|m| m.contains("Alpaca key ID and secret")),
+        "{:?}",
+        app.settings.message
+    );
+    assert_eq!(app.config.extended_source, None);
+
+    app.settings.extended_choice = ExtendedSource::Auto;
+    assert_eq!(app.settings_merged_config().extended_source, None);
+}
+
+/// A new pre/after hours provider rebuilds the source but keeps the prices
+/// on screen: they come from the same feed as before.
+#[test]
+fn settings_pre_after_hours_change_keeps_the_prices() {
+    let mut app = fake_app();
+    app.open_settings();
+    app.settings.extended_choice = ExtendedSource::Same;
+    app.settings.cursor = settings_rows()
+        .iter()
+        .position(|row| matches!(row, SettingsRow::Save))
+        .unwrap();
+    press(&mut app, KeyCode::Enter);
+    assert_eq!(app.config.extended_source.as_deref(), Some("same"));
+    assert_eq!(app.source_name, "yahoo");
+    assert_eq!(app.data.len(), 2, "the prices on screen were dropped");
 }
 
 /// The Poll every settings row: seeded from the live interval, edited like a

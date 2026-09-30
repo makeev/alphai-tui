@@ -276,10 +276,15 @@ impl Tiingo {
                 close_today = self.session_close(symbol, ticker, day).await;
             }
         }
+        let print_ts = bars
+            .as_ref()
+            .and_then(|b| b.as_ref().ok())
+            .and_then(|bars| print_time(stamp, price, bars))
+            .unwrap_or(ts);
         let mut quote = stock_quote(
             symbol,
             &top,
-            (ts, price),
+            (print_ts, price),
             stamp,
             history,
             close_today,
@@ -289,7 +294,10 @@ impl Tiingo {
         let candles = match bars {
             Some(bars) => {
                 let mut candles = bars?;
-                if let Stamp::Live(..) = stamp {
+                // Outside the session the price is the last IEX trade,
+                // which can be an hour old: spliced in at the time of the
+                // request it drew a flat run of bars nobody traded.
+                if let Stamp::Live(Session::Open, _) = stamp {
                     let secs = fetch_interval(interval).secs();
                     if let Some(spliced) = self.bars.update(&bars_key, |bars| {
                         splice(bars, symbol, ts, price, secs, PriceFeed::Iex)
@@ -666,6 +674,24 @@ enum Stamp {
     Live(Session, NaiveDate),
     /// Anything else, treated as a plain last price.
     Other,
+}
+
+/// When a premarket or after-hours IEX print happened. The `/iex/` row is
+/// stamped with the time of the request, not of the trade: on 30 September
+/// 2026 CRWV's row said 08:52 for the morning's only IEX trade, made at
+/// 08:19. The newest intraday bar of the session that closed at the
+/// printed price dates it, by the bar's start as Yahoo's are. Without one
+/// (a daily chart, or a trade newer than the cached bars) the row's stamp
+/// stands.
+fn print_time(stamp: Stamp, price: f64, bars: &[Candle]) -> Option<i64> {
+    let Stamp::Live(session @ (Session::Pre | Session::Post), day) = stamp else {
+        return None;
+    };
+    bars.iter()
+        .rev()
+        .take_while(|c| market::et_date(c.ts) == Some(day))
+        .find(|c| c.close == price && market::window_at(c.ts).is_some_and(|w| w.session == session))
+        .map(|c| c.ts)
 }
 
 fn stamp(ts: i64) -> Stamp {
@@ -1117,6 +1143,39 @@ struct CryptoPrices {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A premarket print takes the time of the bar that traded it, not of
+    /// the request (CRWV, 30 September 2026: one IEX trade at 08:19, a row
+    /// stamped 08:52).
+    #[test]
+    fn an_extended_print_is_dated_by_its_bar() {
+        let bar = |ts: i64, close: f64| Candle {
+            ts,
+            open: close,
+            high: close,
+            low: close,
+            close,
+            ..Default::default()
+        };
+        let bars = [
+            bar(at("2026-09-29T19:55:00Z"), 85.63),
+            bar(at("2026-09-30T12:15:00Z"), 85.63),
+        ];
+        let day = NaiveDate::from_ymd_opt(2026, 9, 30).unwrap();
+        let pre = Stamp::Live(Session::Pre, day);
+        assert_eq!(
+            print_time(pre, 85.63, &bars),
+            Some(at("2026-09-30T12:15:00Z"))
+        );
+        // A trade newer than the cached bars keeps the row's stamp, and so
+        // does a price only yesterday's session printed.
+        assert_eq!(print_time(pre, 85.70, &bars), None);
+        assert_eq!(print_time(pre, 85.63, &bars[..1]), None);
+        assert_eq!(
+            print_time(Stamp::Live(Session::Open, day), 85.63, &bars),
+            None
+        );
+    }
 
     fn at(s: &str) -> i64 {
         DateTime::parse_from_rfc3339(s).unwrap().timestamp()

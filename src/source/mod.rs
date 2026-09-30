@@ -1,5 +1,5 @@
 pub mod alpaca;
-mod extended;
+pub mod extended;
 pub mod finnhub;
 pub mod http;
 pub mod registry;
@@ -73,7 +73,25 @@ pub fn make_source(name: &str, cfg: &Config) -> Result<Arc<dyn DataSource>> {
                 .ok_or_else(|| anyhow!(registry::missing_keys_msg(info)))
         })
         .collect::<Result<Vec<_>>>()?;
-    (info.make)(&keys)
+    let source = (info.make)(&keys)?;
+    extended::borrow(source, extended_provider(info, cfg), alpaca_keys(cfg))
+}
+
+/// Where `info`'s pre and post market come from under `cfg`.
+pub fn extended_provider(info: &registry::SourceInfo, cfg: &Config) -> extended::Provider {
+    extended::ExtendedSource::from_config(cfg).provider(
+        info.id,
+        (info.coverage)(),
+        alpaca_keys(cfg).is_some(),
+    )
+}
+
+/// The Alpaca key ID and secret, when both are configured (env over file):
+/// the consolidated tape behind `extended_source` needs them whatever the
+/// price source is.
+pub fn alpaca_keys(cfg: &Config) -> Option<(String, String)> {
+    let fields = registry::find("alpaca")?.key_fields;
+    Some((cfg.key_value(&fields[0])?, cfg.key_value(&fields[1])?))
 }
 
 /// One candle from one bar of a feed. A bar without a close is useless to

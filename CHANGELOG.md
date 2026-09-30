@@ -5,6 +5,33 @@ the crates.io releases; from 0.7.0 on each one is also a git tag and a
 GitHub release with prebuilt binaries. The Homebrew tap, the AUR and the
 apt repository joined later, and carry every version since.
 
+## 0.28.0 - 2026-09-30
+
+- Where the premarket and after-hours price comes from is a setting of its
+  own: `extended_source` in the config and a Pre/after hours row in the
+  settings screen. IEX, behind Tiingo and Alpaca's free feed, barely
+  trades before the open: one CoreWeave morning showed a single IEX trade
+  of 11 shares against 581,000 on the whole market, at a price more than
+  a dollar away. `auto`, the default, now takes the whole market for any
+  source that sees one exchange or none: Alpaca's consolidated feed,
+  15 minutes behind, when Alpaca keys are set, otherwise Yahoo. That
+  gives Tiingo and Finnhub a real premarket for the first time. `same`
+  keeps the source's own, `alpaca` and `yahoo` name the provider.
+- A borrowed extended print now always replaces the source's own while it
+  covers the session under way, instead of losing to a newer-looking IEX
+  one. On Alpaca's IEX feed this shows the consolidated print, 15 minutes
+  late, where a fresher single-venue trade used to win; `same` brings
+  that back.
+- Tiingo dates an extended print by the bar that traded it: its quote row
+  carries the time of the request, so an hour-old trade read as current.
+  Outside the session the price no longer moves the last candle between
+  refreshes either, which drew flat bars nobody traded.
+- The settings screen is grouped into prices, API keys, news and look.
+  Each key row says what the current choices use it for, the Pre/after
+  hours row says what `auto` resolves to, and the bottom of the box
+  explains the row under the cursor. A short terminal drops the spacing
+  and the footer before the rows.
+
 ## 0.27.0 - 2026-09-30
 
 - Tiingo is a fourth price source: `-s tiingo`, a key row in the settings

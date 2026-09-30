@@ -113,7 +113,15 @@ fn main() -> Result<()> {
     // budget warning that ignored them would understate the real load.
     let polled = portfolio::polled_symbols(&symbols, &resolved.positions);
     if let Some(info) = source::registry::find(&source_name)
-        && let Some(msg) = source::registry::rate_warning(info, polled.len(), every.max(2))
+        && let Some(msg) = source::registry::rate_warning(
+            info,
+            polled.len(),
+            every.max(2),
+            matches!(
+                source::extended_provider(info, &cfg),
+                source::extended::Provider::Sip { .. }
+            ),
+        )
     {
         eprintln!("warning: {msg}");
     }

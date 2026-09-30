@@ -12,7 +12,8 @@ use std::time::Duration;
 use crossterm::event::{KeyCode, KeyEvent};
 
 use crate::config::{self, ALPHAI_KEY_FIELD, Config, KeyField};
-use crate::source::{make_source, registry};
+use crate::source::extended::ExtendedSource;
+use crate::source::{alpaca_keys, make_source, registry};
 
 use super::{App, NewsLayout};
 use crate::theme::Panels;
@@ -28,6 +29,8 @@ pub struct SettingsState {
     pub editing: bool,
     pub input: String,
     pub source_choice: String,
+    /// Where pre and post market come from; Save writes `extended_source`.
+    pub extended_choice: ExtendedSource,
     /// Edit buffers for the `Key` rows, by `KeyField::config_name`.
     pub key_values: BTreeMap<&'static str, String>,
     /// Edit buffer for the poll interval, in whole seconds.
@@ -51,10 +54,12 @@ pub struct SettingsState {
 pub enum SettingsRow {
     /// The price-source picker (cycles the registry).
     SourceChoice,
-    /// An editable, masked credential.
-    Key(&'static KeyField),
+    /// Where pre and post market prices come from.
+    ExtendedSource,
     /// The price poll interval in seconds; applies live on Save.
     PollEvery,
+    /// An editable, masked credential.
+    Key(&'static KeyField),
     /// Where Enter opens a news article.
     NewsOpen,
     /// The News view layout (cycles the same list as the x key, live).
@@ -67,13 +72,39 @@ pub enum SettingsRow {
     Save,
 }
 
-/// Rows of the settings overlay: the source picker, every registered
-/// source's key fields in registry order, the app-level AlphAI key, the
-/// news-open toggle, Save. Derived from the registry, so a new source's key
-/// rows appear (and persist, and mask) with no settings-code changes.
+impl SettingsRow {
+    /// The heading drawn above a row that starts a section.
+    pub fn section(self) -> Option<&'static str> {
+        match self {
+            Self::SourceChoice => Some("Prices"),
+            Self::Key(field) if std::ptr::eq(field, first_key()) => Some("API keys"),
+            Self::NewsOpen => Some("News"),
+            Self::Borders => Some("Look"),
+            _ => None,
+        }
+    }
+}
+
+fn first_key() -> &'static KeyField {
+    registry::SOURCES
+        .iter()
+        .flat_map(|s| s.key_fields)
+        .next()
+        .unwrap_or(&ALPHAI_KEY_FIELD)
+}
+
+/// Rows of the settings overlay, in sections: prices (source, pre and post
+/// market, interval), every registered source's key fields in registry
+/// order plus the app-level AlphAI key, news, look, Save. Derived from the
+/// registry, so a new source's key rows appear (and persist, and mask)
+/// with no settings-code changes.
 pub fn settings_rows() -> &'static [SettingsRow] {
     static ROWS: LazyLock<Vec<SettingsRow>> = LazyLock::new(|| {
-        let mut rows = vec![SettingsRow::SourceChoice];
+        let mut rows = vec![
+            SettingsRow::SourceChoice,
+            SettingsRow::ExtendedSource,
+            SettingsRow::PollEvery,
+        ];
         rows.extend(
             registry::SOURCES
                 .iter()
@@ -81,7 +112,6 @@ pub fn settings_rows() -> &'static [SettingsRow] {
                 .map(SettingsRow::Key),
         );
         rows.push(SettingsRow::Key(&ALPHAI_KEY_FIELD));
-        rows.push(SettingsRow::PollEvery);
         rows.push(SettingsRow::NewsOpen);
         rows.push(SettingsRow::NewsLayout);
         rows.push(SettingsRow::Borders);
@@ -114,6 +144,7 @@ impl App {
         s.editing = false;
         s.message = None;
         s.source_choice = self.source_name.to_string();
+        s.extended_choice = ExtendedSource::from_config(&self.config);
         s.key_values = key_values;
         s.every_input = self.every.read().unwrap().as_secs().to_string();
         s.news_open_choice = if self.config.news_open_original() {
@@ -167,6 +198,7 @@ impl App {
             KeyCode::Right | KeyCode::Char(' ') => self.cycle_row(1),
             KeyCode::Enter => match settings_rows()[self.settings.cursor] {
                 SettingsRow::SourceChoice
+                | SettingsRow::ExtendedSource
                 | SettingsRow::NewsOpen
                 | SettingsRow::NewsLayout
                 | SettingsRow::Borders
@@ -200,6 +232,10 @@ impl App {
             SettingsRow::SourceChoice => {
                 let s = &mut self.settings;
                 s.source_choice = step_source(&s.source_choice, dir).to_string();
+            }
+            SettingsRow::ExtendedSource => {
+                let s = &mut self.settings;
+                s.extended_choice = s.extended_choice.step(dir);
             }
             SettingsRow::NewsOpen => self.toggle_news_open_choice(),
             SettingsRow::NewsLayout => {
@@ -242,6 +278,10 @@ impl App {
     pub(crate) fn settings_merged_config(&self) -> Config {
         let mut cfg = self.config.clone();
         cfg.source = Some(self.settings.source_choice.clone());
+        // The default is no line at all, like the News layout below.
+        let extended = self.settings.extended_choice;
+        cfg.extended_source =
+            (extended != ExtendedSource::default()).then(|| extended.name().to_string());
         // A cleared key leaves the file entirely instead of writing "".
         for (name, value) in &self.settings.key_values {
             let value = value.trim();
@@ -285,6 +325,11 @@ impl App {
             return;
         };
         let cfg = self.settings_merged_config();
+        if self.settings.extended_choice == ExtendedSource::Alpaca && alpaca_keys(&cfg).is_none() {
+            self.settings.message =
+                Some("pre/after hours from alpaca needs the Alpaca key ID and secret".to_string());
+            return;
+        }
 
         // A swap to another source, or an edit to the selected source's own
         // keys, rebuilds it. Comparing the env-layered values means editing
@@ -299,16 +344,23 @@ impl App {
             .source_choice
             .eq_ignore_ascii_case(self.source_name)
             || keys_changed;
-        if source_changed {
+        // So does a new pre and post market provider, or new Alpaca keys
+        // under it, but the prices on screen stay: they are the same feed's.
+        let borrowing_changed = ExtendedSource::from_config(&cfg)
+            != ExtendedSource::from_config(&self.config)
+            || alpaca_keys(&cfg) != alpaca_keys(&self.config);
+        if source_changed || borrowing_changed {
             match make_source(&self.settings.source_choice, &cfg) {
                 Ok(src) => {
                     self.set_price_source(src);
-                    self.data.clear();
-                    self.data_window.clear();
-                    self.from_cache.clear();
-                    self.quote_fetched.clear();
-                    self.abandoned.clear();
-                    self.fallback_exhausted = false;
+                    if source_changed {
+                        self.data.clear();
+                        self.data_window.clear();
+                        self.from_cache.clear();
+                        self.quote_fetched.clear();
+                        self.abandoned.clear();
+                        self.fallback_exhausted = false;
+                    }
                 }
                 Err(e) => {
                     self.settings.message = Some(format!("{e:#}"));

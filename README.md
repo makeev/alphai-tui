@@ -296,10 +296,12 @@ sweep until a manual retry, rather than repeating it for every company.
 ![alphai-tui help overlay: the full key table with the config name of every action next to it, drawn over the summary grid](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/help.png)
 
 `?` lists every action with the keys currently bound to it and the name to
-use in the config to rebind it. `s` opens the settings: price source, API
-keys, poll interval (applied immediately), color theme and where Enter opens
-an article. Save writes all of it, plus the watchlist on screen, to the
-config file. `}` and `{` walk the color presets live, `z` hides the header
+use in the config to rebind it. `s` opens the settings, grouped into
+prices (the source, where pre and after hours come from, the poll
+interval), API keys, news and look. Each key row says what the current
+choices use it for, and the bottom of the box explains the row under the
+cursor: what it covers, what each choice means and what it costs. Save
+writes all of it, plus the watchlist on screen, to the config file. `}` and `{` walk the color presets live, `z` hides the header
 and the footer for a tmux pane that carries its own status bar, and `r`
 refreshes prices and the visible data.
 
@@ -661,17 +663,19 @@ get a sourced brief without leaving the terminal.
   on startup and in the settings screen when the watchlist and the poll
   interval together go over that.
   Crypto needs exchange-prefixed symbols (`BINANCE:BTCUSDT`).
-  Its quote endpoint covers the regular session only, so no extended-hours
-  price, 52 week range or volume.
+  Its quote endpoint covers the regular session only, so no 52 week range
+  or volume, and the extended-hours price is borrowed (see
+  "Pre and after hours" below).
 - `alpaca`: needs a key id and secret (free at
   [alpaca.markets](https://alpaca.markets)). Realtime quotes from the IEX
   feed plus real historical bars, so charts are complete right after start
   instead of growing over the session. Crypto works in the usual `BTC-USD`
   form. IEX covers one exchange, with sparse pre-market trading from
-  08:00 ET and after-hours until 17:00 ET on normal days. The default IEX
-  mode supplements extended quotes and candles with consolidated SIP data
-  delayed 15 minutes, then Yahoo if SIP is unavailable or missing the
-  relevant session. Regular candles and the headline quote remain IEX.
+  08:00 ET and after-hours until 17:00 ET on normal days, so by default
+  the extended quote and candles come from consolidated SIP data delayed
+  15 minutes, then Yahoo if SIP is unavailable or missing the relevant
+  session (see "Pre and after hours" below).
+  Regular candles and the headline quote remain IEX.
   The chart labels the extended feed, and the rail labels the quote's own
   source and age. Volume bars from different feeds are not consolidated
   into a single session; IEX's total is not presented as whole-market volume.
@@ -684,12 +688,6 @@ get a sourced brief without leaving the terminal.
   market's, while the current day keeps its live IEX close. That costs one
   request per ticker a minute, on top of the two per poll. If it is
   refused, the chart keeps IEX's daily bars and labels them `IEX only`.
-
-  Supplemental results are cached for 60 seconds per symbol/window. Empty
-  or failed refreshes retain prior session data. A Yahoo IP block pauses
-  supplemental Yahoo requests across the watchlist for 30 minutes; it does
-  not fail an otherwise successful Alpaca poll. Extended quotes remain
-  available with `E` off, independently of the candle setting.
 
   `ALPACA_FEED=delayed_sip` uses consolidated data for both regular and
   extended sessions with a 15-minute delay. `ALPACA_FEED=sip` uses realtime
@@ -711,9 +709,9 @@ get a sourced brief without leaving the terminal.
   Free plan notes: the IEX feed is realtime but thin (roughly 2 to 3 percent
   of market volume, so charts of illiquid names can be sparse), and the API
   allows 200 requests/min. The app makes 2 requests per ticker per poll,
-  plus up to 2 per minute for cached SIP supplementation. The startup and
-  settings warnings include that supplemental allowance when suggesting
-  a polling interval. Changing candle presets can trigger a fresh cache fill.
+  plus up to 2 per minute for the SIP extended hours when those come from
+  Alpaca. The startup and settings warnings include that allowance when
+  suggesting a polling interval. Changing candle presets can trigger a fresh cache fill.
   Alpaca sizes a bars page by the minute bars behind it, roughly two weeks
   of a liquid name's extended hours, so the first fill of a chart window
   follows up to three more pages to reach the start of the IEX series;
@@ -732,9 +730,11 @@ get a sourced brief without leaving the terminal.
   labels its volume `IEX only`. After the close Tiingo publishes the
   official close and the consolidated volume, and the rail switches to
   them; with an intraday chart open, the last after-hours price stays
-  beside the close overnight. Before the open and after the bell the IEX
-  price is the extended quote beside the last close, as on the other
-  sources.
+  beside the close overnight. Before the open and after the bell IEX
+  barely trades, so by default the extended quote comes from the whole
+  market (see "Pre and after hours" below). With
+  `extended_source = "same"` it is the IEX price beside the last close,
+  dated by the bar that traded it rather than by the request.
   One request per poll quotes the whole watchlist, two when crypto is on
   it. Bars are refreshed once a minute per ticker and daily history every
   15 minutes; in between, the live price moves the last candle, and a new
@@ -746,6 +746,37 @@ get a sourced brief without leaving the terminal.
   on, so the app does not warn about the budget ahead of time. When an
   allowance runs out, the error names it, and the automatic switch below
   moves to another source.
+
+**Pre and after hours**
+
+IEX, the feed behind `alpaca` on its free plan and behind `tiingo`, is one
+exchange, and before the open it barely trades: on 30 September 2026 by
+08:52 ET Tiingo had one CoreWeave trade of 11 shares at 85.63, while the
+whole market had traded 581,000 shares and stood at 87.09. `finnhub` has
+no extended prices at all. So where the premarket and after-hours price
+comes from is a setting of its own, `extended_source` in the config and
+the Pre/after hours row in the settings screen:
+
+- `auto`, the default: when the price source sees one exchange or none,
+  the extended quote and candles come from Alpaca's consolidated SIP feed,
+  15 minutes behind, if Alpaca keys are set, with Yahoo as the backup.
+  Without Alpaca keys they come from Yahoo. `yahoo`, and `alpaca` on a SIP
+  feed, keep their own.
+- `same`: only what the price source reports itself, no extra requests.
+- `alpaca`: always the consolidated SIP feed, with no Yahoo backup. It
+  needs the Alpaca keys, whatever the price source is.
+- `yahoo`: always Yahoo, keyless and closer to real time, but subject to
+  its IP blocks.
+
+A borrowed print replaces the source's own whenever it has one for the
+session under way, and the rail and the chart title name its feed
+(`SIP · delayed 15m`, `Yahoo`) and its age. Regular-session prices always
+stay the price source's. Borrowing costs about two Alpaca requests or one
+Yahoo request per ticker a minute: results are cached for 60 seconds per
+ticker and chart window, and an empty or failed refresh keeps the session
+already on screen without failing the price poll. A Yahoo IP block pauses
+the borrowed Yahoo requests across the watchlist for 30 minutes. Extended
+quotes stay available with `E` off, independently of the candle setting.
 
 **When a source stops answering**
 
@@ -848,6 +879,7 @@ range = "5d"         # startup history window
 interval = "15m"     # startup candle size; t cycles the chart presets live
 news_open = "alphai"  # where enter opens news: "alphai" or "original"
 source_fallback = true  # switch source when this one stops answering
+extended_source = "auto"  # pre and after hours: auto | same | alpaca | yahoo (also a settings row)
 
 [keys]
 alphai = "ak_live_..."

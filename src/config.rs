@@ -53,6 +53,10 @@ pub struct Config {
     /// retry can shorten that, so the only repair is another provider; set
     /// it false to keep the errors and choose by hand.
     pub source_fallback: Option<bool>,
+    /// Where pre and post market prices come from: "auto" (the default,
+    /// also when absent), "same", "alpaca" or "yahoo". See
+    /// `source::extended::ExtendedSource`.
+    pub extended_source: Option<String>,
     /// Where Enter opens a news article: "alphai" (article page on
     /// alphai.io, the default) or "original" (the source site).
     pub news_open: Option<String>,
@@ -302,6 +306,7 @@ pub fn resolve(cfg: &Config, cli_theme: Option<&str>) -> (Resolved, Vec<String>)
         &mut warnings,
     );
     let positions = resolve_positions(&cfg.positions, &mut warnings);
+    resolve_extended_source(cfg, &mut warnings);
     (
         Resolved {
             theme,
@@ -313,6 +318,27 @@ pub fn resolve(cfg: &Config, cli_theme: Option<&str>) -> (Resolved, Vec<String>)
         },
         warnings,
     )
+}
+
+/// `extended_source`: an unknown value warns and reads as "auto"; "alpaca"
+/// without Alpaca keys warns and reads as the price source's own data,
+/// rather than quietly asking another provider.
+fn resolve_extended_source(cfg: &Config, warnings: &mut Vec<String>) {
+    use crate::source::extended::ExtendedSource;
+    let Some(raw) = cfg.extended_source.as_deref() else {
+        return;
+    };
+    match ExtendedSource::parse(raw) {
+        None => warnings.push(format!(
+            "extended_source = \"{raw}\": expected one of {}, using auto",
+            ExtendedSource::ALL.map(ExtendedSource::name).join(", ")
+        )),
+        Some(ExtendedSource::Alpaca) if crate::source::alpaca_keys(cfg).is_none() => warnings.push(
+            "extended_source = \"alpaca\" needs the Alpaca keys, using the price source's own pre and post market"
+                .to_string(),
+        ),
+        Some(_) => {}
+    }
 }
 
 /// `[[positions]]`: a broken entry warns and is dropped, the rest stand.
@@ -740,6 +766,39 @@ avg_price = 100
         assert!(warnings.iter().any(|w| w.contains("twice")), "{warnings:?}");
     }
 
+    /// A typo reads as auto, and alpaca without its keys as the source's
+    /// own data, each with a warning; a good value says nothing.
+    #[test]
+    fn extended_source_warns_per_value() {
+        let warn = |value: &str, keys: &[(&str, &str)]| {
+            let cfg = Config {
+                extended_source: Some(value.into()),
+                keys: keys
+                    .iter()
+                    .map(|(k, v)| (k.to_string(), v.to_string()))
+                    .collect(),
+                ..Config::default()
+            };
+            resolve(&cfg, None).1
+        };
+        assert!(warn("yahoo", &[]).is_empty());
+        assert!(warn("Same", &[]).is_empty());
+        let typo = warn("sip", &[]);
+        assert!(
+            typo.iter().any(|w| w.contains("auto, same, alpaca, yahoo")),
+            "{typo:?}"
+        );
+        if std::env::var("APCA_API_KEY_ID").is_err() {
+            let keyless = warn("alpaca", &[]);
+            assert!(
+                keyless.iter().any(|w| w.contains("needs the Alpaca keys")),
+                "{keyless:?}"
+            );
+        }
+        let keyed = [("alpaca_key_id", "PKTEST"), ("alpaca_secret", "secret")];
+        assert!(warn("alpaca", &keyed).is_empty());
+    }
+
     #[test]
     fn round_trip() {
         let dir = std::env::temp_dir().join(format!("alphai-tui-test-{}", std::process::id()));
@@ -751,6 +810,7 @@ avg_price = 100
             range: Some("5d".into()),
             interval: Some("15m".into()),
             source_fallback: Some(false),
+            extended_source: Some("yahoo".into()),
             news_open: Some("original".into()),
             positions: vec![Position {
                 symbol: "AAPL".into(),

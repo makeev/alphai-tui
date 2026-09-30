@@ -11,6 +11,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 
+use super::extended::Coverage;
 use super::{DataSource, alpaca, finnhub, tiingo, yahoo};
 use crate::config::KeyField;
 
@@ -22,6 +23,11 @@ pub struct SourceInfo {
     pub aliases: &'static [&'static str],
     /// One-line description for the settings row.
     pub hint: &'static str,
+    /// What the settings screen says under its rows while the source is
+    /// picked: what it covers, how fresh, what it costs.
+    pub about: &'static str,
+    /// Where its keys come from, as a sentence; empty when keyless.
+    pub signup: &'static str,
     /// Credentials in the order `make` receives them; empty = keyless.
     pub key_fields: &'static [KeyField],
     /// Build the source. `keys` holds resolved values in `key_fields`
@@ -33,6 +39,10 @@ pub struct SourceInfo {
     /// one. `rate_warning` compares the watchlist against it; None means
     /// there is no published ceiling to check.
     pub rate_limit_per_min: Option<u32>,
+    /// How much of the pre and post market the source sees by itself,
+    /// which decides what `extended_source = "auto"` borrows. A function
+    /// because Alpaca's answer depends on `ALPACA_FEED`.
+    pub coverage: fn() -> Coverage,
 }
 
 /// Registry of price sources. Entry 0 is the keyless default: the fallback
@@ -44,15 +54,20 @@ pub static SOURCES: &[SourceInfo] = &[
         id: "yahoo",
         aliases: &["yf", "yfinance"],
         hint: "no key needed, ~15 min delayed",
+        about: "Keyless and about 15 minutes behind, pre and after hours included. Yahoo blocks an IP that asks too often for tens of minutes, so keep the interval long.",
+        signup: "",
         key_fields: &[],
         make: |_| Ok(Arc::new(yahoo::Yahoo::new()?)),
         reqs_per_symbol: 1,
         rate_limit_per_min: None,
+        coverage: || Coverage::Market,
     },
     SourceInfo {
         id: "finnhub",
         aliases: &["fh"],
         hint: "real-time quotes, needs a key (free at finnhub.io)",
+        about: "Real-time quotes, 60 requests a minute on the free plan. No candle history and no pre or after hours of its own: the chart fills in as the session runs.",
+        signup: "Get one free at finnhub.io.",
         key_fields: &[KeyField {
             config_name: "finnhub",
             env_var: "FINNHUB_API_KEY",
@@ -61,11 +76,14 @@ pub static SOURCES: &[SourceInfo] = &[
         make: |keys| Ok(Arc::new(finnhub::Finnhub::new(keys[0].clone())?)),
         reqs_per_symbol: 1,
         rate_limit_per_min: Some(60),
+        coverage: || Coverage::Nothing,
     },
     SourceInfo {
         id: "alpaca",
         aliases: &["alpc"],
         hint: "realtime IEX quotes and real candle history, free keys at alpaca.markets",
+        about: "Real-time IEX prices and full candle history, 200 requests a minute. IEX is one exchange with a few percent of the volume; the whole market comes 15 minutes late.",
+        signup: "Get them free at alpaca.markets, paper keys work.",
         key_fields: &[
             KeyField {
                 config_name: "alpaca_key_id",
@@ -87,11 +105,20 @@ pub static SOURCES: &[SourceInfo] = &[
         // Snapshot plus bars, against the Basic plan's ceiling.
         reqs_per_symbol: 2,
         rate_limit_per_min: Some(200),
+        coverage: || {
+            if alpaca::feed() == "iex" {
+                Coverage::Venue
+            } else {
+                Coverage::Market
+            }
+        },
     },
     SourceInfo {
         id: "tiingo",
         aliases: &["tngo"],
         hint: "real-time IEX prices, keys at tiingo.com",
+        about: "Real-time IEX prices and bars, consolidated daily history, one request a poll for the whole watchlist. IEX barely trades before the open or after the close.",
+        signup: "Get one at tiingo.com; the free plan allows 50 requests an hour.",
         key_fields: &[KeyField {
             config_name: "tiingo",
             env_var: "TIINGO_API_KEY",
@@ -107,6 +134,7 @@ pub static SOURCES: &[SourceInfo] = &[
         // ceiling picked for either would be wrong for the other, so none
         // is checked; the refusal itself says what ran out.
         rate_limit_per_min: None,
+        coverage: || Coverage::Venue,
     },
 ];
 
@@ -115,13 +143,20 @@ pub static SOURCES: &[SourceInfo] = &[
 /// would fit. A poll cycle spends `reqs_per_symbol` per ticker, so a long
 /// watchlist on a short interval quietly turns every ticker into an error
 /// row; the check runs at startup and in the settings screen, where the
-/// interval is edited.
-pub fn rate_warning(info: &SourceInfo, symbols: usize, every_secs: u64) -> Option<String> {
+/// interval is edited. `borrows_sip` says the consolidated tape is under
+/// the source for pre and post market (see `extended::Provider::Sip`).
+pub fn rate_warning(
+    info: &SourceInfo,
+    symbols: usize,
+    every_secs: u64,
+    borrows_sip: bool,
+) -> Option<String> {
     let limit = info.rate_limit_per_min?;
     let every_secs = every_secs.max(1);
-    // IEX may supplement each symbol once a minute with a SIP snapshot and
-    // bars. Reserve that allowance so the suggested interval also fits ETH.
-    let extra = if info.id == "alpaca" {
+    // The tape costs a snapshot and bars per symbol once a minute, on the
+    // same key when the price source is Alpaca. Reserve that allowance so
+    // the suggested interval also fits the extended session.
+    let extra = if info.id == "alpaca" && borrows_sip {
         symbols as u64 * 2
     } else {
         0
@@ -208,6 +243,13 @@ mod tests {
         for s in SOURCES {
             assert_eq!(s.id, s.id.to_lowercase(), "{}: id must be lowercase", s.id);
             assert!(!s.hint.is_empty(), "{}: empty hint", s.id);
+            assert!(!s.about.is_empty(), "{}: empty about", s.id);
+            assert_eq!(
+                s.signup.is_empty(),
+                s.key_fields.is_empty(),
+                "{}: a keyed source says where its keys come from, a keyless one does not",
+                s.id
+            );
             names.push(s.id);
             names.extend(s.aliases);
             for f in s.key_fields {
@@ -274,18 +316,21 @@ mod tests {
     fn rate_warning_fires_only_over_the_ceiling() {
         let alpaca = find("alpaca").unwrap();
         // Five symbols at two requests each, every 2s: 300 a minute.
-        let msg = rate_warning(alpaca, 5, 2).expect("300 req/min is over 200");
+        let msg = rate_warning(alpaca, 5, 2, true).expect("300 req/min is over 200");
         assert!(msg.contains("310"), "{msg}");
         assert!(msg.contains("alpaca"), "{msg}");
         assert!(msg.contains("poll every 4s"), "{msg}");
         // The interval it suggests has to clear the limit.
-        assert!(rate_warning(alpaca, 5, 4).is_none());
-        assert!(rate_warning(alpaca, 5, 15).is_none());
+        assert!(rate_warning(alpaca, 5, 4, true).is_none());
+        assert!(rate_warning(alpaca, 5, 15, true).is_none());
+        // Without the tape the ten requests it costs are not reserved.
+        let own = rate_warning(alpaca, 5, 2, false).expect("300 req/min is over 200");
+        assert!(own.contains("300 requests"), "{own}");
         // Finnhub spends one request per symbol against a lower ceiling.
-        assert!(rate_warning(find("finnhub").unwrap(), 5, 2).is_some());
-        assert!(rate_warning(find("finnhub").unwrap(), 2, 2).is_none());
+        assert!(rate_warning(find("finnhub").unwrap(), 5, 2, false).is_some());
+        assert!(rate_warning(find("finnhub").unwrap(), 2, 2, false).is_none());
         // A source with no published ceiling has nothing to warn about.
-        assert!(rate_warning(find("yahoo").unwrap(), 100, 2).is_none());
+        assert!(rate_warning(find("yahoo").unwrap(), 100, 2, false).is_none());
     }
 
     #[test]
