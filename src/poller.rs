@@ -85,6 +85,7 @@ pub async fn run(poller: Poller) {
         // What the next start would have to match to reuse these rows.
         let window = cache::params_key(range, interval, sessions);
         let source_name = current.name();
+        current.begin_cycle(&symbols);
         let mut set = JoinSet::new();
         for symbol in &symbols {
             let source = current.clone();

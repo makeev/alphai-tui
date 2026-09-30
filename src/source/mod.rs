@@ -3,6 +3,7 @@ mod extended;
 pub mod finnhub;
 pub mod http;
 pub mod registry;
+pub mod tiingo;
 pub mod yahoo;
 
 use std::sync::Arc;
@@ -46,6 +47,12 @@ pub trait DataSource: Send + Sync {
     fn extended_candles(&self) -> bool {
         true
     }
+
+    /// The symbols the coming round of `fetch` calls is for, told before
+    /// the round starts. A source with a batch quote endpoint answers the
+    /// whole round with one request instead of one per symbol; the others
+    /// ignore it.
+    fn begin_cycle(&self, _symbols: &[String]) {}
 }
 
 /// Build a source by name (registry id or alias). Credentials resolve

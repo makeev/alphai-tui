@@ -5,6 +5,19 @@ the crates.io releases; from 0.7.0 on each one is also a git tag and a
 GitHub release with prebuilt binaries. The Homebrew tap, the AUR and the
 apt repository joined later, and carry every version since.
 
+## 0.27.0 - 2026-09-30
+
+- Tiingo is a fourth price source: `-s tiingo`, a key row in the settings
+  screen, `[keys] tiingo` or `TIINGO_API_KEY`. Quotes and intraday bars
+  come from IEX in real time, pre and post market included from 08:00 to
+  17:30 ET. Daily charts use Tiingo's consolidated end-of-day history with
+  the whole market's volume, and crypto works as `BTC-USD`. One request per
+  poll quotes the whole watchlist; bars and daily history are cached, and
+  the live price moves the last candle between refreshes. The free plan's
+  50 requests an hour suit a couple of tickers polled every few minutes; a
+  paid plan covers a live dashboard. The README explains how the IEX
+  reference price and IEX's volume are shown.
+
 ## 0.26.0 - 2026-09-29
 
 - `[ui] borders = "none"` draws panels as tinted surfaces separated by a

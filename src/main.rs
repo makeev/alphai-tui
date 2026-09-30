@@ -444,6 +444,7 @@ fn print_once(
     json: Option<&str>,
 ) -> Result<()> {
     let mut rows: Vec<serde_json::Value> = Vec::new();
+    source.begin_cycle(symbols);
     for symbol in symbols {
         // Regular sessions only: this prints a quote and a candle count
         // for a script, and the extended candles change neither.

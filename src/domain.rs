@@ -160,6 +160,9 @@ pub enum PriceFeed {
     Yahoo,
     Finnhub,
     Crypto,
+    /// Tiingo's consolidated daily bars and official closes, and its
+    /// crypto. Its intraday bars and live price are `Iex`.
+    Tiingo,
 }
 
 impl PriceFeed {
@@ -172,6 +175,7 @@ impl PriceFeed {
             Self::Yahoo => "Yahoo",
             Self::Finnhub => "Finnhub",
             Self::Crypto => "Alpaca crypto",
+            Self::Tiingo => "Tiingo",
         }
     }
 }

@@ -20,8 +20,8 @@ brew install makeev/tap/alphai-tui   # also cargo, apt, AUR, x-cmd, or a prebuil
 alphai-tui NVDA AVGO AAPL MSFT META TSLA AMZN GOOGL BTC-USD
 ```
 
-Quotes and charts run keyless on Yahoo, or on Finnhub or Alpaca with their
-own free keys. The News, Insider, Earnings and Calendar views run on a free
+Quotes and charts run keyless on Yahoo, or on Finnhub, Alpaca or Tiingo
+with their own keys. The News, Insider, Earnings and Calendar views run on a free
 [AlphAI](https://alphai.io?utm_source=alphai-tui&utm_medium=referral) key
 that you paste once in the settings screen. The first run walks you through
 both, and after that a bare `alphai-tui` reopens your watchlist.
@@ -127,7 +127,7 @@ braille lines, a volume panel whose bars sit in their candles' own columns
 and take their color, and an RSI(14) panel. `c` switches to a Braille line
 chart, `m`, `i` and `b` toggle the overlays and the panels, `e` averages
 simple or exponential, `t` cycles interval presets, and `E` draws the pre
-and post market candles too (Yahoo and Alpaca), enabled by default. The
+and post market candles too (Yahoo, Alpaca and Tiingo), enabled by default. The
 chart title keeps the switch beside the source: `EXT: Yahoo (Shift+E: off)`
 or `EXT: off (Shift+E: on)` when hidden. The hint follows custom keybindings.
 Where there is nothing to draw, `E` says why in the footer: daily candles,
@@ -326,7 +326,7 @@ chain and a simpler idea of a position.
 | Options chain | no | yes | no |
 | Positions and P&L | quantity and average price, in a view of its own | quantity and average price | cost-basis lots, groups, currencies |
 | Export for scripts | `--once` text, `--json` | no | CSV and JSON |
-| Price sources | Yahoo, Finnhub, Alpaca | Yahoo | Yahoo, Coinbase |
+| Price sources | Yahoo, Finnhub, Alpaca, Tiingo | Yahoo | Yahoo, Coinbase |
 | A source that stops answering | cached start, automatic switch | no | no |
 | Add or remove a ticker in the app | yes | yes | no |
 | Rebindable keys | any action, in the config | vim keys | no |
@@ -340,9 +340,9 @@ ticker and sums in whatever currency the quotes come back in. If you track
 lots across currencies, ticker is the one to reach for.
 
 **One thing worth knowing.** Yahoo rate-limits by IP, and every tool here
-depends on it, this one included. Three price sources is the hedge: if
-Yahoo starts refusing, `s` switches to Finnhub or Alpaca without leaving
-the app.
+depends on it, this one included. Four price sources is the hedge: if
+Yahoo starts refusing, `s` switches to Finnhub, Alpaca or Tiingo without
+leaving the app.
 
 ## Install
 
@@ -435,7 +435,7 @@ alphai-tui -s finnhub NVDA  # explicit source for one run
 
 | Flag | Default | Meaning |
 |------|---------|---------|
-| `-s, --source` | `yahoo` | Price source: `yahoo`, `finnhub` or `alpaca` |
+| `-s, --source` | `yahoo` | Price source: `yahoo`, `finnhub`, `alpaca` or `tiingo` |
 | `-e, --every` | `15` | Poll interval, seconds (also a settings row, applied live) |
 | `-r, --range` | `5d` | History window: `1d 5d 1mo 3mo 6mo 1y 2y` |
 | `-i, --interval` | `15m` | Candle size: `1m 2m 5m 15m 30m 60m 1d` |
@@ -541,7 +541,8 @@ Dropping the error rows there keeps a dead symbol from writing `null` into
 the bar, and the rounding trims `-6.1302` to the two decimals a bar has
 room for.
 
-One run costs one request per symbol (two on alpaca), so give the loop an
+One run costs one request per symbol (two on alpaca; on tiingo one or two
+for the whole list plus up to three per ticker), so give the loop an
 interval rather than letting the bar refresh as fast as it likes. Yahoo
 throttles by IP address and answers a burst with 429s for several minutes
 afterwards, which is long enough to lose the pane you built. A minute
@@ -549,7 +550,8 @@ between runs is plenty for a status bar; below that, use a keyed source.
 
 CLI arguments win over the config file; the config file wins over built-in
 defaults. API keys can also come from env vars, which win over the config:
-`ALPHAI_API_KEY`, `FINNHUB_API_KEY`, `APCA_API_KEY_ID`, `APCA_API_SECRET_KEY`.
+`ALPHAI_API_KEY`, `FINNHUB_API_KEY`, `APCA_API_KEY_ID`, `APCA_API_SECRET_KEY`,
+`TIINGO_API_KEY`.
 
 ## Keys
 
@@ -568,7 +570,7 @@ defaults. API keys can also come from env vars, which win over the config:
 | `Enter` / `o` | earnings | open the read on alphai.io |
 | `Enter` / `o` | calendar | open macro source or the company's Earnings view |
 | `v` | news, insider | fullscreen article card; scroll with `↑` `↓`, `Esc` closes |
-| `E` | everywhere | draw pre and post market candles too (Yahoo and Alpaca); says why when there are none |
+| `E` | everywhere | draw pre and post market candles too (Yahoo, Alpaca and Tiingo); says why when there are none |
 | `x` | news | cycle the layout: chart over the list, stacked, or side-by-side |
 | `PgUp` `PgDn` | news | scroll the article card pane |
 | `PgUp` `PgDn` | earnings | page through the read |
@@ -716,6 +718,34 @@ get a sourced brief without leaving the terminal.
   of a liquid name's extended hours, so the first fill of a chart window
   follows up to three more pages to reach the start of the IEX series;
   later refreshes take the newest page only.
+- `tiingo`: needs a key from [tiingo.com](https://www.tiingo.com), free or
+  paid. Quotes and intraday bars come from IEX in real time, pre and post
+  market included from 08:00 to 17:30 ET. Daily charts use Tiingo's
+  consolidated end-of-day history, split adjusted, with the whole market's
+  volume. Crypto works in the usual `BTC-USD` form. Coverage is US stocks,
+  ETFs and mutual funds (funds have daily bars only); listings outside the
+  US, indices and FX are not available here.
+  During the session the price is Tiingo's IEX reference price: since
+  February 2025 IEX's own last trade needs an exchange agreement, and the
+  reference price stays within a few cents of it. IEX's volume is one
+  venue's, so the quote carries none during the day and an intraday chart
+  labels its volume `IEX only`. After the close Tiingo publishes the
+  official close and the consolidated volume, and the rail switches to
+  them; with an intraday chart open, the last after-hours price stays
+  beside the close overnight. Before the open and after the bell the IEX
+  price is the extended quote beside the last close, as on the other
+  sources.
+  One request per poll quotes the whole watchlist, two when crypto is on
+  it. Bars are refreshed once a minute per ticker and daily history every
+  15 minutes; in between, the live price moves the last candle, and a new
+  candle has no volume bar until the next refresh.
+  The free plan allows 50 requests an hour and 1,000 a day. That covers a
+  couple of tickers polled every few minutes, not a live dashboard: the
+  quote request alone is 240 an hour at the default 15 seconds. The paid
+  Power plan allows 10,000 an hour. A key does not say which plan it is
+  on, so the app does not warn about the budget ahead of time. When an
+  allowance runs out, the error names it, and the automatic switch below
+  moves to another source.
 
 **When a source stops answering**
 
@@ -824,6 +854,7 @@ alphai = "ak_live_..."
 finnhub = ""
 alpaca_key_id = ""
 alpaca_secret = ""
+tiingo = ""
 
 [ui]
 default_view = "split"    # split | news | table | chart | insider | earnings | summary | portfolio | calendar
@@ -1016,8 +1047,8 @@ The AlphAI response cache (5 minutes), the feed page sizes, the 2 second
 poll floor and the chart warm-up factors are fixed. They keep the app a
 fair citizen of the free API tiers, and a config knob for them would turn
 an innocent-looking file into an abuse vector. `ALPACA_FEED`,
-`ALPHAI_API_URL`, `ALPACA_DATA_URL` and `YAHOO_CHART_URL` stay env-only
-debug overrides for the same reason.
+`ALPHAI_API_URL`, `ALPACA_DATA_URL`, `YAHOO_CHART_URL` and `TIINGO_API_URL`
+stay env-only debug overrides for the same reason.
 
 ## Architecture
 
@@ -1031,6 +1062,7 @@ src/
     yahoo.rs     Yahoo v8 chart endpoint (quote + history in one call)
     finnhub.rs   Finnhub /quote with synthetic session history
     alpaca.rs    snapshot + real historical bars (IEX/SIP feeds, crypto)
+    tiingo.rs    one IEX quote request per poll, cached IEX bars and daily history, crypto
   alphai.rs      AlphAI API client + demand-driven fetch task (TTL cache)
   keymap.rs      semantic actions + the key table (footer hints derive from it)
   theme.rs       semantic color palette ([theme] overrides)
@@ -1062,6 +1094,10 @@ request-budget guard lives in one file (`app/feeds.rs`).
 1. Implement `source::DataSource` (one async `fetch` returning quote plus
    candles) in a new module under `src/source/`. The helpers in
    `source/http.rs` cover the client, JSON fetching and error plumbing.
+   A provider that quotes many tickers in one request can also implement
+   `begin_cycle`, which hears the poll's whole symbol list before its
+   `fetch` calls start, and answer all of them from one response (see
+   `source/tiingo.rs`).
 2. Append one `SourceInfo` entry to `source/registry.rs`: id, aliases, a
    settings hint, the key fields it needs and a constructor. The `--source`
    help and error list, the settings screen rows and picker cycle, config

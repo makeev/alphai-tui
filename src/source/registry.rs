@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 
-use super::{DataSource, alpaca, finnhub, yahoo};
+use super::{DataSource, alpaca, finnhub, tiingo, yahoo};
 use crate::config::KeyField;
 
 pub struct SourceInfo {
@@ -87,6 +87,26 @@ pub static SOURCES: &[SourceInfo] = &[
         // Snapshot plus bars, against the Basic plan's ceiling.
         reqs_per_symbol: 2,
         rate_limit_per_min: Some(200),
+    },
+    SourceInfo {
+        id: "tiingo",
+        aliases: &["tngo"],
+        hint: "real-time IEX prices, keys at tiingo.com",
+        key_fields: &[KeyField {
+            config_name: "tiingo",
+            env_var: "TIINGO_API_KEY",
+            label: "Tiingo key",
+        }],
+        make: |keys| Ok(Arc::new(tiingo::Tiingo::new(keys[0].clone())?)),
+        // One quote request per poll covers the whole watchlist; bars are
+        // refreshed at most once a minute per ticker, daily history every
+        // fifteen minutes.
+        reqs_per_symbol: 1,
+        // The free plan allows 50 requests an hour and Power 10,000, and
+        // nothing in a key or a response says which one it is on. A
+        // ceiling picked for either would be wrong for the other, so none
+        // is checked; the refusal itself says what ran out.
+        rate_limit_per_min: None,
     },
 ];
 
