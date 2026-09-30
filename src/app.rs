@@ -1489,9 +1489,10 @@ fn with_utm(url: &str) -> String {
 }
 
 /// Open a URL with the platform handler; failures are ignored (worst case the
-/// article just does not open — never crash the TUI over it).
+/// article just does not open — never crash the TUI over it). Tests that press
+/// an open key must not launch the real browser.
 pub fn open_url(url: &str) {
-    if !(url.starts_with("https://") || url.starts_with("http://")) {
+    if cfg!(test) || !(url.starts_with("https://") || url.starts_with("http://")) {
         return;
     }
     #[cfg(target_os = "macos")]
