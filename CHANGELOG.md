@@ -5,6 +5,27 @@ the crates.io releases; from 0.7.0 on each one is also a git tag and a
 GitHub release with prebuilt binaries. The Homebrew tap, the AUR and the
 apt repository joined later, and carry every version since.
 
+## 0.29.0 - 2026-10-01
+
+- Separate the current quote from the last chart bar: the quote rail shows
+  the quote's currency, feed and trade time, while the chart names the last
+  bar's close, feed and start time. Price markers distinguish quotes,
+  extended trades and bar closes. The header focuses on navigation and
+  connection status; hiding the rail restores quote details in the chart.
+- News cards lead with the selected company's AI impact and explanation,
+  before the general summary and other companies. The selected company
+  stays visible even when it appears after several others in the analysis.
+- Calendar gives long event names more room and reserves stronger color
+  for the event and its importance. Status labels remain visible on narrow
+  terminals.
+- Insider filings use a ledger with transaction date, side, value, owner
+  and a plan flag. Cards lead with the company, owner and trade facts,
+  followed by a separately labelled AI interpretation. Unknown trade dates
+  stay unknown, and buy/sell labels follow the filing rather than sentiment.
+- Shorten the README, bring installation and quick start forward, and
+  collapse the screenshot galleries while keeping the configuration,
+  scripting examples and provider limitations available.
+
 ## 0.28.0 - 2026-09-30
 
 - Where the premarket and after-hours price comes from is a setting of its

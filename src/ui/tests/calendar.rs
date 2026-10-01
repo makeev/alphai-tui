@@ -359,6 +359,20 @@ fn agenda_renders_full_and_narrow_without_hiding_status_or_shifting_date_only() 
 }
 
 #[test]
+fn wide_agenda_gives_long_event_names_room_without_losing_their_status() {
+    let (mut app, _cmds) = fixture();
+    let name = "Employment Situation (nonfarm payrolls)";
+    let mut event = macro_event(name, "2026-09-18T12:30:00Z");
+    event.schedule_basis = "inferred".into();
+    window(&mut app, vec![event]);
+    let full = screen(&mut app, 160, 24);
+    let row = full.lines().find(|l| l.contains(name)).expect(&full);
+    assert!(row.contains("estimated"), "{row}");
+    let narrow = screen(&mut app, 60, 24);
+    assert!(narrow.contains("[est.]"), "{narrow}");
+}
+
+#[test]
 fn open_routes_to_source_or_earnings_and_cursor_stays_on_the_same_event() {
     let (mut app, _cmds) = fixture();
     let rows = agenda::agenda(&app, now());

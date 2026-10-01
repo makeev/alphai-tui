@@ -1,4 +1,5 @@
 mod calendar;
+mod design;
 
 use std::sync::{Arc, RwLock};
 use std::time::Instant;
@@ -187,7 +188,7 @@ fn session_backgrounds_and_time_grid_share_all_three_panels() {
                 .iter()
                 .position(|line| line.contains("SMA20"))
                 .unwrap() as u16
-                + 1;
+                + 2;
             for color in [app.theme.pre_market_bg, app.theme.post_market_bg] {
                 let cols = |y| {
                     (0..width)
@@ -698,18 +699,16 @@ fn right_margin_frees_columns_and_hosts_the_price_tag() {
 
     let screen = render(&mut app);
     let with_margin = max_body_x(&screen);
-    // The price appears in the title and again as the tag in the margin.
-    assert!(
-        screen.matches("214.50").count() >= 2,
-        "price tag missing:\n{screen}"
-    );
+    // Quote, last-bar context and the tag each carry a price.
+    let price_count = screen.matches("214.50").count();
+    assert!(price_count >= 3, "price tag missing:\n{screen}");
 
     app.chart.right_margin_pct = 0;
     let screen = render(&mut app);
     let flush = max_body_x(&screen);
     assert_eq!(
         screen.matches("214.50").count(),
-        1,
+        price_count - 1,
         "margin off, tag still drawn:\n{screen}"
     );
     assert!(
@@ -877,8 +876,12 @@ fn candle_sma_overlay_is_a_braille_line() {
     let screen = render(&mut app);
     assert!(has_candles(&screen), "not in candle mode:\n{screen}");
     assert!(braille(&screen), "no braille SMA overlay:\n{screen}");
-    // The header and footer use "·" as a separator; only the plot matters.
-    let plot: String = screen.lines().skip(2).take(25).collect();
+    // Exclude the chart title and bar context, which also use separators.
+    let plot: String = screen
+        .lines()
+        .skip(4)
+        .take_while(|l| !l.starts_with('╰'))
+        .collect();
     assert!(
         !plot.contains('·'),
         "old per-column SMA dots still drawn:\n{screen}"
@@ -1619,18 +1622,18 @@ fn a_new_symbol_gets_a_chance_before_fallback() {
 }
 
 #[test]
-fn range_keys_cycle_presets_and_update_header() {
+fn range_keys_cycle_presets_and_update_chart_title() {
     let mut app = fake_app();
     app.view_idx = ui::view_index(ui::ViewId::Chart);
     press(&mut app, KeyCode::Char('t'));
     assert_eq!((app.range, app.interval), (Range::D5, Interval::M15));
     let screen = render(&mut app);
-    assert!(screen.contains("5d / 15m (t: change)"), "screen:\n{screen}");
+    assert!(screen.contains("5d / 15m"), "screen:\n{screen}");
     // Wrap backwards past the first preset.
     press(&mut app, KeyCode::Char('T'));
     press(&mut app, KeyCode::Char('T'));
     assert_eq!((app.range, app.interval), (Range::Y1, Interval::D1));
-    assert!(render(&mut app).contains("1y / 1d (t: change)"));
+    assert!(render(&mut app).contains("1y / 1d"));
     // Old data stays on screen until the poller answers.
     assert!(app.data.contains_key("AAPL"));
 }
@@ -1992,11 +1995,11 @@ fn news_view_lists_articles_and_sentiment() {
         "novelty missing from meta:\n{screen}"
     );
     assert!(
-        screen.contains("positive/high"),
+        screen.contains("AI impact ▲ positive") && screen.contains("confidence"),
         "sentiment/confidence missing:\n{screen}"
     );
     assert!(
-        screen.contains("act high"),
+        screen.contains("actionability high"),
         "actionability missing:\n{screen}"
     );
 }
@@ -2057,10 +2060,8 @@ fn insider_view_shows_summary_and_filings() {
     assert!(screen.contains("6 insiders"), "screen:\n{screen}");
     assert!(screen.contains("COOK TIMOTHY"), "screen:\n{screen}");
     assert!(screen.contains("×3"), "event count missing:\n{screen}");
-    // No AI enrichment and no structured block on this legacy filing: the
-    // sell glyph comes from the title fallback, the ownership marker follows,
-    // and the plan/value columns stay blank.
-    assert!(screen.contains("▼  D"), "screen:\n{screen}");
+    // A legacy filing still derives the transaction side from its headline.
+    assert!(screen.contains("SELL"), "screen:\n{screen}");
     assert!(screen.contains("Apple insider sold"), "screen:\n{screen}");
     assert!(
         screen.contains("score 4+"),
@@ -2115,11 +2116,11 @@ fn insider_structured_block_drives_row_and_card() {
     let screen = render(&mut app);
     assert!(screen.contains("$4.7M"), "value column missing:\n{screen}");
     assert!(
-        screen.contains("▼  D p"),
-        "sell glyph + plan flag missing:\n{screen}"
+        screen.contains("SELL") && screen.contains("plan"),
+        "sell side + plan flag missing:\n{screen}"
     );
     assert!(
-        screen.contains("·  D"),
+        screen.contains("OTHER"),
         "structured \"other\" not neutral:\n{screen}"
     );
     // The detail meta carries the structured trade.
@@ -2133,7 +2134,7 @@ fn insider_structured_block_drives_row_and_card() {
     );
     // The card column beside the list shows the full structured trade.
     assert!(
-        screen.contains("SELL 25,000 sh @ $187.32 = $4.7M (code S)"),
+        screen.contains("25,000 sh @ $187.32 (code S)"),
         "card:\n{screen}"
     );
     assert!(
@@ -2421,7 +2422,7 @@ fn article_overlay_opens_scrolls_and_closes() {
     let screen = render(&mut app);
     assert!(screen.contains("Article"), "overlay missing:\n{screen}");
     assert!(
-        screen.contains("price: +2-4% near term"),
+        screen.contains("Price outlook: +2-4% near term"),
         "impact missing:\n{screen}"
     );
     assert!(screen.contains("Trading value"), "screen:\n{screen}");
@@ -2522,6 +2523,8 @@ fn news_card_pane_shown_by_default() {
         screen.contains("Trading value"),
         "card content missing:\n{screen}"
     );
+    press(&mut app, KeyCode::PageDown);
+    let screen = render(&mut app);
     assert!(
         screen.contains("contrarian: Priced in already."),
         "screen:\n{screen}"
@@ -4847,10 +4850,11 @@ fn quote_rail_drops_zones_as_the_terminal_narrows() {
     let now = market_open_moment();
     let at = |w: u16| ui::rail::text(&ui::rail::line(&app, w, now));
 
-    let wide = at(120);
+    let wide = at(160);
     for part in [
         "AAPL",
         "214.50",
+        "USD",
         "+14.50",
         "+7.25%",
         "● live",
@@ -4859,27 +4863,21 @@ fn quote_rail_drops_zones_as_the_terminal_narrows() {
         "214.80",
         "MSFT",
     ] {
-        assert!(wide.contains(part), "120 columns lost {part}: {wide}");
+        assert!(wide.contains(part), "wide rail lost {part}: {wide}");
     }
-
-    // The peers go first, then the sparkline, then the range labels (the
-    // bare track keeps the position), then the track itself.
-    let no_peers = at(105);
-    assert!(!no_peers.contains("MSFT"), "{no_peers}");
+    for width in 12..160 {
+        assert!(ui::rail::line(&app, width, now).width() <= width as usize);
+    }
+    // Feed timing takes precedence over peers, ranges and sparklines.
+    let narrow = at(60);
+    assert!(narrow.contains("timing varies"), "{narrow}");
     assert!(
-        no_peers.contains("▇"),
-        "sparkline dropped too early: {no_peers}"
+        !narrow.contains("MSFT") && !narrow.contains("├"),
+        "{narrow}"
     );
-    assert!(!at(95).contains("▇"), "{}", at(95));
-    let track_only = at(88);
-    assert!(!track_only.contains("199.60"), "{track_only}");
-    assert!(track_only.contains("├"), "{track_only}");
-    assert!(!at(70).contains("├"), "{}", at(70));
-    assert!(!at(60).contains("delayed"), "{}", at(60));
-    assert!(at(60).contains("closes in"), "{}", at(60));
-    // The badge outlives its countdown; the percentage outlives the badge.
+    // At narrow widths, provenance outlives the session countdown.
     assert!(!at(45).contains("closes in"), "{}", at(45));
-    assert!(at(45).contains("● live"), "{}", at(45));
+    assert!(at(45).contains("timing varies"), "{}", at(45));
     assert!(!at(25).contains("+14.50"), "{}", at(25));
     assert!(at(25).contains("+7.25%"), "{}", at(25));
     assert!(at(21).contains("+7.25%"), "{}", at(21));

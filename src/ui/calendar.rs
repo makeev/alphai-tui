@@ -506,7 +506,7 @@ enum Col {
     Notes,
 }
 
-fn columns(avail: u16) -> Vec<(Col, u16)> {
+fn columns(avail: u16, title_width: u16) -> Vec<(Col, u16)> {
     for (date, time, tier, notes) in [
         (true, true, true, true),
         (true, true, true, false),
@@ -519,7 +519,7 @@ fn columns(avail: u16) -> Vec<(Col, u16)> {
             continue;
         }
         let title = if notes {
-            (avail - fixed - 16).min(28)
+            (avail - fixed - 16).min(title_width.clamp(18, 48))
         } else {
             avail - fixed
         };
@@ -626,10 +626,20 @@ fn event_row(row: &AgendaRow, cols: &[(Col, u16)], app: &App, now: DateTime<Utc>
                 },
                 Col::Notes => row.notes(zone),
             };
-            Cell::from(fit(&value, width.saturating_sub(1)))
+            let cell_style = if col == Col::Title || col == Col::Tier {
+                style
+            } else if row.elapsed || row.status == Status::Cancelled {
+                theme.faint()
+            } else if col == Col::Until && matches!(row.status, Status::Postponed | Status::Unknown)
+            {
+                Style::new().fg(theme.warn)
+            } else {
+                theme.subtle()
+            };
+            Cell::from(fit(&value, width.saturating_sub(1))).style(cell_style)
         })
         .collect();
-    Row::new(cells).style(style)
+    Row::new(cells)
 }
 
 fn separator(
@@ -815,7 +825,15 @@ pub(crate) fn render_calendar_at(f: &mut Frame, area: Rect, app: &mut App, now: 
         );
         return;
     }
-    let cols = columns(table_area.width.saturating_sub(2));
+    // Long event names may use up to 48 cells. Short names give the rest
+    // back to source/status details rather than leaving empty space.
+    let title_width = rows
+        .iter()
+        .map(|r| Span::raw(&r.title).width() + 1)
+        .max()
+        .unwrap_or(18)
+        .min(48) as u16;
+    let cols = columns(table_area.width.saturating_sub(2), title_width);
     let anchor = rows.iter().position(|r| !r.elapsed).unwrap_or(rows.len());
     let mut displayed = Vec::new();
     let mut selected_display = None;

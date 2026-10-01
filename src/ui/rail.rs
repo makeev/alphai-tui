@@ -35,6 +35,10 @@ const SPARK: usize = 8;
 /// list space than as a quote.
 pub const MIN_HEIGHT: u16 = 12;
 
+pub(crate) fn visible(app: &App, height: u16) -> bool {
+    app.show_rail && height >= MIN_HEIGHT
+}
+
 pub fn render(f: &mut Frame, area: Rect, app: &App) {
     f.render_widget(Paragraph::new(line(app, area.width, Utc::now())), area);
 }
@@ -45,7 +49,7 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
 pub(crate) fn line(app: &App, width: u16, now: DateTime<Utc>) -> Line<'static> {
     let symbol = app.selected_symbol().to_string();
     let budget = width as usize;
-    let mut spans = head(app, &symbol);
+    let mut spans = head(app, &symbol, width);
     let mut used = total_width(&spans);
 
     for alternatives in optional_zones(app, &symbol, now) {
@@ -73,7 +77,7 @@ pub(crate) fn line(app: &App, width: u16, now: DateTime<Utc>) -> Line<'static> {
 }
 
 /// Symbol, price and freshness: the part that is never dropped.
-fn head(app: &App, symbol: &str) -> Vec<Span<'static>> {
+fn head(app: &App, symbol: &str, width: u16) -> Vec<Span<'static>> {
     let theme = &app.theme;
     let mut out = vec![Span::styled(
         format!(" {symbol} "),
@@ -81,12 +85,23 @@ fn head(app: &App, symbol: &str) -> Vec<Span<'static>> {
     )];
     match app.data.get(symbol) {
         Some(data) => {
+            if width >= 60 {
+                out.push(Span::styled("quote ", theme.subtle()));
+            }
             // The pulse is the same one the chart title and the table use,
             // so a live market now reads as live in every view.
             let style = app
                 .price_flash_dir(symbol)
                 .map_or(Style::new().bold(), |up| flash_style(up, theme));
             out.push(Span::styled(fmt_price(data.quote.price), style));
+            if let Some(currency) = data
+                .quote
+                .currency
+                .as_deref()
+                .filter(|c| !c.is_empty() && (width >= 60 || *c != "USD"))
+            {
+                out.push(Span::styled(format!(" {currency}"), theme.subtle()));
+            }
             if let Some(age) = app.cached_age(symbol) {
                 out.push(Span::styled(
                     format!("  cached {age} ago"),
@@ -139,6 +154,9 @@ fn optional_zones(app: &App, symbol: &str, now: DateTime<Utc>) -> Vec<Vec<Vec<Sp
             )],
         ]);
     }
+    // Price provenance outranks holdings, session countdowns and charts:
+    // a recently fetched response can still carry an old trade.
+    zones.push(quote_context(app, quote));
     zones.push(extended_zone(quote, now, theme));
     zones.push(position_zone(
         app,
@@ -147,12 +165,6 @@ fn optional_zones(app: &App, symbol: &str, now: DateTime<Utc>) -> Vec<Vec<Vec<Sp
         theme,
     ));
     zones.push(session_zone(app, symbol, now));
-    if let Some(note) = app.source_delay {
-        zones.push(vec![vec![Span::styled(
-            format!("  {note}"),
-            Style::new().fg(theme.warn),
-        )]]);
-    }
     zones.push(range_zone(quote, &data.candles, color, theme));
     let closes: Vec<f64> = data.candles.iter().map(|c| c.close).collect();
     if !closes.is_empty() {
@@ -178,6 +190,31 @@ fn optional_zones(app: &App, symbol: &str, now: DateTime<Utc>) -> Vec<Vec<Vec<Sp
         )]]);
     }
     zones
+}
+
+fn quote_context(app: &App, quote: &Quote) -> Vec<Vec<Span<'static>>> {
+    let feed = quote.timing.regular_feed.label();
+    let mut parts = Vec::new();
+    if !feed.is_empty() {
+        parts.push(feed.to_string());
+    }
+    if let Some(note) = app.source_delay.filter(|note| !feed.contains(note)) {
+        parts.push(note.to_string());
+    }
+    let source = parts.join(" · ");
+    if let Some(ts) = quote.timing.regular {
+        let us = market::is_us_equity(&quote.symbol);
+        parts.push(format!(
+            "{} {}",
+            super::time_axis::label(ts, "%d %b %H:%M", app.chart.timezone, us),
+            super::time_axis::zone_name(app.chart.timezone, us),
+        ));
+    }
+    [parts.join(" · "), source]
+        .into_iter()
+        .filter(|s| !s.is_empty())
+        .map(|s| vec![Span::styled(format!("  {s}"), app.theme.subtle())])
+        .collect()
 }
 
 fn event_zone(app: &App, symbol: &str, now: DateTime<Utc>) -> Vec<Vec<Span<'static>>> {

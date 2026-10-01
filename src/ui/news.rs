@@ -5,7 +5,7 @@ use ratatui::style::{Modifier, Style, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Cell, Paragraph, Row, Table, Wrap};
 
-use crate::alphai::{self, Article, fmt_usd};
+use crate::alphai::{self, Article};
 use crate::app::{App, FeedKind, NewsLayout, NewsScope};
 use crate::keymap::Action;
 use crate::theme::Theme;
@@ -576,36 +576,6 @@ pub fn display_impact<'a>(a: &'a Article, ticker: &str) -> Option<&'a crate::alp
         .or_else(|| a.enrichment.tickers.first().and_then(|t| a.impact_for(t)))
 }
 
-/// Bottom pane with the selected article's full title, meta line and summary.
-/// `ticker` picks which per-ticker AI analysis feeds the meta line.
-pub fn render_detail(
-    f: &mut Frame,
-    area: Rect,
-    article: Option<&Article>,
-    ticker: &str,
-    extra: Option<String>,
-    theme: &Theme,
-) {
-    let block = theme.panel();
-    let Some(a) = article else {
-        f.render_widget(block, area);
-        return;
-    };
-    let mut meta = meta_line(a, ticker);
-    meta.extend(extra);
-    let lines = vec![
-        Line::from(a.original.title.clone()).bold(),
-        Line::from(meta.join(" · ")).style(theme.subtle()),
-        Line::from(a.original.summary.clone()),
-    ];
-    f.render_widget(
-        Paragraph::new(lines)
-            .wrap(Wrap { trim: false })
-            .block(block.title(hint_title(" article ", "· ⏎ open · v card ", theme))),
-        area,
-    );
-}
-
 /// A panel title that is a heading plus a dim key hint, e.g.
 /// " article · ⏎ open · v card ".
 pub(crate) fn hint_title(heading: &str, hint: &str, theme: &Theme) -> Line<'static> {
@@ -618,9 +588,8 @@ pub(crate) fn hint_title(heading: &str, hint: &str, theme: &Theme) -> Line<'stat
     ])
 }
 
-/// Meta tokens for the detail pane and the article card: source, age,
-/// category, scores and the AI calls that exist for this article.
-pub fn meta_line(a: &Article, ticker: &str) -> Vec<String> {
+/// Short attribution kept at the top of an article card.
+pub(crate) fn source_meta(a: &Article) -> Vec<String> {
     let source = if a.original.source_domain.is_empty() {
         a.original.source.clone()
     } else {
@@ -633,43 +602,6 @@ pub fn meta_line(a: &Article, ticker: &str) -> Vec<String> {
     let age = a.age(Utc::now());
     if !age.is_empty() {
         meta.push(format!("{age} ago"));
-    }
-    if let Some(c) = &a.enrichment.category {
-        meta.push(c.clone());
-    }
-    meta.push(format!("score {}", a.score()));
-    if let Some(n) = a.novelty() {
-        meta.push(format!("nov {n}"));
-    }
-    if let Some(i) = display_impact(a, ticker) {
-        match (&i.sentiment, &i.confidence) {
-            (Some(s), Some(c)) => meta.push(format!("{s}/{c}")),
-            (Some(s), None) => meta.push(s.clone()),
-            _ => {}
-        }
-    }
-    if let Some(act) = a
-        .trading_value()
-        .and_then(|t| t.actionability_score.clone())
-    {
-        meta.push(format!("act {act}"));
-    }
-    // Insider rows: the structured trade beats anything parsed from text.
-    if let Some(t) = &a.insider {
-        match (t.side.as_deref(), t.total_value_usd.as_deref()) {
-            (Some(side), Some(v)) => meta.push(format!("{} {}", side.to_uppercase(), fmt_usd(v))),
-            (Some(side), None) => meta.push(side.to_uppercase()),
-            _ => {}
-        }
-        if t.is_10b5_1 {
-            meta.push("10b5-1 plan".to_string());
-        }
-    }
-    if let Some(n) = a.sources_badge() {
-        meta.push(format!("×{n} outlets"));
-    }
-    if !a.enrichment.tickers.is_empty() {
-        meta.push(a.enrichment.tickers.join(", "));
     }
     meta
 }

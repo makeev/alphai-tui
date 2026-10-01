@@ -160,7 +160,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     // selected price is on screen even where the view itself has no room
     // for one (News, Insider, Earnings). Off via `[ui] quote_rail`, and
     // dropped on a terminal too short to spare the row.
-    let rail_h = u16::from(app.show_rail && f.area().height >= rail::MIN_HEIGHT);
+    let rail_h = u16::from(rail::visible(app, f.area().height));
     // Bare mode (z) hands the header's and footer's rows to the view: in a
     // tmux pane the window name and the key hints are chrome the pane can
     // spare, while the rail keeps the ticker and its price on screen.
@@ -224,33 +224,21 @@ pub(crate) fn centered(r: Rect, width: u16, height: u16) -> Rect {
 }
 
 fn header_line(app: &App, width: u16) -> Paragraph<'static> {
-    let mut spans = vec![
-        Span::styled(" alphai-tui ", Style::new().bold().fg(app.theme.accent)),
-        Span::styled(format!("· {} ", app.source_name), app.theme.subtle()),
-    ];
-    let key = app.keymap.labels(&[Action::NextPreset]);
-    let window = format!("{} / {}", app.range.as_str(), app.interval.as_str());
-    let interval = if key.is_empty() {
-        format!(" · {window}")
-    } else {
-        format!(" · {window} ({key}: change)")
-    };
+    let mut spans = vec![Span::styled(
+        " alphai-tui ",
+        Style::new().bold().fg(app.theme.accent),
+    )];
+    let source = format!(" · {}", app.source_name);
     let key_state = if app.alphai_enabled {
         " · alphai ✓"
     } else {
         " · alphai: no key (s)"
     };
-    let clock = app.last_update.map_or_else(
-        || " · loading…".to_string(),
-        |ts| format!(" · upd {}", ts.format("%H:%M:%S")),
-    );
     let status_room = spans.iter().map(Span::width).sum::<usize>()
-        + key_state.chars().count()
-        + clock.chars().count()
-        + interval.chars().count();
-    // Named tabs take about 60 columns; when the line would not fit, the
-    // inactive ones shrink to their hotkey digit so the status at the end
-    // (the clock and the chart interval) is not the part that gets cut.
+        + Span::raw(&source).width()
+        + Span::raw(key_state).width();
+    // The header is navigation and connection context. Quote timestamps
+    // belong to their prices; chart controls belong to the chart.
     let named: usize = VIEWS.iter().map(|v| v.title().len() + 4).sum();
     let compact = named + status_room > width as usize;
     for (i, view) in VIEWS.iter().enumerate() {
@@ -261,23 +249,27 @@ fn header_line(app: &App, width: u16) -> Paragraph<'static> {
             app.theme.subtle()
         };
         let label = if compact && !active {
-            format!(" {} ", i + 1)
+            if width < 80 {
+                format!(" {}", i + 1)
+            } else {
+                format!(" {} ", i + 1)
+            }
         } else {
             format!(" {}:{} ", i + 1, view.title())
         };
         spans.push(Span::styled(label, style));
     }
-    // Reserve space for the interval control before optional status text.
-    for status in [key_state, clock.as_str()] {
-        if spans.iter().map(Span::width).sum::<usize>()
-            + status.chars().count()
-            + interval.chars().count()
-            <= width as usize
-        {
-            spans.push(Span::styled(status.to_string(), app.theme.subtle()));
-        }
+    let used = spans.iter().map(Span::width).sum::<usize>();
+    let status = if used + Span::raw(format!("{source}{key_state}")).width() <= width as usize {
+        format!("{source}{key_state}")
+    } else {
+        source
+    };
+    let status_w = Span::raw(&status).width();
+    if used + status_w <= width as usize {
+        spans.push(Span::raw(" ".repeat(width as usize - used - status_w)));
+        spans.push(Span::styled(status, app.theme.subtle()));
     }
-    spans.push(Span::styled(interval, app.theme.subtle()));
     Paragraph::new(Line::from(spans))
 }
 

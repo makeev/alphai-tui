@@ -14,7 +14,10 @@ use crate::keymap::Action;
 use crate::market;
 use crate::theme::Theme;
 use crate::ui::{Hint, View, ViewId};
-use crate::ui::{news_marks, time_axis::TimeAxis};
+use crate::ui::{
+    news_marks,
+    time_axis::{self, TimeAxis},
+};
 
 pub struct ChartView;
 
@@ -218,37 +221,43 @@ pub(crate) fn dir_color(q: &Quote, theme: &Theme) -> Color {
 /// Legend labels appear only for average lines that actually have points on
 /// screen: an average needs `period` candles of history, which short series
 /// (finnhub's growing synthetic one, thin symbols) may not have yet.
-/// `note` is the bar count when the plot is too narrow for the whole
-/// window, so a narrow chart says what it left out. A pending window is
-/// named too, so the old rows are not read as the new preset's.
+/// A pending window is named too, so the old rows are not read as the new
+/// preset's. The quote is repeated only when there is no rail on screen.
 fn chart_title(
     symbol: &str,
     data: &TickerData,
     app: &App,
     drawn: Drawn,
-    flash: Option<bool>,
+    show_quote: bool,
+    width: u16,
     note: Option<&str>,
 ) -> Line<'static> {
     let (q, theme) = (&data.quote, &app.theme);
-    let change_str = match (q.change(), q.change_pct()) {
-        (Some(c), Some(p)) => format!("{c:+.2} ({p:+.2}%)"),
-        _ => "—".into(),
-    };
-    // The price pulses in the tick's color right after an update, so a
-    // live market is visible at a glance even in line mode.
-    let price_style = flash.map_or(Style::new(), |up| flash_style(up, theme));
-    let mut spans = vec![
-        Span::styled(
-            format!(" {symbol} "),
-            Style::new().fg(theme.accent).add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(fmt_price(q.price), price_style),
-        Span::raw(format!(" {} ", q.currency.as_deref().unwrap_or(""))),
-        Span::styled(
-            format!("{change_str} "),
-            Style::new().fg(dir_color(q, theme)),
-        ),
-    ];
+    let mut spans = vec![Span::styled(
+        format!(" {symbol} "),
+        Style::new().fg(theme.accent).bold(),
+    )];
+    if show_quote {
+        spans.push(Span::styled("quote ", theme.subtle()));
+        spans.push(Span::styled(
+            format!("{} ", fmt_price(q.price)),
+            app.price_flash_dir(symbol)
+                .map_or(Style::new().bold(), |up| flash_style(up, theme)),
+        ));
+        if let Some(currency) = q.currency.as_deref().filter(|c| !c.is_empty()) {
+            spans.push(Span::styled(format!("{currency} "), theme.subtle()));
+        }
+        if let (Some(change), Some(pct)) = (q.change(), q.change_pct()) {
+            spans.push(Span::styled(
+                format!("{change:+.2} ({pct:+.2}%) "),
+                Style::new().fg(dir_color(q, theme)),
+            ));
+        }
+    }
+    spans.push(Span::styled(
+        format!("· {} / {} ", drawn.range.as_str(), drawn.interval.as_str()),
+        theme.subtle(),
+    ));
     // Only the sessions switch pending shows in the EXT label below. A
     // refused window says so: the footer carries the error, and "loading"
     // would be a promise the next poll may not keep.
@@ -263,10 +272,7 @@ fn chart_title(
         });
     }
     if let Some(note) = note {
-        spans.push(Span::styled(
-            format!("{note} "),
-            Style::new().fg(theme.flat),
-        ));
+        spans.push(Span::styled(format!("{note} "), theme.subtle()));
     }
     if drawn.interval != Interval::D1 && market::is_us_equity(symbol) {
         let mut feeds = Vec::new();
@@ -318,11 +324,20 @@ fn chart_title(
             } else {
                 "on"
             };
-            spans.push(Span::styled(
-                format!("({key}: {action}) "),
-                Style::new().fg(theme.flat),
-            ));
+            push_title_span(
+                &mut spans,
+                Span::styled(format!("({key}: {action}) "), theme.subtle()),
+                width,
+            );
         }
+    }
+    let key = app.keymap.labels(&[Action::NextPreset]);
+    if !key.is_empty() {
+        push_title_span(
+            &mut spans,
+            Span::styled(format!("({key}: interval) "), theme.subtle()),
+            width,
+        );
     }
     // Keep the session switch ahead of optional legends on narrow charts.
     if app.show_sma {
@@ -331,10 +346,49 @@ fn chart_title(
             (app.chart.sma_slow, theme.sma_slow),
         ] {
             if data.candles.len() >= period {
-                spans.push(Span::styled(
-                    format!("{}{period} ", app.ma_type.label()),
-                    Style::new().fg(color),
-                ));
+                push_title_span(
+                    &mut spans,
+                    Span::styled(
+                        format!("{}{period} ", app.ma_type.label()),
+                        Style::new().fg(color),
+                    ),
+                    width,
+                );
+            }
+        }
+    }
+    Line::from(spans)
+}
+
+fn push_title_span(spans: &mut Vec<Span<'static>>, span: Span<'static>, width: u16) {
+    if spans.iter().map(Span::width).sum::<usize>() + span.width()
+        <= width.saturating_sub(2) as usize
+    {
+        spans.push(span);
+    }
+}
+
+/// The bar's clock is independent of the quote's clock in the rail. Keep
+/// its price, provenance and timestamp together, including on mixed feeds.
+fn bar_line(data: &TickerData, app: &App, width: u16) -> Line<'static> {
+    let Some(bar) = data.candles.last() else {
+        return Line::default();
+    };
+    let mut spans = vec![
+        Span::styled("Last bar ", app.theme.subtle()),
+        Span::raw(fmt_price(bar.close)),
+    ];
+    let us = market::is_us_equity(&data.quote.symbol);
+    let time = format!(
+        "{} {}",
+        time_axis::label(bar.ts, "%d %b %H:%M", app.chart.timezone, us),
+        time_axis::zone_name(app.chart.timezone, us),
+    );
+    for part in [bar.feed.label(), time.as_str()] {
+        if !part.is_empty() {
+            let span = Span::styled(format!(" · {part}"), app.theme.subtle());
+            if spans.iter().map(Span::width).sum::<usize>() + span.width() <= width as usize {
+                spans.push(span);
             }
         }
     }
@@ -405,6 +459,7 @@ fn render_price_candles(
     let q = &data.quote;
     let draw_extended = drawn.sessions == Sessions::Extended && drawn.interval != Interval::D1;
     let extended_price = q.extended_price();
+    let marker_is_bar = draw_extended && extended_price.is_none();
     let marker_price = if draw_extended {
         extended_price.unwrap_or_else(|| data.candles.last().map_or(q.price, |c| c.close))
     } else {
@@ -423,6 +478,7 @@ fn render_price_candles(
     // candle columns (and with them the candle size and the news marks)
     // are laid out.
     let inner = panel.inner(area);
+    let show_quote = !super::rail::visible(app, f.area().height);
 
     // The gutter is sized on the whole window, so the layout stays put when
     // the bars on screen change; the axis itself follows those bars.
@@ -433,16 +489,18 @@ fn render_price_candles(
         .max()
         .unwrap() as u16
         + 1;
-    if inner.width <= gutter + 2 || inner.height <= 3 {
-        let block = panel.title(chart_title(symbol, data, app, drawn, flash, None));
+    if inner.width <= gutter + 2 || inner.height <= 4 {
+        let block = panel.title(chart_title(
+            symbol, data, app, drawn, show_quote, area.width, None,
+        ));
         f.render_widget(block, area);
         return None; // too small: leave the bare block
     }
     let plot = Rect {
         x: inner.x + gutter,
-        y: inner.y,
+        y: inner.y + 1,
         width: inner.width - gutter,
-        height: inner.height - 2, // time labels and date/timezone row
+        height: inner.height - 3, // bar context, time labels and date/timezone row
     };
 
     // Every candle gets a slot of body + 1 column of gap so neighbours never
@@ -464,7 +522,8 @@ fn render_price_candles(
         data,
         app,
         drawn,
-        flash,
+        show_quote,
+        area.width,
         note.as_deref(),
     ));
     let (y_lo, y_hi) = y_range(&display, reference, marker_price);
@@ -508,6 +567,10 @@ fn render_price_candles(
         None => block,
     };
     f.render_widget(block, area);
+    f.render_widget(
+        bar_line(data, app, inner.width),
+        Rect { height: 1, ..inner },
+    );
 
     let buf = f.buffer_mut();
     axis.backdrop(
@@ -642,11 +705,40 @@ fn render_price_candles(
         let tag = fmt_price(marker_price);
         let len = tag.chars().count() as u16;
         if margin > len {
-            let style = match flash {
+            let style = match flash.filter(|_| !marker_is_bar) {
                 Some(up) => flash_style(up, &app.theme),
                 None => Style::new().fg(color).add_modifier(Modifier::BOLD),
             };
             buf.set_string(plot.x + plot.width - len, row, &tag, style);
+            let label = if marker_is_bar {
+                "bar"
+            } else if draw_extended && extended_price.is_some() {
+                match q
+                    .timing
+                    .extended
+                    .and_then(market::window_at)
+                    .map(|w| w.session)
+                {
+                    Some(market::Session::Pre) => "PRE",
+                    Some(market::Session::Post) => "AH",
+                    _ => "extended",
+                }
+            } else {
+                "quote"
+            };
+            if margin > label.len() as u16 {
+                let label_y = if row + 1 < plot.bottom() {
+                    row + 1
+                } else {
+                    row - 1
+                };
+                buf.set_string(
+                    plot.right() - label.len() as u16,
+                    label_y,
+                    label,
+                    app.theme.subtle(),
+                );
+            }
         }
     }
 

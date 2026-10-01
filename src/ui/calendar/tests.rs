@@ -199,7 +199,7 @@ fn countdowns_cross_both_dst_changes_in_utc() {
 
 #[test]
 fn column_ladder_and_unicode_fitting_stay_inside_the_cell_budget() {
-    let has = |w, col| columns(w).iter().any(|(c, _)| *c == col);
+    let has = |w, col| columns(w, 48).iter().any(|(c, _)| *c == col);
     assert!(has(106, Col::Notes));
     assert!(!has(56, Col::Notes));
     assert!(has(56, Col::Tier));
@@ -209,7 +209,7 @@ fn column_ladder_and_unicode_fitting_stay_inside_the_cell_budget() {
     assert!(has(44, Col::Date));
     assert!(!has(36, Col::Date));
     for width in 0..180 {
-        assert!(columns(width).iter().map(|(_, w)| *w).sum::<u16>() <= width);
+        assert!(columns(width, 48).iter().map(|(_, w)| *w).sum::<u16>() <= width);
         assert!(Span::raw(fit("日本語 earnings report", width)).width() <= width as usize);
     }
     assert_eq!(fmt_reference_period("2026-Q2"), "Q2 2026");

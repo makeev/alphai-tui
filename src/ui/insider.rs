@@ -10,10 +10,7 @@ use crate::app::{App, FeedKind};
 use crate::keymap::Action;
 use crate::theme::Theme;
 use crate::ui::insider_chart;
-use crate::ui::news::{
-    feed_bottom_hint, is_fresh, render_detail, render_gate, score_cell, sentiment_cell, title_cell,
-    title_width,
-};
+use crate::ui::news::{feed_bottom_hint, is_fresh, render_gate, title_cell, title_width};
 use crate::ui::{Hint, View, ViewId};
 
 pub struct InsiderView;
@@ -148,22 +145,21 @@ impl View for InsiderView {
 
         let now = Utc::now();
         let widths = [
-            Constraint::Length(4),
-            Constraint::Length(2),
-            Constraint::Length(2),
-            Constraint::Length(1),
-            Constraint::Length(1), // 10b5-1 plan marker
+            Constraint::Length(7), // transaction date, when the filing supplies it
+            Constraint::Length(5), // trade side, not AI sentiment
             Constraint::Length(8), // trade value
-            Constraint::Min(20),
+            Constraint::Min(6),    // reporting owner, or the legacy headline
+            Constraint::Length(4), // 10b5-1 plan
         ];
         let title_w = title_width(&widths, list_area.width, true);
         let rows: Vec<Row> = bundle
             .articles
             .iter()
-            .map(|a| filing_row(a, &symbol, now, &theme, app.is_unseen(&key, a), title_w))
+            .map(|a| filing_row(a, now, &theme, app.is_unseen(&key, a), title_w))
             .collect();
         let table = Table::new(rows, widths)
             .block(block)
+            .header(Row::new(["Date", "Side", "Value", "Insider", "Plan"]).style(theme.subtle()))
             .row_highlight_style(theme.selected())
             .highlight_symbol("▶ ");
         app.news_selected = app.news_selected.min(bundle.articles.len() - 1);
@@ -172,7 +168,7 @@ impl View for InsiderView {
 
         // The chart bundle knows more about the selected filing than the
         // feed row does (stake moved, tranches, late flag): join by uid and
-        // hand it to the detail pane's meta line.
+        // hand it to the card's structured facts.
         let extra = bundle
             .articles
             .get(app.news_selected)
@@ -194,7 +190,17 @@ impl View for InsiderView {
             );
             app.card_scroll = scroll;
         } else if detail.height > 0 {
-            render_detail(f, detail, selected, &symbol, extra, &theme);
+            crate::ui::article::render_pane_with(
+                f,
+                detail,
+                selected,
+                &symbol,
+                None,
+                extra,
+                "· ⏎ open · v card ",
+                &mut 0,
+                &theme,
+            );
         }
     }
 }
@@ -205,7 +211,10 @@ const CARD_COLUMN_MIN_WIDTH: u16 = 90;
 /// Detail-pane extras for one filing, joined from the chart bundle by the
 /// article uid: the stake share it moved, the tranche count of the folded
 /// group, and the late-filing flag. None when nothing extra is known.
-fn event_extra(trades: Option<&InsiderTrades>, uid: &str) -> Option<String> {
+pub(crate) fn event_extra(trades: Option<&InsiderTrades>, uid: &str) -> Option<String> {
+    if uid.is_empty() {
+        return None;
+    }
     let e = trades?
         .chart_events
         .iter()
@@ -227,69 +236,73 @@ fn event_extra(trades: Option<&InsiderTrades>, uid: &str) -> Option<String> {
     (!parts.is_empty()).then(|| parts.join(" · "))
 }
 
-/// One Form 4 filing as a row: age, score, buy/sell glyph, direct/indirect
-/// marker, a 10b5-1 plan flag, the trade value, title colored by trade side
-/// when known.
+/// One Form 4 filing as a ledger row. Only the side carries direction
+/// color; the owner's name and the trade value stay neutral.
 fn filing_row(
     a: &Article,
-    symbol: &str,
     now: chrono::DateTime<Utc>,
     theme: &Theme,
     unseen: bool,
     title_w: usize,
 ) -> Row<'static> {
-    let side = filing_side(a, symbol);
-    let title_style = match side.as_deref() {
-        Some("positive") => Style::new().fg(theme.pos),
-        Some("negative") => Style::new().fg(theme.neg),
+    let side = filing_side(a);
+    let side_style = match side {
+        "BUY" => Style::new().fg(theme.pos),
+        "SELL" => Style::new().fg(theme.neg),
         _ => Style::new(),
     };
-    // Same freshness accent as the news rows: a just-filed Form 4 stands out.
-    let age = if is_fresh(a, now) {
-        Cell::from(a.age(now)).style(Style::new().fg(theme.accent))
+    let date = a
+        .insider
+        .as_ref()
+        .and_then(|t| t.transaction_date.as_deref())
+        .and_then(|d| chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d").ok())
+        .map(|d| d.format("%d %b").to_string())
+        .unwrap_or_else(|| "?".to_string());
+    let date = if is_fresh(a, now) {
+        Cell::from(date).style(Style::new().fg(theme.accent))
     } else {
-        Cell::from(a.age(now)).style(theme.subtle())
+        Cell::from(date).style(theme.subtle())
     };
     let plan = match &a.insider {
-        Some(t) if t.is_10b5_1 => Cell::from("p").style(theme.subtle()),
+        Some(t) if t.is_10b5_1 => Cell::from("plan").style(theme.subtle()),
         _ => Cell::from(" "),
     };
     let value = a
         .insider
         .as_ref()
         .and_then(|t| t.total_value_usd.as_deref())
-        .map(|v| Cell::from(format!("{:>8}", fmt_usd(v))).style(theme.subtle()))
+        .map(|v| Cell::from(format!("{:>8}", fmt_usd(v))))
         .unwrap_or_else(|| Cell::from(" "));
+    let name = a
+        .insider
+        .as_ref()
+        .map(|t| t.insider_name.as_str())
+        .filter(|name| !name.is_empty())
+        .unwrap_or(&a.original.title);
     Row::new(vec![
-        age,
-        score_cell(a.score(), theme),
-        sentiment_cell(side.as_deref(), theme),
-        ownership_cell(a.original.ownership_form.as_deref(), theme),
-        plan,
+        date,
+        Cell::from(side).style(side_style),
         value,
-        title_cell(
-            a.original.title.clone(),
-            title_style,
-            unseen,
-            theme,
-            title_w,
-        ),
+        title_cell(name.to_string(), Style::new(), unseen, theme, title_w),
+        plan,
     ])
 }
 
 /// Trade side of a filing row. The API's structured `insider.side` is
-/// authoritative when present: "buy"/"sell" color the row, "other" (grants,
+/// authoritative when present: "buy"/"sell" color the side, "other" (grants,
 /// code D sales back to the issuer, ...) deliberately stays neutral rather
 /// than falling back to keyword guessing. Legacy rows without the block keep
-/// the old chain: title template first, then the AI sentiment call (which
-/// can rate a routine sale as neutral).
-fn filing_side(a: &Article, symbol: &str) -> Option<String> {
+/// the deterministic title template. AI sentiment never invents a trade.
+fn filing_side(a: &Article) -> &'static str {
     match a.insider.as_ref().and_then(|t| t.side.as_deref()) {
-        Some("buy") => Some("positive".to_string()),
-        Some("sell") => Some("negative".to_string()),
-        Some(_) => Some("neutral".to_string()),
-        None => side_from_title(&a.original.title)
-            .or_else(|| a.sentiment_for(symbol).map(str::to_string)),
+        Some("buy") => "BUY",
+        Some("sell") => "SELL",
+        Some(_) => "OTHER",
+        None => match side_from_title(&a.original.title).as_deref() {
+            Some("positive") => "BUY",
+            Some("negative") => "SELL",
+            _ => "?",
+        },
     }
 }
 
@@ -308,15 +321,6 @@ fn side_from_title(title: &str) -> Option<String> {
         Some("positive".to_string())
     } else {
         None
-    }
-}
-
-/// Which holding pool the filing touched: dim "D" (direct) / "I" (indirect).
-fn ownership_cell(form: Option<&str>, theme: &Theme) -> Cell<'static> {
-    match form {
-        Some("direct") => Cell::from("D").style(theme.subtle()),
-        Some("indirect") => Cell::from("I").style(theme.subtle()),
-        _ => Cell::from(" "),
     }
 }
 
