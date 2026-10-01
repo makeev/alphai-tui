@@ -26,6 +26,9 @@ pub trait DataSource: Send + Sync {
     fn name(&self) -> &'static str;
 
     /// Latest quote plus recent candles for one symbol.
+    // async_trait adds #[must_use] to this method; Clippy 1.99 also treats
+    // the generated pinned Future as must-use, so it flags the macro output.
+    #[allow(clippy::double_must_use)]
     async fn fetch(
         &self,
         symbol: &str,
