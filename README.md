@@ -4,43 +4,387 @@
 [![crates.io](https://img.shields.io/crates/v/alphai-tui.svg)](https://crates.io/crates/alphai-tui)
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/makeev/alphai-tui/blob/main/LICENSE)
 
-A terminal stock dashboard with live quotes, charts, AI-scored news, SEC
-insider filings, earnings reads and a watchlist calendar. One Rust binary
-built on [ratatui](https://ratatui.rs). Prices work without an account;
-news and filings use a free [AlphAI key](https://alphai.io?utm_source=alphai-tui&utm_medium=referral).
+An open-source, Bloomberg-style stock dashboard for the terminal that also
+answers why the price moved. Live quotes and candlestick charts on one side;
+on the other, for the same ticker, AI-scored news with a full analysis of
+each story, the SEC Form 4 insider filings and a structured read of the last
+earnings report. A watchlist calendar brings upcoming company reports and
+US macro releases into the same workspace. One Rust binary built on
+[ratatui](https://ratatui.rs), no browser tab, and no account needed for the
+prices. Coming from tickrs or ticker? See [how it compares](#how-it-compares).
 
-![alphai-tui: quotes, charts, news analysis, insider filings and earnings](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/demo.gif)
+![alphai-tui demo: the split dashboard with the quote rail, the news view with the chart over the list and the full AI analysis card beside it, the story read in place under the chart, the market-wide scope, a year of SEC Form 4 insider filings, the earnings read, the summary grid and the candlestick chart with moving averages, volume and RSI](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/demo.gif)
 
-[Install](#install) · [Quick start](#quick-start) · [Screens](#the-screens) ·
-[Keys](#keys) · [Sources](#data-sources) · [Configuration](#configuration)
+```sh
+brew install makeev/tap/alphai-tui   # also cargo, apt, AUR, x-cmd, or a prebuilt binary
+alphai-tui NVDA AVGO AAPL MSFT META TSLA AMZN GOOGL BTC-USD
+```
+
+Quotes and charts run keyless on Yahoo, or on Finnhub, Alpaca or Tiingo
+with their own keys. The News, Insider, Earnings and Calendar views run on a free
+[AlphAI](https://alphai.io?utm_source=alphai-tui&utm_medium=referral) key
+that you paste once in the settings screen. The first run walks you through
+both, and after that a bare `alphai-tui` reopens your watchlist.
+
+## The screens
+
+Nine views, one keystroke apart (`1` to `9`, or Tab). Some follow the
+selected ticker; Summary, Portfolio and Calendar cover several names.
+One line under the tabs carries the selected ticker's price into all of them.
+The screenshots use the `dracula` preset.
+
+### The quote rail, in every view
+
+![alphai-tui quote rail: symbol and price, the day's change, what the holding in that ticker has made, the session badge with a countdown to the opening bell, the day range with the price marked in it, a sparkline and the rest of the watchlist](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/rail.png)
+
+Price, the change on the day, the extended-hours print measured against the
+regular close, what you are up or down on the ticker if you hold any of it,
+what the US market is doing right now (pre, live, post or closed) and how
+long until the next bell, whether the feed is delayed, where the price sits
+between the day's low and high, and, where the source reports them and the
+terminal is wide enough, the year's range and the day's volume. The rest of
+the watchlist follows as percentages.
+
+The main price is labelled `quote`, with its currency. When the provider
+supplies a trade timestamp and feed, those appear beside the quote before
+optional holdings and session details. This is the time of the trade, not
+the last refresh. The header keeps navigation and connection status.
+
+A flag shows the next high-importance macro event within seven days, or a
+confirmed report date for the selected ticker within seven ET calendar
+days. The ticker's report takes priority. It uses fresh cached dates only;
+the flag never fetches a company's report dates itself. Estimated macro
+dates keep an `est.` label, and postponed or cancelled events do not flag.
+
+So the News, Insider and Earnings views are never a ticker name with no
+price attached, and moving between tickers with the arrow keys is not a
+blind jump. Parts drop one at a time as the terminal narrows, the symbol and
+the price surviving to the last; `[ui] quote_rail = false` turns the line
+off, and a terminal under 12 rows gives the row back to the view.
+
+### 1 Split: the default view
+
+![alphai-tui split view: a full-width candlestick chart with moving averages, news marks and shaded pre-market and after-hours sessions on top, the watchlist and the scored news feed side by side underneath](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/split.png)
+
+The chart across the top half, the watchlist and the news feed side by
+side in the bottom half. One screen that says what you follow, what it is
+doing and what is being said about it; the chart gets the full width, so
+it shows twice the candles a half-width one could. On very small terminals
+the feed steps aside and the watchlist and the chart share the row.
+
+`a` adds a ticker without leaving the app (type the symbol, Enter), `d`
+drops the selected one. Both write the watchlist to the config straight
+away, the way a holding is saved. A session started on tickers from the
+command line (`alphai-tui TSLA`) leaves a saved watchlist alone and says
+so in the footer; Save in the settings screen keeps such a list on purpose.
+
+### 2 News: the story and what it means
+
+![alphai-tui news view: the ticker's chart over the article list with the selected story marked on it, and the full AI analysis card on the right with sentiment, price impact, trading value and context](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/news.png)
+
+Every article carries a per-ticker analysis: the expected price impact and
+the confidence behind it, relevance and novelty scores, how actionable it
+is, the background context, the entities involved and a contrarian view. A
+seven-day bullish/bearish rollup tops the ticker scope.
+
+The card starts with the selected ticker's AI impact and explanation,
+followed by the general summary and other companies. The selected ticker
+keeps its place even when it appears later in the provider's analysis.
+
+The feed shows articles scoring 7 and up by default. `+` and `-` move that
+bar live, the server does the filtering, so nothing you filtered out eats a
+slot on the page. Articles fresher than 15 minutes light up their age, and
+rows that arrived since you last looked carry a `●` that goes out once the
+cursor rests on them. New arrivals are placed at the top of the list even
+when the rows below them are newer: a story reaches the feed a while after
+it was published, and at its publish position it would land below the fold
+and never be seen.
+
+The ticker's chart sits over the list and the card beside them. The article
+you are reading is the highlighted mark on the chart and the chart's bottom
+line names it, so the story and the move it came with are on one screen.
+That needs a terminal at least 120 columns wide and the ticker scope;
+elsewhere the list and the card stand side by side. `x` cycles to list over
+card and to list beside card without the chart, and the News layout row in
+the settings screen saves the choice. `v` opens the article for reading:
+under the chart in that layout, over the whole screen in the others.
+`Enter` opens the article in the browser, and down on the last row loads
+the next page.
+
+![alphai-tui news view in the market-wide scope: filings marked 8-K and 6-K, insider rows, reprints collapsed with an outlet count, and an earnings read available for the selected filing](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/market.png)
+
+`f` cycles the scope: the selected ticker, the whole market, or the 48-hour
+trending top ten. The market-wide feed collapses syndicated reprints into
+one row and says how many outlets carry the story (`×4`), marks an earnings
+filing as `8-K` or `6-K` rather than as coverage of one, and mixes in the
+insider rows.
+
+### 3 Table: the watchlist, full width
+
+The watchlist alone, full width: price, change in dollars and percent, the
+extended-hours change, the day's range and a sparkline of the session. The
+extended column appears only when some row actually has a print outside the
+session, so it costs no width during the trading day.
+
+### 4 Chart: candles, averages, volume, RSI
+
+![alphai-tui chart view: NVDA 15-minute candles across the pre-market, regular and after-hours sessions, each shaded apart, with SMA20 and SMA100, news marks, matching volume bars and RSI underneath](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/chart.png)
+
+Candlesticks at half-block resolution with a previous-close reference line,
+20 and 100 period moving average overlays threaded through them as thin
+braille lines, a volume panel whose bars sit in their candles' own columns
+and take their color, and an RSI(14) panel. `c` switches to a Braille line
+chart, `m`, `i` and `b` toggle the overlays and the panels, `e` averages
+simple or exponential, `t` cycles interval presets, and `E` draws the pre
+and post market candles too (Yahoo, Alpaca and Tiingo), enabled by default. The
+chart title keeps the switch beside the source: `EXT: Yahoo (Shift+E: off)`
+or `EXT: off (Shift+E: on)` when hidden. The hint follows custom keybindings.
+Where there is nothing to draw, `E` says why in the footer: daily candles,
+crypto that trades around the clock, a listing outside the US, or Finnhub,
+which has no candle history (its chart title reads `EXT: n/a`).
+Charts start with five days of `15m` candles; set the top-level `range` and
+`interval` in the config to choose another window or size. The chart title
+shows both values, `5d / 15m`, because `t` and `T` cycle forward and
+backward through presets that change the window as well as the candle size.
+The `Last bar` line shows the newest candle's close, feed and start time.
+The price marker is labelled `quote`, `PRE`, `AH` or `bar` to distinguish
+a trade from a candle close. With the quote rail hidden, the chart title
+also carries the quote, currency and daily change.
+
+The ticker's news is marked on the candles it was published in: `▲` and
+`▼` for the AI sentiment call, `◆` when it is neutral, brighter for a
+higher relevance score, and the freshest of them named on the bottom
+border. So the move and its reason share a column instead of living in
+different views. `n` turns the marks off. They are drawn from the news the
+app already holds for that ticker, which the Split and News views keep
+fresh, so they never cost an API request and they are simply absent until
+one of those views has loaded that ticker's feed.
+
+The client fetches extra history for indicator warm-up. Pre-market has a
+quiet warm background, after-hours a cool one, and regular trading keeps
+the terminal background. Price, volume and RSI share the same session
+columns and vertical grid in both candle and line mode. Aggregation never
+combines different sessions or feeds into one candle. These session rules
+apply to US stocks on intraday intervals, including scheduled 13:00 closes
+and 17:00 after-hours closes on half days; crypto remains 24/7.
+
+A bar is its interval at every width. When the plot is too narrow for
+every bar of the window, the newest bars that fit are drawn and the title
+counts the rest: `last 70 of 192 bars`. Bars are never merged into larger
+candles, so the half-width chart in the split view draws the same bars as
+the chart view, fewer of them, and the price axis follows the bars on
+screen. To see more of the window, widen the terminal or pick a coarser
+interval with `t`.
+
+The time axis adapts its label spacing to the terminal width, gives the
+opening and closing bells priority, and puts dates on a second row. US
+stocks use New York time (`ET`) by default; `[chart] timezone = "local"`
+or `"utc"` changes the labels. Other instruments use local time under the
+`"exchange"` default. Future labels in the right margin skip closed US
+sessions, weekends and holidays, including daylight-saving changes.
+`session_shading = false` and `time_grid = false` disable those layers.
+
+The right margin carries the latest relevant price. A timestamped quote
+only updates a candle from the same source, interval and session: the
+regular close cannot overwrite a pre-market candle, and an IEX quote cannot
+rewrite a delayed SIP bar. Extended quotes at 0% still appear. The rail
+shows their source, timestamp and age; a new premarket retires the previous
+after-hours quote even if the first new trade has not arrived yet.
+
+### 5 Insider: what the people inside the company did
+
+![alphai-tui insider view: a year of Broadcom Form 4 events as a log-scale scatter over weekly dollar bars, the filing stream underneath and the selected filing's full card beside it](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/insider.png)
+
+SEC Form 4 activity for the selected ticker: what its own officers and
+directors did with their shares. A 12-month rollup (buys against
+sells, dollar volumes, the share done under pre-arranged 10b5-1 plans, the
+most active insiders) sits above a trades chart and the stream of filings.
+
+The filing list is a ledger: transaction date, side, value, reporting owner
+and a `plan` flag for 10b5-1 trades. Unknown transaction dates show `?`;
+legacy rows keep their headline when the owner's name is unavailable.
+Only the side uses buy/sell color. The card leads with the company and
+owner, side and value, plan, stake change and tranche count, followed by
+trade details and the separately labelled AI impact.
+
+Every event in the window is a triangle placed by date on a log dollar
+scale (`▲` buy, `▼` sale, a hollow `▽` for shares sold back to the issuer,
+dimmed when the trade ran under a plan), with weekly buy and sell dollar
+bars underneath. The mark of the filing selected in the list renders
+inverted, so the list and the chart always point at each other. Beside the
+list, the selected filing's full card: the trade with shares, price and
+code, who made it, the AI read, and what share of the insider's stake the
+event moved, how many tranches the filing folded into it and whether it was
+filed late. `v` hides the card for a full-width list and brings it back.
+`g` cycles the window between 3 months, 12 months and off; `+` and `-`
+filter the stream by trade size.
+
+### 6 Earnings: the filing, read
+
+![alphai-tui earnings view: NVIDIA's second quarter fiscal 2027 read with the verdict, the summary and a metric table carrying the prior quarter, the prior year and both changes](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/earnings.png)
+
+AlphAI's structured read of the ticker's own earnings filing, the way the
+company reported it: the verdict and why, the metric table with the prior
+quarter, the prior year and both changes, segments, the outlook, concerns,
+what to watch and several paragraphs of analysis. Every figure was checked
+against the filing text before it was published, and it prints exactly as
+the filing wrote it, units shortened and nothing rounded into a new number.
+American and foreign filings both (an 8-K item 2.02, or a foreign private
+issuer's 6-K with its half years and its own currency).
+
+`←` `→` walk the watchlist, older quarters continue below the newest read.
+When a company has not reported since AlphAI began reading filings, the
+view says so and gives the date of its next report if the company has
+confirmed one. The bottom line carries the next couple of US macro releases
+(CPI, the jobs report, an FOMC decision), which is the other half of what
+moves a price you are about to read about.
+
+### 7 Summary: the whole watchlist at once
+
+![alphai-tui summary view: nine watchlist tickers as small charts in a three by three grid, each card with its price and the day's change](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/summary.png)
+
+Every ticker you follow as its own chart, in a grid sized to the terminal.
+The table's one-row sparkline says up or down; this spends real rows on each
+name, so one glance covers the shape of the session across the whole list.
+`↑` `↓` move between cards and page the grid when the watchlist outgrows the
+screen.
+
+### 8 Portfolio: what you hold and what it did
+
+![alphai-tui portfolio view: three holdings with quantity, average price, last price, value, the day's move in money, profit and loss with its percentage and the share of the portfolio, and a total row underneath](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/portfolio.png)
+
+What the watchlist cannot answer: the price times what you own of it. One
+row per holding with its quantity, average price, value, the day's move in
+money, the profit or loss since you bought and the share of the portfolio
+it carries, and a total underneath. `p` opens a one-line prompt on the
+ticker under the cursor, prefilled with what is held, so a correction is
+two keystrokes and an emptied line drops the holding; the quantity and the
+price are written to the config file right away rather than waiting for
+Save. A holding that is not on the watchlist is polled all the same, so
+every row has a price, and a row still waiting for its first one says so
+instead of counting as zero. The same numbers turn up as two extra columns
+in the Table view and as a zone in the quote rail, but only for the
+tickers you actually hold.
+
+Holdings use the premarket or after-hours price when the source reports
+one, falling back to the regular quote otherwise. This applies to `Last`,
+value, P&L, totals and the holding figures in the table and quote rail,
+independently of the `E` candle toggle. An extended `Last` carries a `*`.
+During premarket, `Day` starts at the latest regular close; after hours,
+it includes both the regular session and the extended move.
+
+There is no currency conversion here and there is not going to be one: if
+the holdings quote in more than one currency, the total says `mixed
+currencies` rather than pretending the sum means something.
+
+### 9 Calendar: what is scheduled
+
+![alphai-tui calendar: US macro releases and confirmed watchlist report dates in one agenda, with importance, countdowns, source details and report-date coverage](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/calendar.png)
+
+US macro releases and confirmed report dates from your watchlist in one
+agenda: the past seven days and the next 45 days. The cursor starts at the
+first upcoming event, a `now` line separates it from the past, and new
+arrivals keep the event you selected in place. High-importance releases
+and company reports stand out; `estimated`, `postponed` and `cancelled`
+remain explicit even when the terminal is too narrow for the Details column.
+Event names use up to 48 columns when needed, while shorter names leave
+more space for Details. Color highlights the event and its importance;
+dates and source details keep a quieter style.
+
+`↑` / `↓` select an event, `PgUp` / `PgDn` move ten events, and `Enter`
+opens a macro event's source or the company's Earnings view. That view
+contains published reads, so it may show the previous quarter until a new
+read is available. Calendar is an agenda, not confirmation that a release
+has been published; it has no actual, forecast or previous macro figures.
+
+Macro times follow `[chart] timezone` (ET by default). Company report dates
+stay in ET in every timezone and show `—` for time: the API confirms the
+day, not the hour. A company without a confirmed date simply has no report
+row; this does not mean it will not report. Coverage is partial. Historical
+company dates are limited to the next-report dates still in the cache.
+
+Dates are checked one company at a time while Calendar is open, at least
+four seconds apart. The progress line distinguishes unconfirmed dates,
+unchecked names and failed checks. A failed macro update keeps the last
+successful rows, marked as cached, alongside any available company dates.
+
+`r` refreshes the macro window and resumes missing, stale or failed report
+date checks. It keeps fresh successful company dates, so it is not a full
+watchlist refresh. To recheck one fresh company date, open its Earnings
+view and press `r` there. An access or rate-limit error pauses the date
+sweep until a manual retry, rather than repeating it for every company.
+
+### Everywhere: help, settings, themes
+
+![alphai-tui help overlay: the full key table with the config name of every action next to it, drawn over the summary grid](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/help.png)
+
+`?` lists every action with the keys currently bound to it and the name to
+use in the config to rebind it. `s` opens the settings, grouped into
+prices (the source, where pre and after hours come from, the poll
+interval), API keys, news and look. Each key row says what the current
+choices use it for, and the bottom of the box explains the row under the
+cursor: what it covers, what each choice means and what it costs. Save
+writes all of it, plus the watchlist on screen, to the config file. `}` and `{` walk the color presets live, `z` hides the header
+and the footer for a tmux pane that carries its own status bar, and `r`
+refreshes prices and the visible data.
+
+## How it compares
+
+There are good terminal stock tools already. The two you are most likely
+to be choosing between are [tickrs](https://github.com/tarkah/tickrs),
+which is the closest in shape (Rust, ratatui, charts per ticker), and
+[ticker](https://github.com/achannarasappa/ticker), which is the most
+widely used and is built around tracking what you own.
+
+The short version: both are built around the price. This one puts the
+filings and the scored news next to it, and pays for that with no options
+chain and a simpler idea of a position.
+
+| | alphai-tui | tickrs | ticker |
+|---|---|---|---|
+| Price charts | candles, line, SMA/EMA, RSI, volume | line, candle, kagi, volume | none |
+| Whole watchlist at once | summary grid, table with sparklines | summary pane | quote table |
+| News with per-article analysis | yes, and marked on the price chart | no | no |
+| SEC Form 4 insider activity | chart and filing stream | no | no |
+| Earnings filing reads | yes | no | no |
+| Extended hours | price and candles | candles | price |
+| Options chain | no | yes | no |
+| Positions and P&L | quantity and average price, in a view of its own | quantity and average price | cost-basis lots, groups, currencies |
+| Export for scripts | `--once` text, `--json` | no | CSV and JSON |
+| Price sources | Yahoo, Finnhub, Alpaca, Tiingo | Yahoo | Yahoo, Coinbase |
+| A source that stops answering | cached start, automatic switch | no | no |
+| Add or remove a ticker in the app | yes | yes | no |
+| Rebindable keys | any action, in the config | vim keys | no |
+
+**What they do better.** tickrs has an options chain with calls and puts
+by expiry, which this has nothing to answer with, and a kagi chart if that
+is how you read price. ticker still has the most complete position
+tracking of the three: several cost-basis lots per holding, named groups
+and currency conversion, where this one keeps a single average price per
+ticker and sums in whatever currency the quotes come back in. If you track
+lots across currencies, ticker is the one to reach for.
+
+**One thing worth knowing.** Yahoo rate-limits by IP, and every tool here
+depends on it, this one included. Four price sources is the hedge: if
+Yahoo starts refusing, `s` switches to Finnhub, Alpaca or Tiingo without
+leaving the app.
 
 ## Install
 
-Choose a package manager:
+Homebrew (macOS and Linux):
 
 ```sh
-brew install makeev/tap/alphai-tui   # macOS / Linux
-paru -S alphai-tui-bin              # Arch Linux (AUR)
-cargo install alphai-tui            # Rust 1.85+
+brew install makeev/tap/alphai-tui
 ```
 
-Prebuilt binaries for macOS, Linux and Windows:
+Arch Linux, from the AUR:
 
 ```sh
-curl -LsSf https://github.com/makeev/alphai-tui/releases/latest/download/alphai-tui-installer.sh | sh
+paru -S alphai-tui-bin
 ```
 
-```powershell
-powershell -ExecutionPolicy Bypass -c "irm https://github.com/makeev/alphai-tui/releases/latest/download/alphai-tui-installer.ps1 | iex"
-```
-
-Archives and checksums are on the [releases page](https://github.com/makeev/alphai-tui/releases).
-[x-cmd](https://www.x-cmd.com/install/alphai-tui/) also supports `x install alphai-tui`.
-
-<details>
-<summary>Debian / Ubuntu and building from source</summary>
-
-The apt repository supports amd64 and arm64 on Ubuntu 22.04 / Debian 12 or newer:
+Debian and Ubuntu, from the apt repository (amd64 and arm64, Ubuntu 22.04 and
+Debian 12 or newer):
 
 ```sh
 sudo install -d -m 0755 /etc/apt/keyrings
@@ -51,8 +395,43 @@ echo "deb [signed-by=/etc/apt/keyrings/alphai-tui.gpg] https://makeev.github.io/
 sudo apt update && sudo apt install alphai-tui
 ```
 
-Standalone `.deb` files: [apt repository](https://makeev.github.io/alphai-tui-apt/).
-To install the latest source, use `cargo install --git https://github.com/makeev/alphai-tui`, or run a clone:
+Single `.deb` files, for an install without the repository, are linked from
+[the repository landing page](https://makeev.github.io/alphai-tui-apt/).
+
+Through [x-cmd](https://www.x-cmd.com/install/alphai-tui/), which picks
+whichever of the methods above your system already has:
+
+```sh
+x install alphai-tui
+```
+
+Prebuilt binaries for macOS, Linux and Windows, no Rust needed:
+
+```sh
+curl -LsSf https://github.com/makeev/alphai-tui/releases/latest/download/alphai-tui-installer.sh | sh
+```
+
+```powershell
+# Windows
+powershell -ExecutionPolicy Bypass -c "irm https://github.com/makeev/alphai-tui/releases/latest/download/alphai-tui-installer.ps1 | iex"
+```
+
+Archives for every platform, with checksums, live on the
+[releases page](https://github.com/makeev/alphai-tui/releases).
+
+With a Rust toolchain (1.85+):
+
+```sh
+cargo install alphai-tui
+```
+
+Or straight from the repository:
+
+```sh
+cargo install --git https://github.com/makeev/alphai-tui
+```
+
+Or from a clone:
 
 ```sh
 git clone https://github.com/makeev/alphai-tui
@@ -60,252 +439,22 @@ cd alphai-tui
 cargo run --release -- AAPL MSFT NVDA BTC-USD
 ```
 
-</details>
-
 ## Quick start
 
 ```sh
 alphai-tui NVDA AVGO AAPL MSFT META TSLA AMZN GOOGL BTC-USD
 ```
 
-First run opens settings: choose a price source and optionally paste an
-AlphAI key from [Account > API keys](https://alphai.io?utm_source=alphai-tui&utm_medium=referral).
-Save keeps your settings and watchlist; next time, run `alphai-tui` alone.
-Yahoo needs no key. Finnhub, Alpaca and Tiingo use their own keys.
-
-Press `1`–`9` to switch views, `a` / `d` to add / remove tickers, `s` for
-settings and `?` for help. `p` saves a holding as `qty avg_price`; an empty
-line clears it. Watchlist edits save immediately unless you supplied
-command-line tickers; use Save in settings to keep those explicitly.
+The first run opens the settings screen: pick a price source and paste your
+AlphAI key (get one free at [alphai.io](https://alphai.io?utm_source=alphai-tui&utm_medium=referral), Account >
+API keys). Leave it empty if you only want quotes and charts. Your watchlist
+and options persist in the config file, so next time plain `alphai-tui` works.
 
 ```sh
-alphai-tui --once AAPL      # quotes to stdout
-alphai-tui --json AAPL      # JSON for scripts or a status bar
-alphai-tui -s finnhub NVDA  # another price source for this run
+alphai-tui --once AAPL      # print quotes to stdout and exit (for scripts)
+alphai-tui --json AAPL      # the same run as JSON, for a status bar
+alphai-tui -s finnhub NVDA  # explicit source for one run
 ```
-
-## The screens
-
-| Key | View | Contents |
-|-----|------|----------|
-| `1` | Split | Full-width chart above the watchlist and news |
-| `2` | News | Scored stories, per-company AI analysis and the related price move |
-| `3` | Table | Watchlist quotes, day ranges, extended hours and sparklines |
-| `4` | Chart | Candles or line, SMA/EMA, volume, RSI and news markers |
-| `5` | Insider | SEC Form 4 trades, buy/sell rollup and filing cards |
-| `6` | Earnings | Filing verdict, metrics, comparisons, outlook and analysis |
-| `7` | Summary | A chart for every watchlist ticker |
-| `8` | Portfolio | Holdings, value, daily change and P&L |
-| `9` | Calendar | US macro releases and confirmed watchlist report dates |
-
-The quote rail follows the selected ticker across views. It labels the
-quote, currency, feed and trade time separately from the chart's last bar.
-Settings, help, themes and refresh are available everywhere. Screenshots
-below use `dracula`; the default theme follows your terminal.
-
-<details>
-<summary>View details and screenshots</summary>
-
-### The quote rail, in every view
-
-![Quote rail with trade time, session status, holding and watchlist](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/rail.png)
-
-The rail shows price, daily and extended change, feed delay, session and
-next bell, holding P&L, day range, sparkline and other watchlist changes.
-Year range and volume appear when available. Optional fields drop as the
-terminal narrows; symbol and price remain. Disable it with
-`[ui] quote_rail = false`; it hides automatically below 12 rows.
-
-An event flag uses fresh cached dates: a confirmed ticker report within
-seven ET calendar days, otherwise a high-importance macro event within
-seven days. Estimated macro dates say `est.`; postponed and cancelled
-events never flag. The rail does not fetch company dates itself.
-
-### 1 Split: the default view
-
-![Split: chart above watchlist and news](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/split.png)
-
-The chart gets the full width above the watchlist and feed. On very small
-terminals the feed hides, leaving the watchlist beside the chart.
-
-### 2 News: the story and what it means
-
-![News: chart and article list beside the analysis card](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/news.png)
-
-Cards lead with the selected company's AI price impact and explanation,
-then the summary and other companies. Analysis includes confidence,
-relevance, novelty, actionability, context, entities and a contrarian view.
-Ticker scope adds a seven-day bullish/bearish rollup.
-
-News starts at relevance 7; `+` / `-` change the server-side filter. Ages
-under 15 minutes stand out; `●` marks arrivals until selected. New arrivals
-go to the top, including stories published earlier but processed later.
-Down on the last row loads another page.
-
-At 120+ columns in ticker scope, the chart sits above the list beside the
-card; the selected story is highlighted on the chart. Otherwise, list and
-card sit side by side. `x` cycles chart, stacked and side layouts; settings
-can save the choice. `v` reads the article under the chart in chart layout
-or fullscreen elsewhere. `Enter` opens it in the browser.
-
-![Market news with filings and collapsed reprints](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/market.png)
-
-`f` cycles ticker, market and the 48-hour trending top ten. Market scope
-collapses reprints (`×4` outlets), labels earnings filings `8-K` / `6-K`
-and includes insider activity.
-
-### 3 Table: the watchlist, full width
-
-Price, daily change, day range and session sparkline for each ticker, plus
-holding figures where applicable. The extended-hours column appears only
-when at least one ticker has an extended print.
-
-### 4 Chart: candles, averages, volume, RSI
-
-![Chart with moving averages, news markers, volume and RSI](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/chart.png)
-
-Half-block candles or a Braille line, previous-close reference, 20/100
-period SMA or EMA, matching volume bars and RSI(14). The title shows the
-window / interval (initially `5d / 15m`), extended feed and loading status.
-`Last bar` identifies the newest candle's close, feed and start time;
-price markers say `quote`, `PRE`, `AH` or `bar`. Hiding the rail restores
-the quote, currency and daily change in the chart title.
-
-- `t` / `T` cycle window-and-interval presets. Bars keep their interval at
-  every width: narrow plots show the newest bars and say `last N of M bars`,
-  with the price axis fitted to them. Widen the terminal or choose a
-  coarser interval to see more; bars are never merged just to fit.
-- `E` toggles extended candles, initially on, without hiding extended
-  quotes. The title names the feed and toggle key; the footer explains
-  unavailable cases: daily charts, crypto, non-US listings or Finnhub.
-- `n` toggles cached news marks: `▲` bullish, `▼` bearish, `◆` neutral,
-  brighter for higher relevance. The border names the selected or freshest
-  story. Marks cost no requests and appear after Split or News loads that
-  ticker's feed.
-- Pre-market is warm, after-hours cool; price, volume and RSI share session
-  columns and a time grid. Indicators fetch warm-up history. Aggregation
-  never mixes sessions or feeds. US intraday sessions include half-day
-  13:00 closes and 17:00 after-hours closes; crypto trades 24/7.
-- Axes prioritize opening/closing bells and put dates on a second row.
-  `timezone = "exchange"` means ET for US stocks, local time elsewhere;
-  `local` and `utc` are alternatives. Future US labels skip closed
-  sessions, weekends and holidays, including DST. `session_shading` and
-  `time_grid` can be disabled.
-
-A timestamped quote updates only a bar of the same source, interval and
-session. A regular close cannot rewrite a pre-market bar, nor an IEX quote
-a delayed SIP bar. Extended prints appear even at 0% change; a new
-premarket retires the previous after-hours print.
-
-### 5 Insider: what the people inside the company did
-
-![Insider trades chart, ledger and selected filing](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/insider.png)
-
-A 12-month rollup covers buys, sells, dollar volumes, 10b5-1 plans and the
-most active insiders. The ledger shows transaction date, side, value,
-owner and `plan`; unknown dates stay `?`, and legacy rows without an owner
-keep their headline. Only the side carries buy/sell color.
-
-Cards lead with company, owner, trade value, plan, stake change and tranche
-count, then shares, price, code, ownership, late-filing status and the
-separately labelled AI read. Trade side follows the filing, not sentiment.
-
-The chart places events by date on a log dollar scale: `▲` buys, `▼`
-sales, hollow `▽` sales back to the issuer; planned trades are dimmed and
-the selected filing inverted. Weekly dollar bars sit below. `g` cycles
-3 months, 12 months and off; `v` toggles the card; `+` / `-` filter trade size.
-
-### 6 Earnings: the filing, read
-
-![Earnings verdict and metrics with quarter/year comparisons](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/earnings.png)
-
-The company's own 8-K item 2.02 or foreign issuer's 6-K: verdict, summary,
-metrics against prior quarter/year, segments, outlook, concerns and
-analysis. Figures are checked against the filing and retain its values,
-reporting periods and currency; only units are shortened.
-
-`←` / `→` switch tickers; older reads follow the latest. If no read exists,
-the view says so and shows the next confirmed report date, when known.
-The footer lists the next US macro releases.
-
-### 7 Summary: the whole watchlist at once
-
-![Summary chart grid](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/summary.png)
-
-One chart per ticker, sized to the terminal. `↑` / `↓` select cards and
-page through a watchlist larger than the screen.
-
-### 8 Portfolio: what you hold and what it did
-
-![Portfolio holdings and totals](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/portfolio.png)
-
-Quantity, average cost, last price, value, daily P&L, total P&L and portfolio
-weight, with totals. `p` edits and immediately saves a holding. Positions
-outside the watchlist are still polled; missing prices show as pending.
-Holdings also appear in Table and the rail.
-
-Valuation uses extended prices when available, independently of `E`; an
-extended `Last` has a `*`. Premarket `Day` starts at the latest regular
-close; after-hours `Day` includes both regular and extended moves. There
-is no currency conversion: multi-currency totals say `mixed currencies`.
-
-### 9 Calendar: what is scheduled
-
-![Calendar agenda with event status and date coverage](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/calendar.png)
-
-An agenda from seven days ago to 45 days ahead. Selection starts at the
-first upcoming event and survives updates; a `now` line separates past
-from future. Long names get up to 48 columns. Event importance carries the
-color; `estimated`, `postponed` and `cancelled` survive narrow layouts.
-
-`Enter` opens a macro source or the company's Earnings view, which may
-still show the previous quarter. This is a schedule, with no actual,
-forecast or previous macro figures. Macro times follow the chart timezone;
-company dates remain ET with no time because the API confirms only the day.
-Coverage is partial: a missing date is unconfirmed, and historical company
-rows are limited to dates still cached.
-
-While Calendar is open, company checks run at least four seconds apart.
-Progress distinguishes unconfirmed, unchecked and failed dates. Failed
-macro updates keep successful rows labelled as cached. `r` refreshes macro
-and retries missing, stale or failed company dates; fresh successful dates
-stay cached. Recheck one fresh date with `r` in its Earnings view. Access
-or rate-limit errors pause the sweep until a manual retry.
-
-### Everywhere: help, settings, themes
-
-![Help with current keys and configuration action names](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/help.png)
-
-`?` shows current keys and their config action names. `s` groups settings
-into prices, API keys, news and look, with explanations for the selected
-row; Save includes the displayed watchlist. `}` / `{` cycle themes, `z`
-hides header/footer, and `r` refreshes prices and visible data.
-
-</details>
-
-## How it compares
-
-[tickrs](https://github.com/tarkah/tickrs) emphasizes charting and options;
-[ticker](https://github.com/achannarasappa/ticker) offers richer position
-accounting. alphai-tui adds scored news and filings beside the price.
-
-| | alphai-tui | tickrs | ticker |
-|---|---|---|---|
-| Charts | candles, line, SMA/EMA, RSI, volume | line, candle, kagi, volume | none |
-| Watchlist | chart grid, table, sparklines | summary pane | quote table |
-| Analysed news / Form 4 / earnings | yes, with chart markers | no | no |
-| Extended hours | price and candles | candles | price |
-| Options chain | no | yes | no |
-| Positions | quantity and average price | quantity and average price | lots, groups, currencies |
-| Script output | text, JSON | no | CSV, JSON |
-| Sources | Yahoo, Finnhub, Alpaca, Tiingo | Yahoo | Yahoo, Coinbase |
-| Outage handling | cached start, automatic source switch | no | no |
-| Edit watchlist in app | yes | yes | no |
-| Rebind keys | any action | vim keys | no |
-
-All three use Yahoo, which can throttle by IP; alphai-tui can switch to a
-keyed source. It does not offer tickrs' options/kagi charts or ticker's
-cost-basis lots and currency conversion.
 
 ## Options
 
@@ -322,57 +471,86 @@ cost-basis lots and currency conversion.
 | `--earnings TICKER` | | Print the latest earnings read to stdout and exit (needs an AlphAI key; one request) |
 | `--config` | | Use an alternate config file (Save writes back to it) |
 
-`-r` / `-i` set the startup window; `t` / `T` cycle `[chart] presets`
-without persisting the change. CLI options override config, which overrides
-defaults. API-key environment variables override `[keys]`:
-`ALPHAI_API_KEY`, `FINNHUB_API_KEY`, `APCA_API_KEY_ID`, `APCA_API_SECRET_KEY`,
-`TIINGO_API_KEY`.
+`-r` and `-i` set the startup window; the `t` key cycles the preset
+combinations (configurable as `[chart] presets`) for the session without
+persisting them.
 
 ### Quotes as JSON
 
-`--json` emits an array in requested-symbol order, or the saved watchlist
-when no symbols are given. Source, range and interval options still apply.
-Warnings go to stderr. Missing optional fields are omitted; failed symbols
-retain a row as `{"symbol":"AAPL","error":"…"}`. The exit code stays 0
-for per-symbol failures, so check `error`.
+`--json` prints one object per symbol, in the order they were asked for, so
+a status bar or a cron job can read the numbers instead of parsing a table:
+
+```sh
+alphai-tui --json AAPL NVDA
+alphai-tui --json AAPL | jq -r '.[0] | "\(.symbol) \(.price) \(.change_pct)%"'
+```
 
 ```json
 [
   {
-    "symbol": "AAPL",
-    "price": 326.57,
-    "currency": "USD",
+    "candles": 79,
     "change": 11.23,
     "change_pct": 3.5612,
-    "prev_close": 315.34,
-    "extended": { "price": 325.5, "change": -1.07, "change_pct": -0.3276 },
+    "currency": "USD",
     "day_range": { "high": 326.68, "low": 316.57 },
-    "fifty_two_week": { "high": 344.57, "low": 226.65 },
-    "volume": 69820744.0,
-    "source": "yahoo",
+    "extended": { "change": -1.07, "change_pct": -0.3276, "price": 325.5 },
     "fetched": "2026-09-11T09:31:38Z",
-    "candles": 79
+    "fifty_two_week": { "high": 344.57, "low": 226.65 },
+    "prev_close": 315.34,
+    "price": 326.57,
+    "source": "yahoo",
+    "symbol": "AAPL",
+    "volume": 69820744.0
   }
 ]
 ```
 
-Regular change is from the previous close; `extended` change is from the
-regular session's close. Held tickers add `position`: `qty`, `avg_price`,
-`cost`, valuation `price` (including extended hours), `value`, `pnl`, plus
-`pnl_pct` and `day_pnl` when calculable.
+A ticker you hold also carries a `position` object with `qty`,
+`avg_price`, `cost`, `price` (the price used to value the holding,
+including extended trading), `value`, `pnl`, and `pnl_pct` and `day_pnl` when
+those can be worked out, so a status bar can show the money rather than
+the price:
 
 ```sh
 alphai-tui --json AAPL | jq -r '.[0].position | "\(.pnl) (\(.pnl_pct)%)"'
-alphai-tui --json | jq -r '.[] | [.symbol, .price, .change_pct] | @tsv'
-alphai-tui --json | jq -c '.[]' >> quotes.jsonl
-alphai-tui --json | jq -r '.[] | select(.error) | "\(.symbol): \(.error)"'
-alphai-tui --json NVDA | jq -e '.[0].price > 200' >/dev/null && echo 'NVDA above 200'
 ```
 
-For a status bar, save a wrapper as `~/bin/quote-bar` and make it executable:
+`symbol` and `price` are always there; the rest depends on what the source
+answers, and a figure it does not answer is left out rather than sent as
+null. `change` and `change_pct` count from the previous close, while the
+`extended` object measures its own move from the regular session's close,
+the way a broker screen does. A symbol that failed still gets a row, as
+`{"symbol": "…", "error": "…"}`, so a watchlist of four always prints four.
+Warnings go to stderr, so stdout stays a valid JSON document.
+
+Without symbols it prints the watchlist you saved in the app, and `-s`,
+`-r` and `-i` work the same as for a normal run:
+
+```sh
+alphai-tui --json                    # whatever the config file holds
+alphai-tui --json -s alpaca AAPL     # another source for this one run
+
+# a row per ticker for awk, a spreadsheet or a database
+alphai-tui --json | jq -r '.[] | [.symbol, .price, .change_pct] | @tsv'
+
+# append a snapshot to a log you can chart later; every row carries `fetched`
+alphai-tui --json | jq -c '.[]' >> quotes.jsonl
+
+# report only what broke, since the exit code is 0 either way
+alphai-tui --json | jq -r '.[] | select(.error) | "\(.symbol): \(.error)"'
+
+# watch a level from cron, printing nothing until it breaks
+alphai-tui --json NVDA | jq -e '.[0].price > 200' >/dev/null &&
+  echo 'NVDA above 200'
+```
+
+For a status bar, call a small wrapper instead of inlining the pipeline,
+because a jq filter quoted inside `tmux.conf` or an i3blocks config turns
+unreadable fast:
 
 ```sh
 #!/bin/sh
+# ~/bin/quote-bar
 alphai-tui --json AAPL NVDA |
   jq -r 'map(select(.error | not)
              | "\(.symbol) \(.price) \(.change_pct * 100 | round / 100)%")
@@ -384,10 +562,21 @@ set -g status-interval 60
 set -g status-right '#(~/bin/quote-bar)'
 ```
 
-Each run costs one request per symbol on Yahoo/Finnhub, two on Alpaca;
-Tiingo uses one or two for the list plus up to three per ticker. Allow at
-least a minute between status-bar runs on Yahoo to reduce IP throttling;
-use a keyed source for more frequent updates.
+Dropping the error rows there keeps a dead symbol from writing `null` into
+the bar, and the rounding trims `-6.1302` to the two decimals a bar has
+room for.
+
+One run costs one request per symbol (two on alpaca; on tiingo one or two
+for the whole list plus up to three per ticker), so give the loop an
+interval rather than letting the bar refresh as fast as it likes. Yahoo
+throttles by IP address and answers a burst with 429s for several minutes
+afterwards, which is long enough to lose the pane you built. A minute
+between runs is plenty for a status bar; below that, use a keyed source.
+
+CLI arguments win over the config file; the config file wins over built-in
+defaults. API keys can also come from env vars, which win over the config:
+`ALPHAI_API_KEY`, `FINNHUB_API_KEY`, `APCA_API_KEY_ID`, `APCA_API_SECRET_KEY`,
+`TIINGO_API_KEY`.
 
 ## Keys
 
@@ -395,9 +584,9 @@ use a keyed source for more frequent updates.
 |-----|-------|--------|
 | `Tab` / `1`..`9` | everywhere | switch view |
 | `↑` `↓` / `j` `k` | table, chart, split | select ticker |
-| `a` | everywhere | add ticker (`Enter` confirms, `Esc` cancels) |
+| `a` | everywhere | add a ticker: type the symbol, `Enter` adds it, `Esc` cancels |
 | `d` | everywhere | remove the selected ticker (the last one stays) |
-| `p` | everywhere | save holding as `qty avg`; empty input clears it |
+| `p` | everywhere | set what you hold of the ticker: `qty avg`, `Enter` saves it to the config, an empty line clears it |
 | `↑` `↓` / `j` `k` | news, insider | scroll articles |
 | `↑` `↓` / `j` `k` | earnings | scroll the read |
 | `↑` `↓` / `j` `k` | calendar | select event |
@@ -405,25 +594,25 @@ use a keyed source for more frequent updates.
 | `Enter` / `o` | news, insider | open article in browser |
 | `Enter` / `o` | earnings | open the read on alphai.io |
 | `Enter` / `o` | calendar | open macro source or the company's Earnings view |
-| `v` | news, insider | read article (`↑` / `↓` scroll, `Esc` closes); Insider toggles the side card when it fits |
-| `E` | everywhere | toggle extended candles; explain when unavailable |
-| `x` | news | cycle chart, stacked and side layouts |
+| `v` | news, insider | fullscreen article card; scroll with `↑` `↓`, `Esc` closes |
+| `E` | everywhere | draw pre and post market candles too (Yahoo, Alpaca and Tiingo); says why when there are none |
+| `x` | news | cycle the layout: chart over the list, stacked, or side-by-side |
 | `PgUp` `PgDn` | news | scroll the article card pane |
 | `PgUp` `PgDn` | earnings | page through the read |
 | `PgUp` `PgDn` | calendar | move ten events |
 | `↓` / `j` on the last row | news, insider | load the next page of the feed |
 | `f` | news, split | cycle news scope: selected ticker, whole market, trending |
-| `+` / `-` | news, insider, split | change filter: news relevance (default 7), insider trade size (4) |
+| `+` / `-` | news, insider, split | raise / lower the visible feed's score filter (news: relevance, starts at 7; insider: trade size, starts at 4) |
 | `g` | insider | cycle the trades chart window: 3 months, 12 months, off |
 | `c` | chart, split | toggle candlestick / line chart |
 | `m` | chart, split | toggle the two moving average overlays |
-| `e` | chart, split | switch SMA / EMA |
+| `e` | chart, split | average them simple (SMA) or exponential (EMA) |
 | `i` | chart, split | toggle the RSI(14) panel |
 | `b` | chart, split | toggle the volume panel |
 | `n` | chart, split | mark the ticker's cached news on the candles |
-| `t` / `T` | everywhere | next / previous window-and-interval preset (`[chart] presets`) |
+| `t` / `T` | everywhere | cycle candle interval presets forward / back (each interval with a matching history window; the list is configurable as `[chart] presets`) |
 | `r` | everywhere | refresh prices and visible data; Calendar refetches macro and retries missing, stale or failed dates |
-| `z` | everywhere | toggle bare mode (hide header/footer) |
+| `z` | everywhere | bare mode: hide the header and footer, giving both rows to the view |
 | `}` / `{` | everywhere | next / previous color preset (session-only until Save) |
 | `s` | everywhere | settings |
 | `?` | everywhere | help overlay: every action with its current keys |
@@ -431,178 +620,279 @@ use a keyed source for more frequent updates.
 
 ## A tmux workspace
 
-Run an instance per pane in tmux, zellij, screen or your terminal's splits:
+alphai-tui is a single self-contained process, so a terminal multiplexer
+(tmux, zellij, screen, or your terminal's own splits) turns it into a
+custom trading workspace: run one instance per pane and switch each pane
+to the view you want with `1`..`9`.
 
 ```sh
 tmux new-session -d -s market 'alphai-tui --bare NVDA'
-tmux split-window -h -t market 'alphai-tui --bare AAPL'
+tmux split-window -h -t market 'alphai-tui --bare AAPL'   # news pane on the right
 tmux select-pane -t market -L
 tmux split-window -v -t market 'alphai-tui --bare AVGO'
 tmux split-window -v -t market 'alphai-tui --bare TSLA'
 tmux attach -t market
 ```
 
-Choose `4` in chart panes and `2` in a news pane. `--bare` hides header and
-footer while keeping the quote rail; `z` toggles it, `[ui] bare = true`
-persists it. `borders = "none"` gives panels gutters instead of frames.
-Instances share a config file (last Save wins) and the AlphAI key's request
-budget, so configure once and account for every pane using news or filings.
+`--bare` drops the header and the key hints, which a pane with tmux's own
+status bar has little use for, and hands both rows to the view; `z` toggles
+it in a running instance and `[ui] bare = true` makes it the default. The
+quote rail stays, so a bare pane still names its ticker and its price.
 
-An agent such as [Claude Code](https://claude.com/claude-code) can run
-beside the dashboard with the [AlphAI MCP server](https://alphai.io/mcp?utm_source=alphai-tui&utm_medium=referral)
-for sourced research using the same news, sentiment and insider data.
+Tiled panes put frames next to frames, so the shot below also sets
+`[ui] borders = "none"`: each panel becomes a tinted surface with a small
+gutter and its title above, and the panes read as one desk. The Panels row
+in the settings screen switches it live.
 
-<details>
-<summary>Example workspaces</summary>
+Press `4` in the three chart panes and `2` in the tall one, and you get a
+wall of charts next to a live scored feed:
 
-![Three chart panes beside a news pane in tmux](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/tmux.png)
+![four alphai-tui instances in tmux panes: three bare panes with candlestick charts and their own quote rails, next to a full-height pane showing the scored news feed](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/tmux.png)
 
-![Claude Code researching insider activity beside alphai-tui](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/agent.png)
+Two things the instances share. The config file is one: the last pane to
+save settings wins, so set things up once and let the other panes just
+read it. Your AlphAI key's rate budget is the other: every pane showing
+news or insider data spends requests from the same per-key allowance, so
+on a free key keep an eye on how many such panes you open.
 
-</details>
+The same trick turns the terminal into a full trading desk with an AI
+analyst on staff. Run an agent such as
+[Claude Code](https://claude.com/claude-code) in the pane next to
+alphai-tui and connect it to the
+[AlphAI MCP server](https://alphai.io/mcp?utm_source=alphai-tui&utm_medium=referral), which serves the same news,
+sentiment and insider data as the dashboard. You watch the tape on one
+side while the agent digs through whatever the tape surfaces: ask it for
+the last insider sells and the news that moved the stock this week, and
+get a sourced brief without leaving the terminal.
+
+![Claude Code next to alphai-tui in tmux: the agent summarizes CRWV insider selling and the week's dominant story while the dashboard shows the candlestick chart and the scored news feed](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/agent.png)
 
 ## Data sources
 
-### Prices
+**Prices**
 
-| Source | Credentials | Coverage and chart data |
-|--------|-------------|-------------------------|
-| `yahoo` | none | Stocks, crypto (`BTC-USD`), FX (`EURUSD=X`); history, extended hours, year range and market volume |
-| `finnhub` | [API key](https://finnhub.io) | Regular-session quotes; charts accumulate during this run |
-| `alpaca` | [Key ID + secret](https://alpaca.markets) | US stocks and crypto (`BTC-USD`); live IEX quotes and historical bars |
-| `tiingo` | [API key](https://www.tiingo.com) | US stocks, ETFs, mutual funds (daily only) and crypto; IEX intraday, consolidated daily bars |
+- `yahoo`: no API key, intraday quote and history in one request. Timing
+  varies by exchange; extended quotes use the source's timestamps, never
+  the time a response was fetched. Crypto and FX tickers work as `BTC-USD`,
+  `EURUSD=X`. Includes extended hours, 52-week range and full market volume.
+  A daily chart may make an additional cached intraday request to timestamp
+  its extended quote. `E` controls which candles are drawn.
+- `finnhub`: needs a key (free at [finnhub.io](https://finnhub.io)).
+  Real-time-ish quotes; historical candles are premium-only there, so charts
+  build up from quotes collected during the session and reset on restart.
+  Range/interval switching with `t` does not apply to that synthetic
+  history, and candles degrade to flat marks.
+  Free tier is 60 req/min, one request per ticker per poll; the app warns
+  on startup and in the settings screen when the watchlist and the poll
+  interval together go over that.
+  Crypto needs exchange-prefixed symbols (`BINANCE:BTCUSDT`).
+  Its quote endpoint covers the regular session only, so no 52 week range
+  or volume, and the extended-hours price is borrowed (see
+  "Pre and after hours" below).
+- `alpaca`: needs a key id and secret (free at
+  [alpaca.markets](https://alpaca.markets)). Realtime quotes from the IEX
+  feed plus real historical bars, so charts are complete right after start
+  instead of growing over the session. Crypto works in the usual `BTC-USD`
+  form. IEX covers one exchange, with sparse pre-market trading from
+  08:00 ET and after-hours until 17:00 ET on normal days, so by default
+  the extended quote and candles come from consolidated SIP data delayed
+  15 minutes, then Yahoo if SIP is unavailable or missing the relevant
+  session (see "Pre and after hours" below).
+  Regular candles and the headline quote remain IEX.
+  The chart labels the extended feed, and the rail labels the quote's own
+  source and age. Volume bars from different feeds are not consolidated
+  into a single session; IEX's total is not presented as whole-market volume.
+  Once extended candles are on the chart, regular IEX candles take their
+  volume from the same consolidated bars, so both sessions share one
+  scale. The newest 15 minutes have no volume bar until the delayed feed
+  covers them. An intraday chart with extended hours off shows IEX's own
+  counts and labels them `IEX only`. Daily charts take the consolidated
+  daily bars whole, so the price range and the volume are the whole
+  market's, while the current day keeps its live IEX close. That costs one
+  request per ticker a minute, on top of the two per poll. If it is
+  refused, the chart keeps IEX's daily bars and labels them `IEX only`.
 
-**Yahoo:** quote and intraday history share one request. Timing varies by
-exchange; extended prints use trade timestamps. Daily charts may make an
-extra cached intraday request to timestamp an extended quote.
+  `ALPACA_FEED=delayed_sip` uses consolidated data for both regular and
+  extended sessions with a 15-minute delay. `ALPACA_FEED=sip` uses realtime
+  SIP and requires a paid subscription. The delayed mode uses
+  `feed=delayed_sip` for snapshots and `feed=sip` for historical bars; the
+  client sets the historical end to 15 minutes ago on every subscription.
+  During that lag after the opening bell, today's delayed pre-market quote
+  remains visible until regular data arrives, with its PRE label and age.
+  Getting free keys:
+  1. Sign up at [alpaca.markets](https://alpaca.markets). Email is enough;
+     market data and paper trading need no KYC.
+  2. The free Basic data plan is enabled by default.
+  3. In the dashboard switch the environment to Paper (fine for data), then
+     Home > API Keys > Generate. Copy the Key ID and the Secret; the secret
+     is shown only once.
+  4. Paste both in the settings screen (`s`) or export `APCA_API_KEY_ID`
+     and `APCA_API_SECRET_KEY`.
 
-**Finnhub:** free historical candles are unavailable, so chart history
-resets on restart, candles become flat marks, and interval presets do not
-apply. No year range, volume or native extended quote. Crypto uses
-exchange-prefixed symbols such as `BINANCE:BTCUSDT`, which have no AlphAI
-news. The free limit is 60 requests/min; one request per ticker per poll.
-Startup/settings warn when your watchlist and interval exceed it.
+  Free plan notes: the IEX feed is realtime but thin (roughly 2 to 3 percent
+  of market volume, so charts of illiquid names can be sparse), and the API
+  allows 200 requests/min. The app makes 2 requests per ticker per poll,
+  plus up to 2 per minute for the SIP extended hours when those come from
+  Alpaca. The startup and settings warnings include that allowance when
+  suggesting a polling interval. Changing candle presets can trigger a fresh cache fill.
+  Alpaca sizes a bars page by the minute bars behind it, roughly two weeks
+  of a liquid name's extended hours, so the first fill of a chart window
+  follows up to three more pages to reach the start of the IEX series;
+  later refreshes take the newest page only.
+- `tiingo`: needs a key from [tiingo.com](https://www.tiingo.com), free or
+  paid. Quotes and intraday bars come from IEX in real time, pre and post
+  market included from 08:00 to 17:30 ET. Daily charts use Tiingo's
+  consolidated end-of-day history, split adjusted, with the whole market's
+  volume. Crypto works in the usual `BTC-USD` form. Coverage is US stocks,
+  ETFs and mutual funds (funds have daily bars only); listings outside the
+  US, indices and FX are not available here.
+  During the session the price is Tiingo's IEX reference price: since
+  February 2025 IEX's own last trade needs an exchange agreement, and the
+  reference price stays within a few cents of it. IEX's volume is one
+  venue's, so the quote carries none during the day and an intraday chart
+  labels its volume `IEX only`. After the close Tiingo publishes the
+  official close and the consolidated volume, and the rail switches to
+  them; with an intraday chart open, the last after-hours price stays
+  beside the close overnight. Before the open and after the bell IEX
+  barely trades, so by default the extended quote comes from the whole
+  market (see "Pre and after hours" below). With
+  `extended_source = "same"` it is the IEX price beside the last close,
+  dated by the bar that traded it rather than by the request.
+  One request per poll quotes the whole watchlist, two when crypto is on
+  it. Bars are refreshed once a minute per ticker and daily history every
+  15 minutes; in between, the live price moves the last candle, and a new
+  candle has no volume bar until the next refresh.
+  The free plan allows 50 requests an hour and 1,000 a day. That covers a
+  couple of tickers polled every few minutes, not a live dashboard: the
+  quote request alone is 240 an hour at the default 15 seconds. The paid
+  Power plan allows 10,000 an hour. A key does not say which plan it is
+  on, so the app does not warn about the budget ahead of time. When an
+  allowance runs out, the error names it, and the automatic switch below
+  moves to another source.
 
-**Alpaca:** create a free Basic account, switch to Paper, then Home > API
-Keys > Generate. Market data/paper trading need no KYC. Save the once-shown
-secret and Key ID in settings or `APCA_API_KEY_ID` / `APCA_API_SECRET_KEY`.
+**Pre and after hours**
 
-- Free IEX is realtime but covers roughly 2–3% of market volume; illiquid
-  names may have sparse charts. Its extended session is 08:00–17:00 ET on
-  normal days. Regular quotes/bars stay IEX; `auto` borrows consolidated
-  extended data as described below.
-- With extended candles on, intraday volume uses consolidated bars for
-  both sessions. The latest 15 minutes have no volume until delayed data
-  arrives. With extended candles off, volume is labelled `IEX only`.
-  IEX totals are never presented as whole-market volume.
-- Daily charts use consolidated daily bars for range/volume, retaining
-  the current day's live IEX close. This adds one request/ticker/minute;
-  on refusal, daily IEX bars remain labelled `IEX only`.
-- `ALPACA_FEED=delayed_sip` uses consolidated quotes/bars delayed 15 minutes;
-  `sip` needs a paid realtime subscription. Delayed snapshots use
-  `feed=delayed_sip`; history uses `feed=sip` ending 15 minutes ago. After
-  the opening bell, the delayed PRE print stays labelled until regular
-  data arrives.
-- Basic allows 200 requests/min. Polling costs two requests/ticker, plus
-  up to two/ticker/minute for borrowed SIP extended data. Budget warnings
-  include that allowance. Preset changes can refill caches. Initial
-  extended history may fetch up to three extra pages (roughly two weeks
-  per page) to reach the IEX window; refreshes fetch only the newest page.
+IEX, the feed behind `alpaca` on its free plan and behind `tiingo`, is one
+exchange, and before the open it barely trades: on 30 September 2026 by
+08:52 ET Tiingo had one CoreWeave trade of 11 shares at 85.63, while the
+whole market had traded 581,000 shares and stood at 87.09. `finnhub` has
+no extended prices at all. So where the premarket and after-hours price
+comes from is a setting of its own, `extended_source` in the config and
+the Pre/after hours row in the settings screen:
 
-**Tiingo:** no non-US listings, indices or FX. Intraday IEX trades
-08:00–17:30 ET. Quotes use IEX's reference price; IEX last trades require a
-separate exchange agreement since February 2025. Intraday volume is
-labelled `IEX only`, with no quote volume until the official close and
-consolidated volume arrive. Daily history is consolidated and split adjusted.
-An open intraday chart retains the last after-hours print beside the
-close overnight. With `extended_source = "same"`, that print's time comes
-from its traded bar, not the request.
+- `auto`, the default: when the price source sees one exchange or none,
+  the extended quote and candles come from Alpaca's consolidated SIP feed,
+  15 minutes behind, if Alpaca keys are set, with Yahoo as the backup.
+  Without Alpaca keys they come from Yahoo. `yahoo`, and `alpaca` on a SIP
+  feed, keep their own.
+- `same`: only what the price source reports itself, no extra requests.
+- `alpaca`: always the consolidated SIP feed, with no Yahoo backup. It
+  needs the Alpaca keys, whatever the price source is.
+- `yahoo`: always Yahoo, keyless and closer to real time, but subject to
+  its IP blocks.
 
-One quote request covers the watchlist (two with crypto); bars refresh
-once/minute/ticker, daily history every 15 minutes. Between refreshes,
-live prices update the last candle; new candles have no volume yet. Free
-limits are 50 requests/hour and 1,000/day, suitable for a few tickers every
-few minutes; the default 15-second quote polling alone costs 240/hour.
-Power allows 10,000/hour. The key does not identify the plan, so there is
-no advance budget warning; quota errors can trigger source fallback.
+A borrowed print replaces the source's own whenever it has one for the
+session under way, and the rail and the chart title name its feed
+(`SIP · delayed 15m`, `Yahoo`) and its age. Regular-session prices always
+stay the price source's. Borrowing costs about two Alpaca requests or one
+Yahoo request per ticker a minute: results are cached for 60 seconds per
+ticker and chart window, and an empty or failed refresh keeps the session
+already on screen without failing the price poll. A Yahoo IP block pauses
+the borrowed Yahoo requests across the watchlist for 30 minutes. Extended
+quotes stay available with `E` off, independently of the candle setting.
 
-### Pre and after hours
+**When a source stops answering**
 
-IEX is a single venue with sparse extended trading; Finnhub has no extended
-quotes. `extended_source` (settings: Pre/after hours) chooses the feed:
+Every keyless quote feed throttles by IP sooner or later, and Yahoo's
+blocks are long: measured from one address, the first arrived after about
+ten requests and held for 19 minutes, the second came after eight and held
+for over an hour. No client-side retry shortens that, which is why the
+usual report about tools in this category is that they just stop working.
+Three things happen here instead:
 
-| Setting | Behavior |
-|---------|----------|
-| `auto` (default) | For IEX/Finnhub, borrow consolidated Alpaca SIP delayed 15m when keys exist, with Yahoo fallback if unavailable or missing the session; otherwise use Yahoo. Yahoo and Alpaca SIP keep their own feed. |
-| `same` | Use the price source's own extended data, with no borrowing requests. |
-| `alpaca` | Always consolidated SIP; requires Alpaca keys, with no Yahoo fallback. |
-| `yahoo` | Always Yahoo; keyless and closer to realtime, subject to IP blocks. |
+- Startup is never empty. The last good quotes and candles of every ticker
+  are kept in `<cache dir>/alphai-tui/quotes.json` (`~/.cache` on Linux,
+  `~/Library/Caches` on macOS), written at most once a minute, and put on
+  screen while the first poll is in flight. The quote rail labels them
+  (`cached 2h ago`) until live data replaces them, so old prices are never
+  passed off as current. Entries older than a week, or taken with a
+  different range and interval, are ignored rather than drawn.
+- A `429` from Yahoo says what it actually is: an IP block that lasts tens
+  of minutes, with the advice to switch source. It is also the one refusal
+  the client does not retry, since another request only feeds the counter
+  holding the block open.
+- If every ticker keeps failing for 45 seconds, the app switches to another
+  source that has its credentials and says so in the footer. It keeps the
+  rows already on screen, never switches back on its own (probing a
+  throttled feed is how a block gets extended) and never returns to a
+  source that failed this session. The header always names the source in
+  use, `s` picks another by hand, and `source_fallback = false` in the
+  config turns the whole thing off.
 
-Borrowed prints take priority when they cover the current session. The
-rail/chart label their feed and age; regular prices keep their chosen
-source. Each ticker/window caches results for 60 seconds, costing about
-two Alpaca requests or one Yahoo request/ticker/minute. Empty or failed
-refreshes keep displayed session data without failing the price poll.
-A Yahoo IP block pauses borrowing across the watchlist for 30 minutes.
-Extended quotes remain visible with `E` off.
+**News, sentiment, insider**
 
-### When a source stops answering
+- [AlphAI](https://alphai.io?utm_source=alphai-tui&utm_medium=referral): AI-enriched financial news feed. Every
+  article carries validated tickers, a category, a deterministic 1 to 10
+  relevance score and a full per-ticker AI analysis (sentiment, price
+  impact, confidence, novelty, actionability); insider rows are generated
+  from SEC EDGAR Form 4 filings, one row per economic event. The free tier
+  (no card) allows 20 requests/min and 100/day. The app is careful with
+  that budget: news and insider feeds fetch only what the visible view needs
+  (the trending scope is one extra request), and cache each response for 5 minutes
+  (`[ui] alphai_ttl_secs` in the config changes that), loads
+  further pages only when you ask for them, and the article card reuses
+  data already fetched with the list. The refresh at the end of that cache
+  window asks the server what has arrived since the previous check rather
+  than re-reading the newest page, which costs the same single request,
+  keeps the pages you loaded and the row you are on, and is the only way to
+  see an article that entered the feed behind its own publish time. The
+  relevance filter is applied by the server, so filtered-out articles never
+  occupy page slots; moving it with `+`/`-` refetches the visible feed, one
+  request per press at most.
+  The Insider view's rollup and trades chart arrive as one bundle
+  alongside the feed's first page and live in the same cache, so the
+  chart costs no extra requests and the `g` window switch is free.
+  The Earnings view costs one request per ticker, made only while that
+  view is on screen and cached for an hour, because a read is published
+  once a quarter and never changes afterwards. That single response
+  carries the whole history of reads for the ticker and its next
+  confirmed report date, which is also what fills the read shown in the
+  News card, so opening the card still costs nothing. The macro calendar
+  is shared by all views, including the quote-rail flag, and costs one
+  request per six hours by default. Calendar checks company dates using
+  the same earnings response, one company at a time, and keeps them for
+  six hours. These intervals are `alphai_ttl_secs * 72`; the Earnings
+  view uses `* 12`. At the minimum setting of 30 seconds, Calendar's
+  interval is 36 minutes, not six hours.
+  Ten companies with Calendar continuously open for 24 hours cost roughly
+  44 requests at the default TTL, including the macro window. Twenty-five
+  cost roughly 104, before other activity, so a larger list needs a longer
+  TTL. There is no daily quota limiter, and restarting loses these caches.
+  The four-second date-check pace limits this sweep, not other requests or
+  other processes using the key. Manual refresh adds a macro request and
+  any missing, stale or failed company checks. Errors wait for a manual
+  retry; successful cached rows remain visible in Calendar.
+  Feeds page 20 articles at a time, the most every plan allows (50 on Pro
+  keys, detected automatically). Paging back past your plan's
+  archive horizon (30 days on Free, 90 on Basic) shows an upgrade hint
+  instead of older articles. Full API reference:
+  [alphai.io/developers](https://alphai.io/developers?utm_source=alphai-tui&utm_medium=referral).
 
-- Quotes/candles load from `<cache dir>/alphai-tui/quotes.json` while the
-  first poll runs, labelled `cached … ago`. The cache is written at most
-  once/minute; entries older than a week or for a different range/interval
-  are ignored. Cache roots: `~/.cache` on Linux, `~/Library/Caches` on macOS.
-- Yahoo `429` means an IP block that can last tens of minutes or over an
-  hour. The app advises switching sources and does not retry that response.
-- After all tickers fail for 45 seconds, the app switches to another source
-  with available credentials, retaining displayed data and announcing the
-  switch. It never automatically switches back or revisits a source that
-  failed this session. `s` switches manually; `source_fallback = false`
-  disables automatic switching. The header names the active source.
-
-### News, sentiment, insider
-
-[AlphAI](https://alphai.io?utm_source=alphai-tui&utm_medium=referral) supplies
-validated tickers, categories, 1–10 relevance and per-ticker AI analysis;
-SEC Form 4 rows represent economic events. Free keys need no card and
-allow 20 requests/minute and 100/day.
-
-| Data | Fetch / cache behavior at the default TTL |
-|------|------------------------------------------|
-| News and Insider | Only visible feeds; 5-minute cache; trending adds one request |
-| Feed refresh | One incremental request, preserving loaded pages and selection |
-| Filtering / paging | Server-side filter; at most one request per `+` / `-` press; pages on demand |
-| Article cards / insider chart | Reuse loaded data; insider rollup/chart come with page one; `g` costs nothing |
-| Earnings | One request/ticker while visible, cached 1 hour; includes all reads and next confirmed date |
-| Macro calendar | Shared across views and rail; one request per 6 hours |
-| Calendar company dates | Same earnings response, cached 6 hours; checks at least 4 seconds apart while Calendar is open |
-
-`[ui] alphai_ttl_secs` controls these intervals: news uses the base,
-Earnings ×12, macro/company dates ×72. At the 30-second minimum,
-Calendar refreshes every 36 minutes. At the default, keeping Calendar
-open for 24 hours costs about 44 requests for ten companies or 104 for
-25, before other activity. Longer lists need a longer TTL. There is no
-daily quota limiter, restarting clears these caches, and the four-second
-sweep pace does not limit other requests or processes sharing the key.
-Manual refresh adds requests as described under Calendar; errors wait for
-manual retry while successful cached rows remain.
-
-Pages contain 20 articles, or 50 for automatically detected Pro keys.
-Archive limits (Free: 30 days, Basic: 90) show an upgrade hint. Symbols use
-US/Yahoo forms (`AAPL`, `BTC-USD`, `VOD.L`).
-[Full API reference](https://alphai.io/developers?utm_source=alphai-tui&utm_medium=referral).
+Ticker forms follow the US/Yahoo convention (`AAPL`, `BTC-USD`, `VOD.L`),
+which is also what AlphAI uses. Finnhub-specific symbols like
+`BINANCE:BTCUSDT` will not have news attached.
 
 ## Configuration
 
-Linux/macOS: `~/.config/alphai-tui/config.toml`; Windows:
-`%APPDATA%\alphai-tui\config.toml`. Settings creates it with mode 0600 on
-Unix because it can contain keys. `--config PATH` changes the file used
-for both loading and saving.
-
-Every entry is optional. Invalid `[ui]`, `[chart]`, `[theme]` or
-`[keybindings]` values warn and retain that entry's default; invalid TOML
-falls back for the whole file. UI/chart options below set startup defaults;
-keyboard changes are session-only unless saved through settings.
+`~/.config/alphai-tui/config.toml` on Linux and macOS (`%APPDATA%` on
+Windows), created by the settings screen with mode 0600 since it can hold
+keys; `--config PATH` points at a different file. Saving the settings also
+persists the watchlist on screen, and `a` and `d` write it straight away. Every key is optional. A misspelled value
+in the `[ui]`, `[chart]`, `[theme]` or `[keybindings]` sections prints a
+warning on startup and keeps that entry's default; only a TOML syntax error
+makes the whole file fall back to defaults. The `[ui]` and `[chart]` sections set startup
+defaults; the session keys (`x`, `f`, `g`, `+`, `-`, `c`, `m`, `i`, `b`, `e`, `n`, `t`)
+still change everything live without persisting it:
 
 ```toml
 source = "yahoo"
@@ -670,33 +960,23 @@ qty = 0.25
 avg_price = 58200
 ```
 
-Positions accept fractional quantities and negative quantities for shorts.
-`avg_price` is average unit cost; there is no lot ledger, so update the
-average yourself when adding to a holding. `p` saves immediately.
+A quantity may be fractional, for crypto or for a broker that sells
+slices, and negative for a short, in which case a falling price is a
+profit. `avg_price` is what one unit cost on average: this is not a ledger
+and it does not keep lots, so a second buy means updating the average
+yourself (or letting `p` overwrite the line).
 
 ### Colors
+
+`[theme] preset` swaps in a ready-made palette:
 
 ```toml
 [theme]
 preset = "catppuccin-mocha"
 ```
 
-Presets: `default`, `catppuccin-mocha`, `catppuccin-macchiato`,
-`catppuccin-frappe`, `catppuccin-latte`, `dracula`, `gruvbox-dark`,
-`gruvbox-light`, `nord`. `}` / `{` cycle live, `--theme NAME` selects one
-for a run, and settings previews/saves it.
-
-Color presets expect 24-bit color; `catppuccin-latte` and `gruvbox-light`
-expect a light terminal. `default` follows ANSI terminal colors without a
-panel tint; `session_shading = false` also removes RGB session backgrounds.
-Panels use rounded frames by default (`plain` is also available);
-`[ui] borders = "none"` uses tinted surfaces and gutters. Settings changes
-this live.
-
-<details>
-<summary>Theme gallery and borderless panels</summary>
-
-Each terminal below uses its matching palette; `default` follows the terminal.
+Each preset on a terminal wearing the matching palette (`default` on a plain
+dark one, since it takes the terminal's own colors):
 
 <table>
 <tr>
@@ -716,14 +996,39 @@ Each terminal below uses its matching palette; `default` follows the terminal.
 </tr>
 </table>
 
-![Borderless dracula panels](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/borderless.png)
+The panel look is a separate choice. Frame lines are the default (`rounded`,
+or `plain`); `[ui] borders = "none"`, or the Panels row in the settings
+screen, draws tinted panels with a gutter instead:
 
-</details>
+![alphai-tui split view in the dracula preset with borders = "none": tinted panels separated by a small gutter, each titled above, in place of frame lines](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/borderless.png)
 
-`[theme]` overrides individual slots on top of a preset. Colors accept
-case-insensitive ANSI names (`light-blue`, `grey`, `reset`), `#RRGGBB`, or
-ANSI-256 indices as strings (`"245"`). Unknown colors, slots or presets
-warn and retain defaults. These are the default slots:
+`}` and `{` walk the presets live, `--theme catppuccin-mocha` picks one
+for a single run, and the Theme row in the settings screen (`s`) does
+both: `←` `→` cycle it with a live preview, Save writes it here.
+
+Available: `default`, `catppuccin-mocha`, `catppuccin-macchiato`,
+`catppuccin-frappe`, `catppuccin-latte`, `dracula`, `gruvbox-dark`,
+`gruvbox-light`, `nord`. Presets are written in hex, so they want a
+terminal with 24-bit color. With `borders = "none"` they tint the panels
+one step off the palette's background, the regular session sits on that
+tint, and the pre-market and after-hours bands are drawn from it, so the
+three stay apart. `default` uses ANSI foregrounds, no panel tint and
+subtle RGB session backgrounds;
+`session_shading = false` preserves a fully transparent chart background. The two
+light ones (`catppuccin-latte`, `gruvbox-light`) expect a light terminal
+background.
+
+`pre_market_bg` and `post_market_bg` are the session background slots;
+each accepts the same color formats as the foreground slots. Setting either
+to `"reset"` uses the terminal background for that session.
+
+Every color the views draw comes from a named slot, and the optional
+`[theme]` table recolors any of them, over the preset when there is one.
+Values are ANSI color names (case-insensitive, `light-blue`, `grey`),
+`#RRGGBB` hex, or an ANSI-256 index written as a string like `"245"`. A
+bad color, a misspelled slot or an unknown preset prints a warning on
+startup and keeps the default; it never breaks the config file. The
+defaults are the values shown:
 
 ```toml
 [theme]
@@ -749,14 +1054,17 @@ selection = "reset"      # background of the cursor row; reset means reverse vid
 surface = "reset"        # panel background (borders = "none"); reset paints none
 ```
 
-Presets supply their own secondary text, selection and surface colors.
-`pre_market_bg` / `post_market_bg` also accept these formats; `"reset"`
-uses the terminal background. Borderless session bands are shaded relative
-to the panel surface so regular, pre-market and after-hours stay distinct.
+The presets fill the last five from their own palettes: secondary text in
+the family's subtext shade, a cursor row that keeps each column's color,
+and a panel tint one step off the background. With `default` they follow
+the terminal, which is the only way to stay readable on both a dark and a
+light background.
 
 ### Custom keybindings
 
-Each listed action replaces its default keys; unlisted actions keep theirs:
+The optional `[keybindings]` table rebinds any action. An action you list
+replaces its default keys entirely; actions you leave out keep theirs. The
+value is one key or a list of keys:
 
 ```toml
 [keybindings]
@@ -766,29 +1074,36 @@ next_preset = "]"
 prev_preset = "["
 ```
 
-Syntax: `[ctrl-][alt-][shift-]<base>`. Base is a character or `esc`,
-`enter`, `tab`, `backtab`, `space`, `up`, `down`, `left`, `right`, `home`, `end`, `pgup`, `pgdn`,
-`backspace`, `delete`, `insert`, `f1`–`f12`. `shift-t` means `T`;
-`shift-tab` means `backtab`.
+A key is written as `[ctrl-][alt-][shift-]<base>`, where base is a single
+character or one of the named keys: `esc`, `enter`, `tab`, `backtab`,
+`space`, `up`, `down`, `left`, `right`, `home`, `end`, `pgup`, `pgdn`,
+`backspace`, `delete`, `insert`, `f1` to `f12`. `shift-` plus a letter
+means the uppercase letter (`shift-t` equals `T`), and `shift-tab` equals
+`backtab`.
 
-Actions: `quit`, `next_view`, `prev_view`, `settings`, `help`, `refresh`,
-`up`, `down`, `left`, `right`, `page_up`, `page_down`, `open`, `card`,
-`cycle_scope`, `cycle_layout`, `score_up`, `score_down`, `insider_chart`,
-`chart_style`, `toggle_sma`, `toggle_rsi`, `toggle_volume`, `news_markers`,
-`ma_type`, `next_preset`, `prev_preset`, `next_theme`, `prev_theme`,
-`toggle_bare`, `add_ticker`, `remove_ticker`, `position`, `extended_hours`.
-`?` shows their current bindings.
+The actions: `quit`, `next_view`, `prev_view`, `settings`, `help`,
+`refresh`, `up`, `down`, `left`, `right`, `page_up`, `page_down`, `open`,
+`card`, `cycle_scope`, `cycle_layout`, `score_up`, `score_down`,
+`insider_chart`, `chart_style`, `toggle_sma`, `toggle_rsi`,
+`toggle_volume`, `news_markers`, `ma_type`, `next_preset`, `prev_preset`,
+`next_theme`, `prev_theme`, `toggle_bare`, `add_ticker`, `remove_ticker`,
+`position`, `extended_hours`.
+The `?` help overlay shows this list with the current keys next to it.
 
-Reserved: `Ctrl-C`, `Esc`, view digits `1`–`9`, and settings-form keys.
-Invalid/reserved keys, unknown actions and conflicting bindings warn and
-fall back safely. Footer hints follow the actual bindings.
+Reserved and never remappable: `ctrl-c` (force quit), `esc`, the digits
+`1` to `9` (view hotkeys), and the keys inside the settings form. A bad or
+reserved key, an unknown action, or a key claimed by two actions prints a
+warning on startup and falls back safely; the footer always shows the keys
+that are actually bound.
 
 ### Not configurable on purpose
 
-Page sizes, the two-second poll floor and chart warm-up factors are fixed
-to protect free-tier budgets. Debug overrides remain environment-only:
-`ALPACA_FEED`, `ALPHAI_API_URL`, `ALPACA_DATA_URL`, `YAHOO_CHART_URL`,
-`TIINGO_API_URL`.
+The AlphAI response cache (5 minutes), the feed page sizes, the 2 second
+poll floor and the chart warm-up factors are fixed. They keep the app a
+fair citizen of the free API tiers, and a config knob for them would turn
+an innocent-looking file into an abuse vector. `ALPACA_FEED`,
+`ALPHAI_API_URL`, `ALPACA_DATA_URL`, `YAHOO_CHART_URL` and `TIINGO_API_URL`
+stay env-only debug overrides for the same reason.
 
 ## Architecture
 
@@ -824,44 +1139,55 @@ src/
     settings.rs  modal settings overlay
 ```
 
-Background price/AlphAI tasks send events through an mpsc channel to
-`App::apply`. Views render state without network calls; AlphAI budget
-guards live in `app/feeds.rs`.
+Data flows one way: background tasks (price poller, AlphAI fetcher) push
+events over an mpsc channel into `App::apply`; views are stateless renderers
+over `&mut App`. The UI never blocks on the network, and every AlphAI
+request-budget guard lives in one file (`app/feeds.rs`).
 
 ### Adding a price source
 
-1. Implement `source::DataSource::fetch` (quote plus candles) in
-   `src/source/`, using `source/http.rs` helpers. For batched quotes,
-   implement `begin_cycle` to receive the whole symbol list first; see Tiingo.
-2. Add a `SourceInfo` to `source/registry.rs`: id, aliases, settings hint,
-   credentials and constructor. CLI help, settings, key persistence and
-   env overrides derive from this entry; registry tests cover it.
-3. Document the source here.
+1. Implement `source::DataSource` (one async `fetch` returning quote plus
+   candles) in a new module under `src/source/`. The helpers in
+   `source/http.rs` cover the client, JSON fetching and error plumbing.
+   A provider that quotes many tickers in one request can also implement
+   `begin_cycle`, which hears the poll's whole symbol list before its
+   `fetch` calls start, and answer all of them from one response (see
+   `source/tiingo.rs`).
+2. Append one `SourceInfo` entry to `source/registry.rs`: id, aliases, a
+   settings hint, the key fields it needs and a constructor. The `--source`
+   help and error list, the settings screen rows and picker cycle, config
+   `[keys]` persistence and env-var overrides all derive from that entry,
+   and the registry tests check it.
+3. Describe the source in this README.
 
 ### Adding a view
 
-1. Implement `ui::View` as a unit struct under `src/ui/`: render over
-   `&mut App`, add a `ViewId`, footer hints and capability methods
-   (`feed_shown`, `navigates_articles`, `has_chart_panel`, `shows_earnings`,
-   `shows_calendar`) for shared keys and demand-driven fetching.
-2. Register in `ui::VIEWS`; order defines tabs and `1`–`9` hotkeys.
+1. Implement `ui::View` as a unit struct in a new module under `src/ui/`: a
+   stateless `render` over `&mut App`, a new `ViewId` variant, a footer hint
+   line, and the capability methods (`feed_shown`, `navigates_articles`,
+   `has_chart_panel`, `shows_earnings`, `shows_calendar`) that opt into shared
+   key handling and demand-driven AlphAI fetching. Views never fetch anything themselves.
+2. Add it to `ui::VIEWS`. Order in that array defines the tab cycle and the
+   `1`..`9` hotkeys; the header pills and the footer hints derive from it.
 
 ## Development
 
 ```sh
-cargo test --locked
-cargo clippy --all-targets --locked -- -D warnings
+cargo test          # unit + TestBackend rendering tests
+cargo clippy --all-targets
 cargo fmt --all -- --check
-cargo run -- --once AAPL             # network smoke test, no TTY needed
+cargo run -- --once AAPL             # network smoke test without a TTY
 ALPHAI_API_KEY=ak_live_... cargo test live_calendar_smoke -- --ignored  # 1 request
-ALPHAI_API_KEY=ak_live_... cargo test live_api -- --ignored             # 14 requests
+ALPHAI_API_KEY=ak_live_... cargo test live_api -- --ignored   # 14 requests
 ```
 
-CI tests on Linux, macOS and Windows and checks clippy/rustfmt; live API
-tests are opt-in. See [CHANGELOG.md](CHANGELOG.md) for releases. Issues and
-PRs are welcome.
+CI runs the first three on every push and pull request, on Linux, macOS
+and Windows. What changed in each release is in
+[CHANGELOG.md](CHANGELOG.md).
+
+Issues and PRs are welcome.
 
 ## License
 
-MIT. Not investment advice; third-party data can be delayed or wrong.
-Respect the terms of enabled providers.
+MIT. Not investment advice; data comes from third-party sources and can be
+delayed or wrong. Respect the terms of the data providers you enable.
