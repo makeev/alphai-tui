@@ -195,14 +195,6 @@ fn margin_cols(width: u16, pct: u16) -> u16 {
     (width as u32 * pct as u32 / 100).min(width.saturating_sub(2) as u32) as u16
 }
 
-/// Style of the last-price value while its update pulse is active: the tick
-/// direction's color, inverted so it visibly blinks.
-pub(crate) fn flash_style(up: bool, theme: &Theme) -> Style {
-    Style::new()
-        .fg(if up { theme.up } else { theme.down })
-        .add_modifier(Modifier::REVERSED | Modifier::BOLD)
-}
-
 /// Color for a price move. Split out of `dir_color` so a view can color a
 /// move the quote does not carry as its headline change, such as the rail's
 /// extended-hours print.
@@ -241,8 +233,7 @@ fn chart_title(
         spans.push(Span::styled("quote ", theme.subtle()));
         spans.push(Span::styled(
             format!("{} ", fmt_price(q.price)),
-            app.price_flash_dir(symbol)
-                .map_or(Style::new().bold(), |up| flash_style(up, theme)),
+            app.price_style(symbol, Style::new().fg(theme.text).bold()),
         ));
         if let Some(currency) = q.currency.as_deref().filter(|c| !c.is_empty()) {
             spans.push(Span::styled(format!("{currency} "), theme.subtle()));
@@ -471,7 +462,6 @@ fn render_price_candles(
         q.prev_close
     };
     let visible = &data.candles[cut..];
-    let flash = app.price_flash_dir(symbol);
     let panel = app.theme.panel();
     // Titles live on the border row, so the inner area is known before any
     // of them is: the block itself is rendered further down, once the
@@ -705,9 +695,11 @@ fn render_price_candles(
         let tag = fmt_price(marker_price);
         let len = tag.chars().count() as u16;
         if margin > len {
-            let style = match flash.filter(|_| !marker_is_bar) {
-                Some(up) => flash_style(up, &app.theme),
-                None => Style::new().fg(color).add_modifier(Modifier::BOLD),
+            let base = Style::new().fg(color).add_modifier(Modifier::BOLD);
+            let style = if marker_is_bar {
+                base
+            } else {
+                app.price_style(symbol, base)
             };
             buf.set_string(plot.x + plot.width - len, row, &tag, style);
             let label = if marker_is_bar {

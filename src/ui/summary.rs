@@ -21,7 +21,7 @@ use ratatui::widgets::{Axis, Block, Chart, Dataset, GraphType, Paragraph};
 use crate::app::App;
 use crate::domain::{TickerData, fmt_price};
 use crate::keymap::Action;
-use crate::ui::chart::{dir_color, flash_style, visible_from};
+use crate::ui::chart::{dir_color, visible_from};
 use crate::ui::{Hint, View, ViewId};
 
 /// Smallest card that still reads: a border, a title and two plot rows.
@@ -149,9 +149,7 @@ fn title_line(app: &App, symbol: &str, selected: bool) -> Line<'static> {
     match app.data.get(symbol) {
         Some(data) => {
             let q = &data.quote;
-            let style = app
-                .price_flash_dir(symbol)
-                .map_or(Style::new(), |up| flash_style(up, theme));
+            let style = app.price_style(symbol, Style::new().fg(theme.text));
             spans.push(Span::styled(fmt_price(q.price), style));
             if let Some(pct) = q.change_pct() {
                 spans.push(Span::styled(

@@ -1,6 +1,6 @@
 [package]
 name = "alphai-tui"
-version = "0.29.0"
+version = "0.30.0"
 edition = "2024"
 rust-version = "1.85"
 description = "Terminal stock dashboard: live quotes and charts plus AI-scored financial news and SEC Form 4 insider activity from AlphAI"
@@ -17,14 +17,20 @@ anyhow = "1.0.103"
 async-trait = "0.1.89"
 chrono = "0.4.45"
 clap = { version = "4.6.1", features = ["derive"] }
-crossterm = "0.29.0"
+crossterm = { version = "0.29.0", features = ["event-stream"] }
 dirs = "6.0.0"
+futures-util = { version = "0.3.32", default-features = false, features = ["std", "async-await"] }
 ratatui = "0.30.2"
 reqwest = { version = "0.13.4", default-features = false, features = ["json", "rustls", "query", "gzip", "http2"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
 tokio = { version = "1.52.3", features = ["full"] }
 toml = "1.1.2"
+unicode-segmentation = "1.13.3"
+unicode-width = "0.2.2"
+
+[target.'cfg(unix)'.dependencies]
+terminfo = "0.9.0"
 
 # The profile that 'dist' will build with
 [profile.dist]

@@ -328,6 +328,20 @@ writes all of it, plus the watchlist on screen, to the config file. `}` and `{` 
 and the footer for a tmux pane that carries its own status bar, and `r`
 refreshes prices and the visible data.
 
+Price changes fade back over 900 ms without changing the text's weight or
+decoration. The ASCII spinner beside the source runs only while
+requests are in progress. The Animations row in settings switches these
+effects off live; Save remembers it as `[ui] animations = false`. With
+animations off, a steady `*` still indicates requests in progress.
+
+The renderer wakes on input and data, with up to 30 frames per second for
+short effects and a one-second clock for ages and scheduled work when idle.
+RGB themes fade between their explicit colors; the default ANSI theme uses
+a brief color highlight and keeps the terminal's palette. On Unix, a valid
+`Sync` terminfo capability enables synchronized frames. Other terminals,
+including Windows without that detection, keep ordinary frame output.
+`[ui] synchronized_output = false` disables the extension altogether.
+
 ## How it compares
 
 There are good terminal stock tools already. The two you are most likely
@@ -915,6 +929,8 @@ tiingo = ""
 default_view = "split"    # split | news | table | chart | insider | earnings | summary | portfolio | calendar
 quote_rail = true         # the price line under the tabs
 bare = false              # start with no header and no footer (--bare, z)
+animations = true         # price color fades and refresh spinner; also in settings
+synchronized_output = true # use synchronized frames only when terminfo advertises support
 news_layout = "chart"     # chart | stacked | side (also a row in the settings screen)
 news_scope = "ticker"     # ticker | market | trending
 borders = "rounded"       # frame lines: rounded | plain, or none for tinted panels (also a settings row)

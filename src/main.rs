@@ -6,9 +6,11 @@ mod domain;
 mod indicators;
 mod keymap;
 mod market;
+mod motion;
 mod poller;
 mod portfolio;
 mod source;
+mod terminal;
 mod theme;
 mod ui;
 
@@ -226,7 +228,7 @@ fn main() -> Result<()> {
     for (symbol, entry) in seeds {
         app.seed_cached(symbol, entry);
     }
-    let result = app.run(&mut terminal);
+    let result = rt.block_on(app.run(&mut terminal));
     ratatui::restore();
     result
 }

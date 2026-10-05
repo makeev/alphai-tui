@@ -19,12 +19,13 @@ use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
+use super::pad_right;
 use crate::app::App;
 use crate::domain::{Candle, Quote, fmt_price, fmt_volume};
 use crate::market::{self, Session};
 use crate::portfolio::fmt_signed;
 use crate::theme::Theme;
-use crate::ui::chart::{dir_color, flash_style, move_color};
+use crate::ui::chart::{dir_color, move_color};
 use crate::ui::table::spark_line;
 
 /// Cells between the brackets of the day-range track.
@@ -52,7 +53,7 @@ pub(crate) fn line(app: &App, width: u16, now: DateTime<Utc>) -> Line<'static> {
     let mut spans = head(app, &symbol, width);
     let mut used = total_width(&spans);
 
-    for alternatives in optional_zones(app, &symbol, now) {
+    for alternatives in optional_zones(app, &symbol, now, width >= 80) {
         // Widest first: the first form that still fits goes in, and a zone
         // with no form that fits is skipped rather than ending the line.
         // A cheap zone behind an expensive one therefore survives.
@@ -67,7 +68,7 @@ pub(crate) fn line(app: &App, width: u16, now: DateTime<Utc>) -> Line<'static> {
 
     // What is left goes to the peers, right-aligned: the rail then answers
     // "where does ← → take me" as well as "what is this one doing".
-    let peers = peers(app, &symbol, budget.saturating_sub(used));
+    let peers = peers(app, &symbol, budget.saturating_sub(used), width >= 80);
     let peers_w = total_width(&peers);
     if peers_w > 0 {
         spans.push(Span::raw(" ".repeat(budget - used - peers_w)));
@@ -79,10 +80,22 @@ pub(crate) fn line(app: &App, width: u16, now: DateTime<Utc>) -> Line<'static> {
 /// Symbol, price and freshness: the part that is never dropped.
 fn head(app: &App, symbol: &str, width: u16) -> Vec<Span<'static>> {
     let theme = &app.theme;
+    let stable = width >= 80;
+    let symbol_label = if stable {
+        pad_right(symbol, 7)
+    } else {
+        symbol.to_string()
+    };
     let mut out = vec![Span::styled(
-        format!(" {symbol} "),
+        format!(" {symbol_label} "),
         Style::new().bold().fg(theme.accent),
     )];
+    if app.bare && width >= 60 {
+        out.push(Span::styled(
+            format!("{} ", app.refresh_marker()),
+            theme.subtle(),
+        ));
+    }
     match app.data.get(symbol) {
         Some(data) => {
             if width >= 60 {
@@ -90,9 +103,8 @@ fn head(app: &App, symbol: &str, width: u16) -> Vec<Span<'static>> {
             }
             // The pulse is the same one the chart title and the table use,
             // so a live market now reads as live in every view.
-            let style = app
-                .price_flash_dir(symbol)
-                .map_or(Style::new().bold(), |up| flash_style(up, theme));
+            let price_start = total_width(&out);
+            let style = app.price_style(symbol, Style::new().fg(theme.text).bold());
             out.push(Span::styled(fmt_price(data.quote.price), style));
             if let Some(currency) = data
                 .quote
@@ -102,7 +114,13 @@ fn head(app: &App, symbol: &str, width: u16) -> Vec<Span<'static>> {
             {
                 out.push(Span::styled(format!(" {currency}"), theme.subtle()));
             }
+            if stable {
+                out.push(Span::raw(
+                    " ".repeat(12usize.saturating_sub(total_width(&out) - price_start)),
+                ));
+            }
             if let Some(age) = app.cached_age(symbol) {
+                let age = if stable { pad_right(&age, 6) } else { age };
                 out.push(Span::styled(
                     format!("  cached {age} ago"),
                     Style::new().fg(theme.warn),
@@ -119,7 +137,12 @@ fn head(app: &App, symbol: &str, width: u16) -> Vec<Span<'static>> {
 
 /// The optional zones in priority order, each as its forms from widest to
 /// narrowest (`line` picks one form per zone).
-fn optional_zones(app: &App, symbol: &str, now: DateTime<Utc>) -> Vec<Vec<Vec<Span<'static>>>> {
+fn optional_zones(
+    app: &App,
+    symbol: &str,
+    now: DateTime<Utc>,
+    stable: bool,
+) -> Vec<Vec<Vec<Span<'static>>>> {
     let theme = &app.theme;
     let Some(data) = app.data.get(symbol) else {
         return vec![event_zone(app, symbol, now)];
@@ -129,6 +152,16 @@ fn optional_zones(app: &App, symbol: &str, now: DateTime<Utc>) -> Vec<Vec<Vec<Sp
     let mut zones = Vec::new();
 
     if let (Some(change), Some(pct)) = (quote.change(), quote.change_pct()) {
+        let change_label = if stable {
+            format!("{change:+8.2}")
+        } else {
+            format!("{change:+.2}")
+        };
+        let pct_label = if stable {
+            format!("{pct:+7.2}%")
+        } else {
+            format!("{pct:+.2}%")
+        };
         let arrow = if change > 0.0 {
             "▲"
         } else if change < 0.0 {
@@ -138,18 +171,18 @@ fn optional_zones(app: &App, symbol: &str, now: DateTime<Utc>) -> Vec<Vec<Vec<Sp
         };
         zones.push(vec![
             vec![Span::styled(
-                format!("  {arrow} {change:+.2} {pct:+.2}%"),
+                format!("  {arrow} {change_label} {pct_label}"),
                 Style::new().fg(color),
             )],
             // On a narrow terminal the percentage alone still says which
             // way the day is going, and the color says it without the
             // arrow: this zone must outlive the badges behind it.
             vec![Span::styled(
-                format!("  {arrow} {pct:+.2}%"),
+                format!("  {arrow} {pct_label}"),
                 Style::new().fg(color),
             )],
             vec![Span::styled(
-                format!("  {pct:+.2}%"),
+                format!("  {pct_label}"),
                 Style::new().fg(color),
             )],
         ]);
@@ -157,15 +190,16 @@ fn optional_zones(app: &App, symbol: &str, now: DateTime<Utc>) -> Vec<Vec<Vec<Sp
     // Price provenance outranks holdings, session countdowns and charts:
     // a recently fetched response can still carry an old trade.
     zones.push(quote_context(app, quote));
-    zones.push(extended_zone(quote, now, theme));
+    zones.push(extended_zone(quote, now, theme, stable));
     zones.push(position_zone(
         app,
         symbol,
         crate::portfolio::price_at(quote, now),
         theme,
+        stable,
     ));
-    zones.push(session_zone(app, symbol, now));
-    zones.push(range_zone(quote, &data.candles, color, theme));
+    zones.push(session_zone(app, symbol, now, stable));
+    zones.push(range_zone(quote, &data.candles, color, theme, stable));
     let closes: Vec<f64> = data.candles.iter().map(|c| c.close).collect();
     if !closes.is_empty() {
         zones.push(vec![vec![
@@ -179,13 +213,17 @@ fn optional_zones(app: &App, symbol: &str, now: DateTime<Utc>) -> Vec<Vec<Vec<Sp
     // gives their width back to everything above.
     if let Some((lo, hi)) = quote.fifty_two_week {
         zones.push(vec![vec![Span::styled(
-            format!("  52w {}–{}", fmt_price(lo), fmt_price(hi)),
+            format!(
+                "  52w {}–{}",
+                field(fmt_price(lo), 6, stable),
+                field(fmt_price(hi), 6, stable)
+            ),
             theme.subtle(),
         )]]);
     }
     if let Some(volume) = quote.volume.filter(|v| *v > 0.0) {
         zones.push(vec![vec![Span::styled(
-            format!("  vol {}", fmt_volume(volume)),
+            format!("  vol {}", field(fmt_volume(volume), 5, stable)),
             theme.subtle(),
         )]]);
     }
@@ -237,22 +275,29 @@ fn event_zone(app: &App, symbol: &str, now: DateTime<Utc>) -> Vec<Vec<Span<'stat
 /// reads their own number first, and the badge says the same thing for
 /// every symbol on the list. Absent for a ticker that is only watched, so
 /// it costs nothing to the rest of the line.
-fn position_zone(app: &App, symbol: &str, price: f64, theme: &Theme) -> Vec<Vec<Span<'static>>> {
+fn position_zone(
+    app: &App,
+    symbol: &str,
+    price: f64,
+    theme: &Theme,
+    stable: bool,
+) -> Vec<Vec<Span<'static>>> {
     let Some(position) = app.position(symbol) else {
         return Vec::new();
     };
     let pnl = position.pnl(price);
     let style = Style::new().fg(move_color(Some(pnl), theme));
-    let money = fmt_signed(pnl);
+    let money = field(fmt_signed(pnl), 10, stable);
     let pct = position.pnl_pct(price);
     let mut forms = Vec::new();
     if let Some(pct) = pct {
+        let pct = field(format!("{pct:+.2}%"), 8, stable);
         forms.push(vec![Span::styled(
-            format!("  ×{} {money} {pct:+.2}%", position.qty),
+            format!("  ×{} {money} {pct}", position.qty),
             style,
         )]);
-        forms.push(vec![Span::styled(format!("  {money} {pct:+.2}%"), style)]);
-        forms.push(vec![Span::styled(format!("  {pct:+.2}%"), style)]);
+        forms.push(vec![Span::styled(format!("  {money} {pct}"), style)]);
+        forms.push(vec![Span::styled(format!("  {pct}"), style)]);
     } else {
         // No cost basis to measure against, so the money is all there is.
         forms.push(vec![Span::styled(
@@ -270,7 +315,12 @@ fn position_zone(app: &App, symbol: &str, price: f64, theme: &Theme) -> Vec<Vec<
 /// close, cannot move until the next open. It sits ahead of the session
 /// badge because it is the newer fact, and it disappears by itself during
 /// the regular session, when there is no separate print to show.
-fn extended_zone(quote: &Quote, now: DateTime<Utc>, theme: &Theme) -> Vec<Vec<Span<'static>>> {
+fn extended_zone(
+    quote: &Quote,
+    now: DateTime<Utc>,
+    theme: &Theme,
+    stable: bool,
+) -> Vec<Vec<Span<'static>>> {
     let session = market::clock_at(now).session;
     let Some(price) = quote.extended_price_at(now) else {
         if market::is_us_equity(&quote.symbol) && matches!(session, Session::Pre | Session::Post) {
@@ -319,13 +369,17 @@ fn extended_zone(quote: &Quote, now: DateTime<Utc>, theme: &Theme) -> Vec<Vec<Sp
             format!(
                 " · {} · {time} · {} old",
                 quote.timing.extended_feed.label(),
-                if age >= 1440 {
-                    format!("{}d{}h", age / 1440, age % 1440 / 60)
-                } else if age >= 60 {
-                    format!("{}h{}m", age / 60, age % 60)
-                } else {
-                    format!("{age}m")
-                }
+                field(
+                    if age >= 1440 {
+                        format!("{}d{}h", age / 1440, age % 1440 / 60)
+                    } else if age >= 60 {
+                        format!("{}h{}m", age / 60, age % 60)
+                    } else {
+                        format!("{age}m")
+                    },
+                    6,
+                    stable
+                )
             )
         })
         .unwrap_or_default();
@@ -335,25 +389,30 @@ fn extended_zone(quote: &Quote, now: DateTime<Utc>, theme: &Theme) -> Vec<Vec<Sp
         String::new()
     };
     let style = Style::new().fg(move_color(Some(change), theme));
+    let price = field(fmt_price(price), 8, stable);
+    let change = field(format!("{change:+.2}"), 8, stable);
+    let pct = field(format!("{pct:+.2}%"), 8, stable);
     vec![
         vec![Span::styled(
-            format!(
-                "  {label} {} {change:+.2} {pct:+.2}%{detail}",
-                fmt_price(price)
-            ),
+            format!("  {label} {price} {change} {pct}{detail}"),
             style,
         )],
         vec![Span::styled(
-            format!("  {label} {} {pct:+.2}%{source}", fmt_price(price)),
+            format!("  {label} {price} {pct}{source}"),
             style,
         )],
-        vec![Span::styled(format!("  {label} {pct:+.2}%{source}"), style)],
+        vec![Span::styled(format!("  {label} {pct}{source}"), style)],
     ]
 }
 
 /// Session badge plus the countdown to the next bell. Crypto pairs trade
 /// around the clock, so they get the fact rather than a countdown.
-fn session_zone(app: &App, symbol: &str, now: DateTime<Utc>) -> Vec<Vec<Span<'static>>> {
+fn session_zone(
+    app: &App,
+    symbol: &str,
+    now: DateTime<Utc>,
+    stable: bool,
+) -> Vec<Vec<Span<'static>>> {
     let theme = &app.theme;
     if market::is_crypto(symbol) {
         return vec![vec![Span::styled(
@@ -367,11 +426,23 @@ fn session_zone(app: &App, symbol: &str, now: DateTime<Utc>) -> Vec<Vec<Span<'st
         Session::Pre | Session::Post => Style::new().fg(theme.warn),
         Session::Closed => theme.subtle(),
     };
-    let badge = Span::styled(format!("  {}", clock.session.label()), style);
+    let label = clock.session.label();
+    let label = if stable {
+        pad_right(label, 8)
+    } else {
+        label.to_string()
+    };
+    let countdown = clock.countdown();
+    let countdown = if stable {
+        pad_right(&countdown, 17)
+    } else {
+        countdown
+    };
+    let badge = Span::styled(format!("  {label}"), style);
     vec![
         vec![
             badge.clone(),
-            Span::styled(format!(" {}", clock.countdown()), theme.subtle()),
+            Span::styled(format!(" {countdown}"), theme.subtle()),
         ],
         vec![badge],
     ]
@@ -384,6 +455,7 @@ fn range_zone(
     candles: &[Candle],
     color: Color,
     theme: &Theme,
+    stable: bool,
 ) -> Vec<Vec<Span<'static>>> {
     // The source's own figure first: it is the regular session's range by
     // definition, while the candles are whatever was fetched, which now
@@ -412,9 +484,15 @@ fn range_zone(
             ),
         ]
     };
-    let mut labelled = vec![Span::styled(format!("  {}", fmt_price(lo)), theme.subtle())];
+    let mut labelled = vec![Span::styled(
+        format!("  {}", field(fmt_price(lo), 6, stable)),
+        theme.subtle(),
+    )];
     labelled.extend(bars(""));
-    labelled.push(Span::styled(fmt_price(hi), theme.subtle()));
+    labelled.push(Span::styled(
+        field(fmt_price(hi), 6, stable),
+        theme.subtle(),
+    ));
     // The bare track keeps the position when the numbers do not fit; the
     // watchlist table carries the low and high anyway.
     vec![labelled, bars("  ")]
@@ -439,7 +517,7 @@ fn day_range(candles: &[Candle]) -> Option<(f64, f64)> {
 /// The rest of the watchlist as percentages, in watchlist order, as many
 /// as `room` fits. A ticker with no data yet reads as a dash rather than
 /// vanishing: the row it is missing from is the answer to "is it loading".
-fn peers(app: &App, selected: &str, room: usize) -> Vec<Span<'static>> {
+fn peers(app: &App, selected: &str, room: usize, stable: bool) -> Vec<Span<'static>> {
     let theme = &app.theme;
     let mut out: Vec<Span<'static>> = Vec::new();
     let mut used = 0;
@@ -453,7 +531,7 @@ fn peers(app: &App, selected: &str, room: usize) -> Vec<Span<'static>> {
         };
         let group = vec![
             Span::styled(format!("  {symbol} "), theme.subtle()),
-            Span::styled(text, style),
+            Span::styled(field(text, 8, stable), style),
         ];
         let w = total_width(&group);
         if used + w > room {
@@ -467,6 +545,16 @@ fn peers(app: &App, selected: &str, room: usize) -> Vec<Span<'static>> {
 
 fn total_width(spans: &[Span<'static>]) -> usize {
     spans.iter().map(|s| s.width()).sum()
+}
+
+/// Compact panes spend every cell on content. Wider rails reserve common
+/// numeric widths; unusually large values grow rather than losing digits.
+fn field(text: String, width: usize, stable: bool) -> String {
+    if stable {
+        pad_right(&text, width)
+    } else {
+        text
+    }
 }
 
 /// The rail's text, as a reader sees it.

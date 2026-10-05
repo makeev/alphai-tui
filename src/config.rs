@@ -123,6 +123,10 @@ pub struct UiConfig {
     pub quote_rail: Option<bool>,
     /// Start in bare mode: no header, no footer (default false).
     pub bare: Option<bool>,
+    /// Price color fades and the refresh spinner (default true).
+    pub animations: Option<bool>,
+    /// Allow synchronized frames when terminfo advertises support.
+    pub synchronized_output: Option<bool>,
     /// Startup window of the Insider view's chart panel: "3m" (default),
     /// "12m" or "off"; the g key cycles it live.
     pub insider_chart: Option<String>,
@@ -261,6 +265,8 @@ pub struct UiDefaults {
     pub quote_rail: bool,
     /// Start without the header and footer; `--bare` also turns it on.
     pub bare: bool,
+    pub animations: bool,
+    pub synchronized_output: bool,
     pub news_layout: NewsLayout,
     pub news_scope: NewsScope,
     pub news_min_score: u8,
@@ -275,6 +281,8 @@ impl Default for UiDefaults {
             view_idx: ui::view_index(ui::ViewId::Split),
             quote_rail: true,
             bare: false,
+            animations: true,
+            synchronized_output: true,
             news_layout: NewsLayout::default(),
             news_scope: NewsScope::default(),
             news_min_score: DEFAULT_NEWS_MIN_SCORE,
@@ -544,6 +552,12 @@ fn resolve_ui(raw: Option<&UiConfig>, warnings: &mut Vec<String>) -> UiDefaults 
     }
     if let Some(on) = raw.bare {
         out.bare = on;
+    }
+    if let Some(on) = raw.animations {
+        out.animations = on;
+    }
+    if let Some(on) = raw.synchronized_output {
+        out.synchronized_output = on;
     }
     if let Some(layout) = &raw.news_layout {
         match NewsLayout::from_name(layout) {
@@ -834,6 +848,8 @@ avg_price = 100
                 alphai_ttl_secs: Some(120),
                 quote_rail: Some(false),
                 bare: Some(true),
+                animations: Some(false),
+                synchronized_output: Some(false),
             }),
             chart: Some(ChartConfig {
                 style: Some("line".into()),

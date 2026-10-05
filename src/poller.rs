@@ -11,6 +11,11 @@ use crate::domain::{Interval, Range, Sessions, TickerData, fetch_range};
 use crate::source::DataSource;
 
 pub enum SourceEvent {
+    /// Actual network work, independent of a manual refresh keypress.
+    Refreshing {
+        source: Arc<dyn DataSource>,
+        active: bool,
+    },
     Data {
         params: Option<(Range, Interval, Sessions)>,
         source: Arc<dyn DataSource>,
@@ -85,6 +90,15 @@ pub async fn run(poller: Poller) {
         // What the next start would have to match to reuse these rows.
         let window = cache::params_key(range, interval, sessions);
         let source_name = current.name();
+        if tx
+            .send(SourceEvent::Refreshing {
+                source: current.clone(),
+                active: true,
+            })
+            .is_err()
+        {
+            return;
+        }
         current.begin_cycle(&symbols);
         let mut set = JoinSet::new();
         for symbol in &symbols {
@@ -119,6 +133,15 @@ pub async fn run(poller: Poller) {
             if tx.send(event).is_err() {
                 return; // UI is gone
             }
+        }
+        if tx
+            .send(SourceEvent::Refreshing {
+                source: current,
+                active: false,
+            })
+            .is_err()
+        {
+            return;
         }
         // Once a cycle at most, and the store itself holds the disk down
         // to one write a minute.

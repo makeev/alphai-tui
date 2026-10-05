@@ -3,6 +3,7 @@
 //! `crate::ui` are stateless renderers over `&mut App`.
 
 mod feeds;
+mod runtime;
 mod settings;
 
 pub use feeds::{FeedBundle, FeedKind};
@@ -15,8 +16,8 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use chrono::{DateTime, Local, NaiveDate, Utc};
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
-use ratatui::DefaultTerminal;
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use ratatui::style::Style;
 use ratatui::widgets::TableState;
 use tokio::sync::Notify;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
@@ -26,15 +27,13 @@ use crate::config::{self, ChartDefaults, Config, UiDefaults};
 use crate::domain::{Interval, Range, Sessions, TickerData};
 use crate::indicators::MaType;
 use crate::keymap::{Action, Keymap};
+use crate::motion;
 use crate::poller::{SharedEvery, SharedParams, SharedSource, SharedSymbols, SourceEvent};
 use crate::portfolio::{self, Position};
 use crate::theme::Theme;
 use crate::ui;
 
-/// How long the last-price highlight stays lit after a poll changes a
-/// symbol's price. The event loop redraws at least every 100ms, so the
-/// pulse both appears and clears promptly.
-pub const PRICE_FLASH: Duration = Duration::from_millis(1500);
+pub use crate::motion::PRICE_FLASH;
 
 /// How long every symbol has to be failing before the app looks for another
 /// source. Three cycles at the default 15s poll, which is enough to tell a
@@ -303,6 +302,10 @@ pub struct App {
     /// pulse the price for `PRICE_FLASH` after it via `price_flash_dir`;
     /// the first data a symbol ever gets sets no flash (nothing changed).
     pub price_flash: HashMap<String, (Instant, bool)>,
+    pub animations: bool,
+    pub synchronized_output: bool,
+    price_refreshing: bool,
+    animation_epoch: Instant,
     /// Symbols whose rows came off disk or from an abandoned source,
     /// with the unix second they were fetched. The rail
     /// badges them so a blocked source never passes old prices off as live;
@@ -480,6 +483,10 @@ impl App {
             errors: HashMap::new(),
             error_window: HashMap::new(),
             price_flash: HashMap::new(),
+            animations: init.ui.animations,
+            synchronized_output: init.ui.synchronized_output,
+            price_refreshing: false,
+            animation_epoch: Instant::now(),
             from_cache: HashMap::new(),
             quote_fetched: HashMap::new(),
             source_trouble_since: None,
@@ -621,8 +628,36 @@ impl App {
     pub fn price_flash_dir(&self, symbol: &str) -> Option<bool> {
         self.price_flash
             .get(symbol)
-            .filter(|(at, _)| at.elapsed() < PRICE_FLASH)
+            .filter(|(at, _)| self.animations && at.elapsed() < PRICE_FLASH)
             .map(|&(_, up)| up)
+    }
+
+    pub fn price_style(&self, symbol: &str, base: Style) -> Style {
+        let Some(up) = self.price_flash_dir(symbol) else {
+            return base;
+        };
+        let elapsed = self.price_flash[symbol].0.elapsed();
+        motion::pulse(
+            base,
+            if up { self.theme.up } else { self.theme.down },
+            elapsed,
+            PRICE_FLASH,
+        )
+    }
+
+    pub fn refreshing(&self) -> bool {
+        self.price_refreshing || !self.inflight.is_empty()
+    }
+
+    /// A fixed-width ASCII cell, including when idle or motion is off.
+    pub fn refresh_marker(&self) -> char {
+        if !self.refreshing() {
+            ' '
+        } else if self.animations {
+            motion::spinner(self.animation_epoch.elapsed())
+        } else {
+            '*'
+        }
     }
 
     /// Identity of the visible view (its `view_idx` is the tab position).
@@ -630,26 +665,13 @@ impl App {
         ui::VIEWS[self.view_idx].id()
     }
 
-    pub fn run(&mut self, terminal: &mut DefaultTerminal) -> Result<()> {
-        loop {
-            while let Ok(ev) = self.rx.try_recv() {
-                self.apply(ev);
-            }
-            self.fallback_if_stuck();
-            self.ensure_alphai_data();
-            terminal.draw(|f| ui::draw(f, self))?;
-            if event::poll(std::time::Duration::from_millis(100))?
-                && let Event::Key(key) = event::read()?
-                && key.kind == KeyEventKind::Press
-                && self.handle_key(key)
-            {
-                return Ok(());
-            }
-        }
-    }
-
     pub(crate) fn apply(&mut self, event: SourceEvent) {
         match event {
+            SourceEvent::Refreshing { source, active } => {
+                if Arc::ptr_eq(&source, &self.price_source()) {
+                    self.price_refreshing = active;
+                }
+            }
             SourceEvent::Data {
                 params,
                 source,
@@ -687,6 +709,7 @@ impl App {
                     // The first real price after a cached one is not a tick:
                     // pulsing it would report yesterday's move as just now.
                     && !was_cached
+                    && self.animations
                 {
                     self.price_flash.insert(
                         symbol.clone(),
@@ -759,6 +782,7 @@ impl App {
         self.error_window.clear();
         self.source_trouble_since = None;
         self.price_flash.clear();
+        self.price_refreshing = false;
         self.notice = None;
         self.refresh.notify_one();
     }

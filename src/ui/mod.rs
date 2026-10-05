@@ -21,6 +21,8 @@ use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
+use unicode_segmentation::UnicodeSegmentation;
+use unicode_width::UnicodeWidthStr;
 
 use crate::app::{App, FeedKind, PromptKind};
 use crate::keymap::Action;
@@ -198,17 +200,29 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     }
 }
 
-/// `text` cut to `width` columns with a trailing ellipsis. Counts
-/// characters rather than display cells (close enough for headlines, and
-/// it never splits a character the way byte truncation would); a width of
-/// 0 means "no limit known", so the text passes through untouched.
+/// Cut to display cells, preserving grapheme clusters (wide characters,
+/// combining accents and joined emoji). Zero still means no known limit.
 pub(crate) fn ellipsize(text: &str, width: usize) -> String {
-    if width == 0 || text.chars().count() <= width {
+    if width == 0 || text.width() <= width {
         return text.to_string();
     }
-    let mut out: String = text.chars().take(width.saturating_sub(1)).collect();
+    let mut out = String::new();
+    let mut used = 0;
+    for grapheme in text.graphemes(true) {
+        let cells = grapheme.width();
+        if used + cells > width - 1 {
+            break;
+        }
+        out.push_str(grapheme);
+        used += cells;
+    }
     out.push('…');
     out
+}
+
+/// Reserve cells without truncating a meaningful price or label.
+pub(crate) fn pad_right(text: &str, width: usize) -> String {
+    format!("{text}{}", " ".repeat(width.saturating_sub(text.width())))
 }
 
 /// Centered modal rect used by the settings and article overlays.
@@ -228,7 +242,7 @@ fn header_line(app: &App, width: u16) -> Paragraph<'static> {
         " alphai-tui ",
         Style::new().bold().fg(app.theme.accent),
     )];
-    let source = format!(" · {}", app.source_name);
+    let source = format!(" · {} {}", app.source_name, app.refresh_marker());
     let key_state = if app.alphai_enabled {
         " · alphai ✓"
     } else {

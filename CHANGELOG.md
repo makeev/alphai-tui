@@ -5,6 +5,23 @@ the crates.io releases; from 0.7.0 on each one is also a git tag and a
 GitHub release with prebuilt binaries. The Homebrew tap, the AUR and the
 apt repository joined later, and carry every version since.
 
+## 0.30.0 - 2026-10-05
+
+- Fade price colors over 900 ms without changing text weight or decoration,
+  and show a fixed-width ASCII indicator while requests are in progress.
+  The new Animations settings row previews and saves an off switch; ANSI
+  themes retain their own palette and use a brief color highlight.
+- Render on input, data and clock changes, with a frame limit during
+  effects and slower refresh activity. Idle screens no longer rebuild ten
+  times a second, and slow terminals skip missed animation frames.
+- Reserve space for changing quote values and session countdowns on wide
+  rails. Truncate headlines by display cells without splitting graphemes.
+  Settings keep the selected row visible even in small panes.
+- Use synchronized output only when the current Unix terminfo entry
+  advertises a compatible Sync capability. End each frame on render errors
+  and unwinding too; missing support keeps ordinary output. The file-only
+  `ui.synchronized_output` switch can disable the extension.
+
 ## 0.29.0 - 2026-10-01
 
 - Separate the current quote from the last chart bar: the quote rail shows

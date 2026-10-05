@@ -1,6 +1,6 @@
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Rect};
-use ratatui::style::{Modifier, Style, Stylize};
+use ratatui::style::{Style, Stylize};
 use ratatui::text::Text;
 use ratatui::widgets::{Cell, Row, Table};
 
@@ -162,12 +162,7 @@ pub fn render_table(f: &mut Frame, area: Rect, app: &mut App) {
             };
             // Freshly updated price pulses in the tick's color (see
             // `App::price_flash_dir`), so the table reads as live too.
-            let price_style = match app.price_flash_dir(symbol) {
-                Some(up) => Style::new()
-                    .fg(if up { app.theme.up } else { app.theme.down })
-                    .add_modifier(Modifier::BOLD),
-                None => Style::new(),
-            };
+            let price_style = app.price_style(symbol, Style::new().fg(app.theme.text));
             let change = q
                 .change()
                 .map(|c| format!("{c:+.2}"))

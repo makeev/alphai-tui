@@ -46,6 +46,7 @@ pub struct SettingsState {
     /// The panel look on screen; applies live as it cycles, and Save
     /// writes it to `[ui] borders`.
     pub borders_choice: Panels,
+    pub animations_choice: bool,
     pub message: Option<String>,
 }
 
@@ -68,6 +69,8 @@ pub enum SettingsRow {
     Borders,
     /// The color preset (cycles the same list as the p key, live).
     ThemeChoice,
+    /// Price color fades and the refresh spinner (live).
+    Animations,
     /// The save button.
     Save,
 }
@@ -116,6 +119,7 @@ pub fn settings_rows() -> &'static [SettingsRow] {
         rows.push(SettingsRow::NewsLayout);
         rows.push(SettingsRow::Borders);
         rows.push(SettingsRow::ThemeChoice);
+        rows.push(SettingsRow::Animations);
         rows.push(SettingsRow::Save);
         rows
     });
@@ -155,6 +159,7 @@ impl App {
         s.theme_choice = self.theme_name;
         s.news_layout_choice = self.news_layout;
         s.borders_choice = self.theme.panels;
+        s.animations_choice = self.animations;
     }
 
     pub(super) fn handle_settings_key(&mut self, key: KeyEvent) -> bool {
@@ -202,6 +207,7 @@ impl App {
                 | SettingsRow::NewsOpen
                 | SettingsRow::NewsLayout
                 | SettingsRow::Borders
+                | SettingsRow::Animations
                 | SettingsRow::ThemeChoice => self.cycle_row(1),
                 SettingsRow::Key(field) => {
                     let s = &mut self.settings;
@@ -252,6 +258,11 @@ impl App {
                 self.theme.panels = panels;
             }
             SettingsRow::ThemeChoice => self.cycle_theme_choice(dir),
+            SettingsRow::Animations => {
+                self.animations = !self.animations;
+                self.settings.animations_choice = self.animations;
+                self.price_flash.clear();
+            }
             _ => {}
         }
     }
@@ -309,6 +320,7 @@ impl App {
         ui.news_layout = (layout != NewsLayout::default()).then(|| layout.name().to_string());
         let panels = self.settings.borders_choice;
         ui.borders = (panels != Panels::default()).then(|| panels.name().to_string());
+        ui.animations = (!self.settings.animations_choice).then_some(false);
         cfg.ui = (ui != config::UiConfig::default()).then_some(ui);
         if let Some(secs) = parse_every(&self.settings.every_input) {
             cfg.every = Some(secs);

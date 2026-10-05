@@ -46,7 +46,20 @@ pub fn render(f: &mut Frame, app: &App) {
         .modal()
         .title(app.theme.heading(" Settings "))
         .border_style(Style::new().fg(app.theme.accent));
-    f.render_widget(Paragraph::new(lines).block(block), area);
+    // Even the compact form can outgrow a small pane or the first-run
+    // welcome. Keep the selected row reachable as new settings are added.
+    let selected_line = lines
+        .iter()
+        .position(|line| line.spans.first().is_some_and(|span| span.content == "▶ "))
+        .unwrap_or(0);
+    let visible = usize::from(area.height.saturating_sub(2));
+    let scroll = selected_line.saturating_sub(visible.saturating_sub(1));
+    f.render_widget(
+        Paragraph::new(lines)
+            .block(block)
+            .scroll((scroll as u16, 0)),
+        area,
+    );
 }
 
 /// How much a short terminal leaves out, least to most.
@@ -259,6 +272,11 @@ fn row_text(
             format!("‹ {} ›", s.theme_choice),
             Hint::Plain("color preset; } / { cycle it anywhere".to_string()),
         ),
+        SettingsRow::Animations => (
+            "Animations",
+            format!("‹ {} ›", if s.animations_choice { "on" } else { "off" }),
+            Hint::Plain("price pulses and refresh activity".to_string()),
+        ),
         SettingsRow::Save => unreachable!("drawn as a button"),
     }
 }
@@ -346,6 +364,9 @@ fn describe(s: &SettingsState, info: &SourceInfo, row: SettingsRow) -> String {
             .to_string(),
         SettingsRow::ThemeChoice => "Color preset, previewed live. } and { cycle it anywhere; \
              single colors can be set under [theme] in the config file."
+            .to_string(),
+        SettingsRow::Animations => "Price color fades and a refresh spinner. \
+             Off keeps a steady * while requests run. Applies live; Save remembers it."
             .to_string(),
         SettingsRow::Save => "Writes everything above, and the watchlist on screen, to the \
              config file and applies it. Esc closes without writing."

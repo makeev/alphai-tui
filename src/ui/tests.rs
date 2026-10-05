@@ -1,5 +1,6 @@
 mod calendar;
 mod design;
+mod motion;
 
 use std::sync::{Arc, RwLock};
 use std::time::Instant;
@@ -819,50 +820,43 @@ fn live_quote_updates_the_last_candle() {
     assert_eq!(app.data["AAPL"].candles[0].close, 99.5);
 }
 
-fn reversed_cells(app: &mut App) -> Vec<ratatui::style::Color> {
-    use ratatui::style::Modifier;
-    let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
-    terminal.draw(|f| ui::draw(f, app)).unwrap();
-    let buffer = terminal.backend().buffer().clone();
-    let mut out = Vec::new();
-    for y in 0..30 {
-        for x in 0..100 {
-            let cell = buffer.cell((x, y)).unwrap();
-            if cell.modifier.contains(Modifier::REVERSED) {
-                out.push(cell.fg);
-            }
-        }
-    }
-    out
-}
-
-/// An active pulse inverts the price (title and margin tag) in the tick's
-/// color; an expired one reverts on the next frame. Nothing else in the
-/// Chart view uses REVERSED, so the cell scan is unambiguous.
 #[test]
-fn price_flash_inverts_the_price_on_the_chart() {
+fn price_flash_only_changes_foregrounds_and_restores_them() {
+    let draw = |app: &mut App| {
+        let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        terminal.draw(|f| ui::draw(f, app)).unwrap();
+        terminal.backend().buffer().clone()
+    };
     let mut app = fake_app();
     app.view_idx = ui::view_index(ui::ViewId::Chart);
-    assert!(
-        reversed_cells(&mut app).is_empty(),
-        "inverted cells without a flash"
-    );
-
-    app.price_flash
-        .insert("AAPL".into(), (Instant::now(), true));
-    let cells = reversed_cells(&mut app);
-    assert!(!cells.is_empty(), "flash did not invert the price");
-    assert!(
-        cells.iter().all(|&fg| fg == app.theme.up),
-        "up tick must use the up color"
-    );
-
-    app.price_flash
-        .insert("AAPL".into(), (Instant::now() - PRICE_FLASH, true));
-    assert!(
-        reversed_cells(&mut app).is_empty(),
-        "expired flash still inverted"
-    );
+    app.frozen_now = Some(market_open_moment());
+    for show_rail in [true, false] {
+        app.show_rail = show_rail;
+        app.price_flash.clear();
+        let original = draw(&mut app);
+        for (up, color) in [(true, app.theme.up), (false, app.theme.down)] {
+            app.price_flash.insert("AAPL".into(), (Instant::now(), up));
+            let pulsing = draw(&mut app);
+            let mut changed = 0;
+            for (before, after) in original.content.iter().zip(&pulsing.content) {
+                if before.fg != after.fg {
+                    assert_eq!(after.fg, color);
+                    changed += 1;
+                }
+                let mut restored = after.clone();
+                restored.fg = before.fg;
+                assert_eq!(&restored, before, "price pulse changed more than its color");
+            }
+            assert!(changed >= 6, "quote price did not change color");
+        }
+        app.price_flash
+            .insert("AAPL".into(), (Instant::now() - PRICE_FLASH, true));
+        assert_eq!(
+            draw(&mut app),
+            original,
+            "expired price pulse remains visible"
+        );
+    }
 }
 
 /// The candle-mode SMA overlay draws connected braille lines, not the old
@@ -5170,7 +5164,13 @@ fn the_rail_and_watchlist_use_the_portfolios_extended_valuation() {
     let now = "2026-09-11T10:30:00Z".parse().unwrap();
     let rail = ui::rail::text(&ui::rail::line(&app, 180, now));
     assert!(rail.contains("PRE 91.28"), "{rail}");
-    assert!(rail.contains("×300 +306.00 +1.13%"), "{rail}");
+    assert!(
+        rail.split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .contains("×300 +306.00 +1.13%"),
+        "{rail}"
+    );
     app.view_idx = ui::view_index(ui::ViewId::Table);
     let screen = render_sized(&mut app, 180, 20);
     let body = panels(&screen);
