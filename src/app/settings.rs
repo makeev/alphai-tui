@@ -7,7 +7,7 @@
 
 use std::collections::BTreeMap;
 use std::sync::LazyLock;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crossterm::event::{KeyCode, KeyEvent};
 
@@ -336,7 +336,7 @@ impl App {
             self.settings.message = Some("poll interval: whole seconds, 2 or more".to_string());
             return;
         };
-        let cfg = self.settings_merged_config();
+        let mut cfg = self.settings_merged_config();
         if self.settings.extended_choice == ExtendedSource::Alpaca && alpaca_keys(&cfg).is_none() {
             self.settings.message =
                 Some("pre/after hours from alpaca needs the Alpaca key ID and secret".to_string());
@@ -404,11 +404,30 @@ impl App {
         // The list on screen is the saved one from here on, so `a` and `d`
         // write it through even in a session started from the command line.
         self.watchlist_saved = true;
-        match config::save_at(self.config_path.as_deref(), &cfg) {
-            Ok(()) => {
+        let live = &self.symbols;
+        let pending = &self.pending_edits;
+        let saved = match self.config_path.as_deref() {
+            Some(path) => config::save_whole(path, &mut cfg, self.on_defaults, |cfg| {
+                for edit in pending {
+                    edit.apply(cfg, live);
+                }
+            }),
+            None => config::save_at(None, &cfg).map(|()| None),
+        };
+        match saved {
+            Ok(aside) => {
+                self.pending_edits.clear();
+                self.on_defaults = false;
                 self.config = cfg;
                 self.settings.open = false;
                 self.settings.first_run = false;
+                if let Some(aside) = aside {
+                    let name = aside.file_name().unwrap_or_default().to_string_lossy();
+                    self.notice = Some((
+                        format!("Saved. The config that did not load is kept as {name}"),
+                        Instant::now(),
+                    ));
+                }
             }
             Err(e) => {
                 // Applied live but not persisted; keep the overlay open so the

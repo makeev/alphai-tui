@@ -142,11 +142,15 @@ impl Store {
             return false;
         }
         // Through a temp file: a half-written cache would be dropped on the
-        // next load, which is exactly the start where it was wanted.
-        let tmp = path.with_extension("tmp");
+        // next load, which is exactly the start where it was wanted. One
+        // per process: two panes writing the same temp file could rename
+        // the other's half-written one into place.
+        let tmp = path.with_extension(format!("tmp{}", std::process::id()));
         let written = std::fs::write(&tmp, raw).is_ok() && std::fs::rename(&tmp, &path).is_ok();
         if written {
             self.dirty = false;
+        } else {
+            let _ = std::fs::remove_file(&tmp);
         }
         written
     }

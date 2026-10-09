@@ -82,7 +82,7 @@ struct Args {
 
 fn main() -> Result<()> {
     let args = Args::parse();
-    let (cfg, cfg_existed, config_path) = config::load_at(args.config.as_deref());
+    let (cfg, cfg_state, config_path) = config::load_at(args.config.as_deref());
     // Validation warnings go to stderr before the TUI takes the terminal,
     // so they stay readable in scrollback after exit.
     let (resolved, warnings) = config::resolve(&cfg, args.theme.as_deref());
@@ -222,7 +222,11 @@ fn main() -> Result<()> {
         ui,
         keymap: resolved.keymap,
         alphai_enabled: alphai_key.is_some(),
-        first_run: !cfg_existed,
+        first_run: cfg_state == config::FileState::Missing,
+        config_error: match cfg_state {
+            config::FileState::Broken(e) => Some(e),
+            _ => None,
+        },
         source_fallback,
     });
     for (symbol, entry) in seeds {

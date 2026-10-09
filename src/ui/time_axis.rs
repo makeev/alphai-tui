@@ -293,11 +293,11 @@ impl TimeAxis {
         if grid {
             for tick in &self.ticks {
                 for y in plot.y..plot.bottom() {
-                    if (y - plot.y) % 2 == 0 || tick.major {
-                        if let Some(cell) = buf.cell_mut((tick.x, y)) {
-                            cell.set_char('┆')
-                                .set_style(Style::new().fg(theme.ref_line));
-                        }
+                    if ((y - plot.y).is_multiple_of(2) || tick.major)
+                        && let Some(cell) = buf.cell_mut((tick.x, y))
+                    {
+                        cell.set_char('┆')
+                            .set_style(Style::new().fg(theme.ref_line));
                     }
                 }
             }

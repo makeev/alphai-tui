@@ -5,6 +5,30 @@ the crates.io releases; from 0.7.0 on each one is also a git tag and a
 GitHub release with prebuilt binaries. The Homebrew tap, the AUR and the
 apt repository joined later, and carry every version since.
 
+## 0.30.1 - 2026-10-09
+
+- A config file that does not load is no longer written over. Such a file
+  used to start the session on the defaults with a warning only visible
+  after exit, and the next `a`, `d` or `p` saved those defaults over it,
+  API keys included. Now the footer names the file and the error, those
+  keys leave it alone, and Save in the settings screen keeps a copy as
+  `config.toml.broken` before replacing it. A file fixed while the app
+  runs is not overwritten by Save either: it asks for a restart.
+- A `[[positions]]` entry with a missing or mistyped field is skipped with a
+  warning instead of failing the whole file, and stays in the file as
+  typed, a misspelled field name included.
+- `a`, `d` and `p` apply their one change to the config as it is on disk,
+  under a lock file beside it (`config.toml.lock`), so two panes on one
+  config no longer drop each other's tickers and holdings. Save in the
+  settings screen keeps the holdings on disk too. A change that could not
+  be written is kept and goes in with the next write that succeeds.
+- The config file is created user-only before any key is written to it,
+  instead of being restricted right after the write. The quote cache uses
+  a temporary file per process, so two panes cannot swap in each other's
+  half-written cache.
+- Building from source needs Rust 1.89, for the standard library's file
+  locks.
+
 ## 0.30.0 - 2026-10-05
 
 - Fade price colors over 900 ms without changing text weight or decoration,

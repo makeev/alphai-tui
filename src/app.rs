@@ -281,6 +281,9 @@ pub struct AppInit {
     pub keymap: Keymap,
     pub alphai_enabled: bool,
     pub first_run: bool,
+    /// Why the config file did not load, when it exists but does not: the
+    /// session runs on the defaults and says so in the footer.
+    pub config_error: Option<String>,
     /// Whether a source that stops answering may be swapped for one that
     /// still does (`source_fallback` in the config).
     pub source_fallback: bool,
@@ -448,6 +451,16 @@ pub struct App {
     pub watchlist_saved: bool,
     pub config: Config,
     pub config_path: Option<PathBuf>,
+    /// `a`, `d` and `p` edits that never reached the file because a write
+    /// failed. Every later write, Save in the settings screen included,
+    /// replays them over the file as it is then, and only a write that
+    /// lands clears them: otherwise a holding typed while the file was
+    /// broken went missing at the first save after it was fixed.
+    pub pending_edits: Vec<config::Edit>,
+    /// The session started on a file that did not load, so `config` holds
+    /// the defaults rather than what the file says. Save refuses to write
+    /// them over the file once it loads again; a successful Save ends it.
+    pub on_defaults: bool,
     pub theme: Theme,
     /// The preset `theme` was built from. The cycle key and the settings
     /// row move this name and rebuild the theme from it, so what is on
@@ -476,6 +489,8 @@ impl App {
         let watchlist_saved = watchlist_is_saved(&init.config.watchlist, &init.symbols);
         let mut app = Self {
             watchlist_saved,
+            pending_edits: Vec::new(),
+            on_defaults: init.config_error.is_some(),
             symbols: init.symbols,
             shared_symbols: init.shared_symbols,
             prompt: Prompt::default(),
@@ -563,6 +578,17 @@ impl App {
         if init.first_run {
             app.open_settings();
             app.settings.first_run = true;
+        }
+        // The stderr warning is behind the TUI until it exits, and a reader
+        // who sees no keys and no watchlist would think the file was lost.
+        if let Some(error) = init.config_error {
+            let name = config::file_label(app.config_path.as_deref());
+            app.notice = Some((
+                format!(
+                    "{name} did not load ({error}): running on the defaults, fix it and restart"
+                ),
+                Instant::now(),
+            ));
         }
         app
     }
@@ -1169,7 +1195,7 @@ impl App {
     /// data, not a display preference, and losing them on quit would read
     /// as a bug.
     fn apply_position(&mut self, entry: portfolio::Entry) -> Result<(), String> {
-        match entry {
+        let saved = match entry {
             portfolio::Entry::Set {
                 symbol,
                 qty,
@@ -1181,12 +1207,16 @@ impl App {
                     avg_price,
                 };
                 match self.positions.iter_mut().find(|p| p.symbol == next.symbol) {
-                    Some(slot) => *slot = next,
-                    None => self.positions.push(next),
+                    Some(slot) => *slot = next.clone(),
+                    None => self.positions.push(next.clone()),
                 }
+                self.save_edit(config::Edit::Hold(next))
             }
-            portfolio::Entry::Clear { symbol } => self.positions.retain(|p| p.symbol != symbol),
-        }
+            portfolio::Entry::Clear { symbol } => {
+                self.positions.retain(|p| p.symbol != symbol);
+                self.save_edit(config::Edit::Clear(symbol))
+            }
+        };
         self.portfolio_selected = self
             .portfolio_selected
             .min(self.positions.len().saturating_sub(1));
@@ -1194,20 +1224,38 @@ impl App {
         // the new row a full interval of waiting for its first price.
         self.sync_shared_symbols();
         self.refresh.notify_one();
-        self.persist_positions()
+        saved.map_err(|e| format!("kept for this session only: {e}"))
     }
 
-    /// Saves the positions into the config file, leaving every other
-    /// section as it was loaded. Deliberately not `settings_merged_config`:
-    /// that one also persists the live watchlist and the settings rows,
-    /// which nobody asked this keypress to do.
-    fn persist_positions(&mut self) -> Result<(), String> {
-        self.config.positions = self.positions.clone();
-        if self.config_path.is_none() {
+    /// Writes one keypress's change into the config file as it is on disk
+    /// now, under the file's lock, leaving every other section alone. Not
+    /// the copy this session loaded: two panes on one config each wrote
+    /// theirs back, and the later save dropped what the other had added.
+    /// A file that does not load is left as it is (`config::update`), and
+    /// the edit waits in `pending_edits` for the next write that lands.
+    /// The change also lands in `self.config`, which Save in the settings
+    /// screen starts from.
+    fn save_edit(&mut self, edit: config::Edit) -> Result<(), String> {
+        edit.apply(&mut self.config, &self.symbols);
+        self.pending_edits.push(edit);
+        let Some(path) = self.config_path.clone() else {
+            self.pending_edits.clear();
             return Ok(());
-        }
-        config::save_at(self.config_path.as_deref(), &self.config)
-            .map_err(|e| format!("kept for this session only: {e}"))
+        };
+        let live = &self.symbols;
+        let pending = &self.pending_edits;
+        let on_disk = config::update(&path, &self.config, |cfg| {
+            for edit in pending {
+                edit.apply(cfg, live);
+            }
+        })
+        .map_err(|e| format!("{e:#}"))?;
+        self.pending_edits.clear();
+        // What another pane wrote is the file's now; Save must not take it
+        // back out.
+        self.config.watchlist = on_disk.watchlist;
+        self.config.positions = on_disk.positions;
+        Ok(())
     }
 
     /// Writes the watchlist through after `a` or `d`, the way a holding is:
@@ -1216,7 +1264,7 @@ impl App {
     /// alone while the file holds another list, or `alphai-tui TSLA` and
     /// one keypress would replace the saved watchlist with two tickers.
     /// Save in the settings screen still keeps such a list on purpose.
-    fn persist_watchlist(&mut self) {
+    fn persist_watchlist(&mut self, edit: config::Edit) {
         if !self.watchlist_saved {
             self.notice = Some((
                 "Tickers from the command line are not saved (s, then Save, keeps them)".into(),
@@ -1224,11 +1272,7 @@ impl App {
             ));
             return;
         }
-        self.config.watchlist = self.symbols.clone();
-        if self.config_path.is_none() {
-            return;
-        }
-        if let Err(e) = config::save_at(self.config_path.as_deref(), &self.config) {
+        if let Err(e) = self.save_edit(edit) {
             self.notice = Some((
                 format!("Watchlist kept for this session only: {e}"),
                 Instant::now(),
@@ -1254,7 +1298,7 @@ impl App {
         self.sync_shared_symbols();
         self.select_symbol(self.symbols.len() - 1);
         self.refresh.notify_one();
-        self.persist_watchlist();
+        self.persist_watchlist(config::Edit::Watch(symbol.to_string()));
         Ok(())
     }
 
@@ -1268,7 +1312,7 @@ impl App {
         let gone = self.symbols.remove(self.selected);
         self.report_date_retry.remove(&gone);
         self.sync_shared_symbols();
-        self.persist_watchlist();
+        self.persist_watchlist(config::Edit::Unwatch(gone.clone()));
         // Prices are cheap to fetch again; the AlphAI feeds are not, so
         // their cache survives a removal and a re-add costs no request.
         // A holding keeps its price: it is still polled, and blanking the

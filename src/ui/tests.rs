@@ -77,6 +77,7 @@ fn empty_app_with_cmds(
         keymap: crate::keymap::Keymap::default(),
         alphai_enabled: true,
         first_run: false,
+        config_error: None,
         source_fallback: true,
     });
     (app, alphai_rx)
@@ -3580,6 +3581,7 @@ fn config_defaults_seed_startup_state() {
         keymap: crate::keymap::Keymap::default(),
         alphai_enabled: false,
         first_run: false,
+        config_error: None,
         source_fallback: true,
     });
     assert_eq!(app.view_idx, ui::view_index(ui::ViewId::News));
@@ -3965,11 +3967,11 @@ fn surface_panels_draw_no_lines() {
 #[test]
 fn settings_save_merge_preserves_file_only_sections() {
     let mut app = fake_app();
-    app.config.positions = vec![Position {
+    app.config.set_position(&Position {
         symbol: "AAPL".into(),
         qty: 12.0,
         avg_price: 182.31,
-    }];
+    });
     app.config.theme = Some(std::collections::BTreeMap::from([(
         "accent".to_string(),
         "magenta".to_string(),
@@ -4144,6 +4146,7 @@ fn first_run_opens_settings_with_welcome() {
         keymap: crate::keymap::Keymap::default(),
         alphai_enabled: false,
         first_run: true,
+        config_error: None,
         source_fallback: true,
     });
     assert!(app.settings.open);
@@ -5468,6 +5471,298 @@ fn tickers_from_the_command_line_leave_the_saved_watchlist_alone() {
     assert!(notice.contains("not saved"), "{notice}");
     assert_eq!(app.config.watchlist, vec!["TSLA"]);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Two panes on one config: each keypress save applies its own change to
+/// the file as it is now, so what the other pane wrote since this one
+/// started stays. Save in the settings screen writes the screen, but the
+/// holdings are not on it, so it keeps the ones on disk.
+#[test]
+fn keypress_saves_keep_what_another_pane_wrote() {
+    let dir = std::env::temp_dir().join(format!("alphai-tui-two-panes-{}", std::process::id()));
+    let path = dir.join("config.toml");
+    let _ = std::fs::remove_dir_all(&dir);
+    let mut app = fake_app();
+    app.config_path = Some(path.clone());
+    // This pane started on an empty config; the other one saved since.
+    let mut other = Config {
+        watchlist: vec!["AAPL".into(), "MSFT".into(), "TSLA".into()],
+        keys: std::collections::BTreeMap::from([("alphai".into(), "ak_live_other".into())]),
+        ..Config::default()
+    };
+    other.set_position(&Position {
+        symbol: "TSLA".into(),
+        qty: 3.0,
+        avg_price: 250.0,
+    });
+    crate::config::save_to(&path, &other).unwrap();
+    let on_disk = || crate::config::load_from(&path).unwrap().unwrap();
+    let held = |cfg: &Config| -> Vec<String> {
+        crate::config::resolve(cfg, None)
+            .0
+            .positions
+            .into_iter()
+            .map(|p| p.symbol)
+            .collect()
+    };
+
+    press(&mut app, KeyCode::Char('p'));
+    for c in "10 180".chars() {
+        press(&mut app, KeyCode::Char(c));
+    }
+    press(&mut app, KeyCode::Enter);
+    assert!(!app.prompt.open, "error: {:?}", app.prompt.error);
+    assert_eq!(held(&on_disk()), ["TSLA", "AAPL"]);
+    assert_eq!(
+        on_disk().keys.get("alphai").map(String::as_str),
+        Some("ak_live_other")
+    );
+
+    press(&mut app, KeyCode::Char('a'));
+    for c in "nvda".chars() {
+        press(&mut app, KeyCode::Char(c));
+    }
+    press(&mut app, KeyCode::Enter);
+    assert_eq!(on_disk().watchlist, ["AAPL", "MSFT", "TSLA", "NVDA"]);
+    press(&mut app, KeyCode::Char('d'));
+    assert_eq!(on_disk().watchlist, ["AAPL", "MSFT", "TSLA"]);
+    assert_eq!(held(&on_disk()), ["TSLA", "AAPL"]);
+    assert!(app.notice.is_none(), "{:?}", app.notice);
+
+    let mut later = on_disk();
+    later.set_position(&Position {
+        symbol: "MSFT".into(),
+        qty: 1.0,
+        avg_price: 400.0,
+    });
+    crate::config::save_to(&path, &later).unwrap();
+    press(&mut app, KeyCode::Char('s'));
+    while !matches!(settings_rows()[app.settings.cursor], SettingsRow::Save) {
+        press(&mut app, KeyCode::Down);
+    }
+    press(&mut app, KeyCode::Enter);
+    assert!(!app.settings.open, "{:?}", app.settings.message);
+    assert_eq!(held(&on_disk()), ["TSLA", "AAPL", "MSFT"]);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A config with a typo used to load as the defaults, and the next `a`
+/// wrote those defaults over it, keys and all. A keypress now leaves such
+/// a file alone and says why; Save, which is explicit, keeps a copy of it
+/// before writing what is on screen.
+#[test]
+fn a_config_that_does_not_load_is_not_written_over() {
+    let dir = std::env::temp_dir().join(format!("alphai-tui-unread-{}", std::process::id()));
+    let path = dir.join("config.toml");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let raw = "every = \"often\"\n\n[keys]\nalphai = \"ak_live_x\"\n";
+    std::fs::write(&path, raw).unwrap();
+    let mut app = fake_app();
+    app.config_path = Some(path.clone());
+    app.on_defaults = true;
+
+    press(&mut app, KeyCode::Char('a'));
+    for c in "nvda".chars() {
+        press(&mut app, KeyCode::Char(c));
+    }
+    press(&mut app, KeyCode::Enter);
+    assert_eq!(app.symbols, ["AAPL", "MSFT", "NVDA"]);
+    let (notice, _) = app.notice.clone().expect("the reader is told");
+    assert!(notice.contains("session only"), "{notice}");
+    assert!(notice.contains("config.toml did not load"), "{notice}");
+
+    press(&mut app, KeyCode::Char('p'));
+    for c in "10 180".chars() {
+        press(&mut app, KeyCode::Char(c));
+    }
+    press(&mut app, KeyCode::Enter);
+    let error = app.prompt.error.clone().expect("the prompt says why");
+    assert!(error.contains("did not load"), "{error}");
+    assert_eq!(app.positions.len(), 1, "kept for the session");
+    press(&mut app, KeyCode::Esc);
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), raw);
+
+    press(&mut app, KeyCode::Char('s'));
+    while !matches!(settings_rows()[app.settings.cursor], SettingsRow::Save) {
+        press(&mut app, KeyCode::Down);
+    }
+    press(&mut app, KeyCode::Enter);
+    assert!(!app.settings.open, "{:?}", app.settings.message);
+    let (notice, _) = app.notice.clone().expect("the copy is named");
+    assert!(notice.contains("config.toml.broken"), "{notice}");
+    assert_eq!(
+        std::fs::read_to_string(dir.join("config.toml.broken")).unwrap(),
+        raw
+    );
+    let saved = crate::config::load_from(&path).unwrap().unwrap();
+    assert_eq!(saved.watchlist, ["AAPL", "MSFT", "NVDA"]);
+    assert!(!app.on_defaults, "the file holds what is on screen now");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A session that started on a file that did not load holds the defaults.
+/// Once the file is fixed while the app runs, Save would write those over
+/// the fix, keys and the sections the settings screen does not show, so it
+/// asks for a restart instead and leaves the file alone. Keypress writes
+/// still go in: they change one line of the file as it is.
+#[test]
+fn save_asks_for_a_restart_once_a_broken_config_is_fixed() {
+    let dir = std::env::temp_dir().join(format!("alphai-tui-fixed-{}", std::process::id()));
+    let path = dir.join("config.toml");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut app = fake_app();
+    app.config_path = Some(path.clone());
+    app.on_defaults = true;
+
+    let fixed = "[keys]\nalphai = \"ak_live_x\"\n\n[theme]\naccent = \"magenta\"\n";
+    std::fs::write(&path, fixed).unwrap();
+    press(&mut app, KeyCode::Char('s'));
+    while !matches!(settings_rows()[app.settings.cursor], SettingsRow::Save) {
+        press(&mut app, KeyCode::Down);
+    }
+    press(&mut app, KeyCode::Enter);
+    assert!(app.settings.open, "Save wrote the defaults over the fix");
+    let message = app.settings.message.clone().unwrap_or_default();
+    assert!(message.contains("restart"), "{message}");
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), fixed);
+    press(&mut app, KeyCode::Esc);
+
+    press(&mut app, KeyCode::Char('a'));
+    for c in "nvda".chars() {
+        press(&mut app, KeyCode::Char(c));
+    }
+    press(&mut app, KeyCode::Enter);
+    let saved = crate::config::load_from(&path).unwrap().unwrap();
+    assert_eq!(
+        saved.keys.get("alphai").map(String::as_str),
+        Some("ak_live_x")
+    );
+    assert!(saved.theme.is_some(), "[theme] went missing");
+    assert_eq!(saved.watchlist, ["AAPL", "MSFT", "NVDA"]);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// An edit that could not reach a broken file is not dropped once the
+/// file is fixed: the next keypress write and Save both lay it over the
+/// file as it is then.
+#[test]
+fn edits_that_missed_a_broken_config_land_once_it_is_fixed() {
+    let dir = std::env::temp_dir().join(format!("alphai-tui-pending-{}", std::process::id()));
+    let path = dir.join("config.toml");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(&path, "every = \"often\"\n").unwrap();
+    let mut app = fake_app();
+    app.config_path = Some(path.clone());
+    let held = |cfg: &Config| -> Vec<String> {
+        crate::config::resolve(cfg, None)
+            .0
+            .positions
+            .into_iter()
+            .map(|p| p.symbol)
+            .collect()
+    };
+    let type_position = |app: &mut App, line: &str| {
+        press(app, KeyCode::Char('p'));
+        for _ in 0..app.prompt.input.len() {
+            press(app, KeyCode::Backspace);
+        }
+        for c in line.chars() {
+            press(app, KeyCode::Char(c));
+        }
+        press(app, KeyCode::Enter);
+    };
+
+    type_position(&mut app, "10 180");
+    assert!(
+        app.prompt.error.is_some(),
+        "the write to a broken file went through"
+    );
+    press(&mut app, KeyCode::Esc);
+    assert_eq!(app.pending_edits.len(), 1);
+
+    // Fixed by hand, with a holding of its own.
+    let mut fixed = Config::default();
+    fixed.set_position(&Position {
+        symbol: "TSLA".into(),
+        qty: 3.0,
+        avg_price: 250.0,
+    });
+    crate::config::save_to(&path, &fixed).unwrap();
+
+    // Save: the holding typed while the file was broken is in it.
+    press(&mut app, KeyCode::Char('s'));
+    while !matches!(settings_rows()[app.settings.cursor], SettingsRow::Save) {
+        press(&mut app, KeyCode::Down);
+    }
+    press(&mut app, KeyCode::Enter);
+    assert!(!app.settings.open, "{:?}", app.settings.message);
+    let on_disk = crate::config::load_from(&path).unwrap().unwrap();
+    assert_eq!(held(&on_disk), ["TSLA", "AAPL"]);
+    assert!(app.pending_edits.is_empty());
+
+    // The same through the next keypress instead of Save.
+    std::fs::write(&path, "every = \"often\"\n").unwrap();
+    press(&mut app, KeyCode::Down);
+    type_position(&mut app, "1 400");
+    press(&mut app, KeyCode::Esc);
+    crate::config::save_to(&path, &fixed).unwrap();
+    press(&mut app, KeyCode::Char('a'));
+    for c in "nvda".chars() {
+        press(&mut app, KeyCode::Char(c));
+    }
+    press(&mut app, KeyCode::Enter);
+    let on_disk = crate::config::load_from(&path).unwrap().unwrap();
+    assert_eq!(held(&on_disk), ["TSLA", "MSFT"]);
+    assert_eq!(on_disk.watchlist, ["AAPL", "MSFT", "NVDA"]);
+    assert!(app.pending_edits.is_empty());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The stderr warning about such a file is behind the TUI until it exits,
+/// and a session without its keys or watchlist would read as a lost
+/// config, so the footer says it at startup. It is no first run either.
+#[test]
+fn a_config_that_did_not_load_is_named_at_startup() {
+    let (_tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    let (alphai_tx, _alphai_rx) = tokio::sync::mpsc::unbounded_channel();
+    let source = make_source("yahoo", &Config::default()).unwrap();
+    let app = App::new(AppInit {
+        positions: Vec::new(),
+        shared_symbols: Arc::new(RwLock::new(vec!["AAPL".into()])),
+        symbols: vec!["AAPL".into()],
+        sessions: Sessions::Regular,
+        source: Arc::new(RwLock::new(source)),
+        source_name: "yahoo",
+        range: Range::D1,
+        interval: Interval::M5,
+        params: Arc::new(RwLock::new((Range::D1, Interval::M5, Sessions::Regular))),
+        every: Arc::new(RwLock::new(std::time::Duration::from_secs(15))),
+        rx,
+        refresh: Arc::new(Notify::new()),
+        alphai_tx,
+        config: Config::default(),
+        config_path: Some("/somewhere/alphai-tui/config.toml".into()),
+        theme: Theme::default(),
+        theme_name: crate::theme::DEFAULT_PRESET,
+        chart: ChartDefaults::default(),
+        ui: UiDefaults::default(),
+        keymap: crate::keymap::Keymap::default(),
+        alphai_enabled: false,
+        first_run: false,
+        config_error: Some("TOML parse error at line 1, column 9".into()),
+        source_fallback: true,
+    });
+    assert!(!app.settings.open);
+    let (notice, _) = app.notice.clone().expect("the footer says it");
+    assert!(
+        notice.contains("config.toml did not load (TOML parse error at line 1, column 9)"),
+        "{notice}"
+    );
+    assert!(notice.contains("restart"), "{notice}");
+    assert!(app.on_defaults);
 }
 
 /// `E` on a chart it cannot change says why instead of flipping in silence.

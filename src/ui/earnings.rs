@@ -601,7 +601,7 @@ fn leader(used: usize, name_w: usize) -> String {
         .map(|i| {
             // A space either side, so the dots never touch the name they
             // start from or the figure they run to.
-            if (used + i) % 2 == 0 && i > 1 && i + 2 < gap {
+            if (used + i).is_multiple_of(2) && i > 1 && i + 2 < gap {
                 '·'
             } else {
                 ' '

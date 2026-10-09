@@ -433,7 +433,7 @@ powershell -ExecutionPolicy Bypass -c "irm https://github.com/makeev/alphai-tui/
 Archives for every platform, with checksums, live on the
 [releases page](https://github.com/makeev/alphai-tui/releases).
 
-With a Rust toolchain (1.85+):
+With a Rust toolchain (1.89+):
 
 ```sh
 cargo install alphai-tui
@@ -901,10 +901,17 @@ which is also what AlphAI uses. Finnhub-specific symbols like
 `~/.config/alphai-tui/config.toml` on Linux and macOS (`%APPDATA%` on
 Windows), created by the settings screen with mode 0600 since it can hold
 keys; `--config PATH` points at a different file. Saving the settings also
-persists the watchlist on screen, and `a` and `d` write it straight away. Every key is optional. A misspelled value
+persists the watchlist on screen, and `a` and `d` write it straight away.
+`a`, `d` and `p` apply their one change to the file as it is on disk,
+under a lock file beside it, so several tmux panes on one config do not
+undo each other. Every key is optional. A misspelled value
 in the `[ui]`, `[chart]`, `[theme]` or `[keybindings]` sections prints a
-warning on startup and keeps that entry's default; only a TOML syntax error
-makes the whole file fall back to defaults. The `[ui]` and `[chart]` sections set startup
+warning on startup and keeps that entry's default, and a broken
+`[[positions]]` entry is skipped on its own. A file that does not parse at
+all, say after a TOML syntax error, runs the session on the defaults, says
+so in the footer and is not written to until it loads again; Save in the
+settings screen keeps a copy as `config.toml.broken` before replacing it.
+Fixed while the app runs, it is picked up by a restart. The `[ui]` and `[chart]` sections set startup
 defaults; the session keys (`x`, `f`, `g`, `+`, `-`, `c`, `m`, `i`, `b`, `e`, `n`, `t`)
 still change everything live without persisting it:
 

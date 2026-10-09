@@ -81,12 +81,131 @@ pub struct Config {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub keybindings: Option<BTreeMap<String, KeysSpec>>,
     /// `[[positions]]`: what the user holds, one entry per ticker, with
-    /// the quantity and the average price paid. Validated in `resolve`,
-    /// per entry like every other section. Declared last on purpose:
-    /// `toml` serializes in field order, and a scalar written after an
-    /// array of tables would be parsed back as part of it.
+    /// the quantity and the average price paid. Raw entries, validated in
+    /// `resolve` per entry like every other section. Declared last on
+    /// purpose: `toml` serializes in field order, and a scalar written
+    /// after an array of tables would be parsed back as part of it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub positions: Vec<Position>,
+    pub positions: Vec<PositionEntry>,
+}
+
+impl Config {
+    /// Writes one holding into `[[positions]]`, over the entry for the
+    /// same ticker in whatever case it was typed, or at the end. Fields
+    /// this binary does not know stay with the entry.
+    pub fn set_position(&mut self, position: &Position) {
+        let entry = PositionEntry::from(position);
+        match self
+            .positions
+            .iter_mut()
+            .find(|e| e.is_for(&position.symbol))
+        {
+            Some(slot) => {
+                *slot = PositionEntry {
+                    other: std::mem::take(&mut slot.other),
+                    ..entry
+                }
+            }
+            None => self.positions.push(entry),
+        }
+    }
+
+    /// Drops every entry for the ticker: a duplicate left behind would
+    /// bring the holding back on the next start.
+    pub fn clear_position(&mut self, symbol: &str) {
+        self.positions.retain(|e| !e.is_for(symbol));
+    }
+}
+
+/// One change a keypress makes to the file: `a`, `d` or `p`. Kept as a
+/// change rather than as the resulting list, so it can be applied to the
+/// file as another process left it, and replayed after a failed write.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Edit {
+    Watch(String),
+    Unwatch(String),
+    Hold(Position),
+    Clear(String),
+}
+
+impl Edit {
+    /// Each edit sets the state of one ticker, so replaying a run of them
+    /// over a file that already has some comes out the same. `live` is the
+    /// watchlist on screen: an empty list in the file means the built-in
+    /// default, so the screen's list is what gets written, and the same
+    /// goes for a list an edit would empty, since the screen always holds
+    /// at least one ticker.
+    pub fn apply(&self, cfg: &mut Config, live: &[String]) {
+        match self {
+            Self::Hold(position) => return cfg.set_position(position),
+            Self::Clear(symbol) => return cfg.clear_position(symbol),
+            Self::Watch(_) | Self::Unwatch(_) if cfg.watchlist.is_empty() => {
+                cfg.watchlist = live.to_vec();
+                return;
+            }
+            Self::Watch(symbol) => {
+                if !cfg.watchlist.iter().any(|s| s.eq_ignore_ascii_case(symbol)) {
+                    cfg.watchlist.push(symbol.clone());
+                }
+            }
+            Self::Unwatch(symbol) => cfg.watchlist.retain(|s| !s.eq_ignore_ascii_case(symbol)),
+        }
+        if cfg.watchlist.is_empty() {
+            cfg.watchlist = live.to_vec();
+        }
+    }
+}
+
+/// One `[[positions]]` entry as the file has it. Each field is a raw TOML
+/// value, so a missing or mistyped one drops this entry with a warning in
+/// `resolve` instead of failing the whole file and the keys with it, and
+/// the entry is written back as typed until someone fixes it.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PositionEntry {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub symbol: Option<toml::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub qty: Option<toml::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub avg_price: Option<toml::Value>,
+    /// Whatever else the entry holds, a misspelled `avg_prcie` included:
+    /// dropping it on the next save would lose the number with the typo.
+    #[serde(flatten)]
+    pub other: toml::Table,
+}
+
+impl PositionEntry {
+    fn symbol(&self) -> Option<String> {
+        let symbol = self.symbol.as_ref()?.as_str()?.trim().to_uppercase();
+        (!symbol.is_empty()).then_some(symbol)
+    }
+
+    fn is_for(&self, symbol: &str) -> bool {
+        self.symbol()
+            .is_some_and(|own| own.eq_ignore_ascii_case(symbol))
+    }
+
+    /// A whole number reads as well as a float: `qty = 12` is how people
+    /// write a share count.
+    fn number(value: Option<&toml::Value>) -> Option<f64> {
+        match value? {
+            toml::Value::Float(f) => Some(*f),
+            toml::Value::Integer(i) => Some(*i as f64),
+            _ => None,
+        }
+    }
+}
+
+impl From<&Position> for PositionEntry {
+    fn from(p: &Position) -> Self {
+        Self {
+            symbol: Some(toml::Value::String(p.symbol.clone())),
+            qty: Some(toml::Value::Float(p.qty)),
+            avg_price: Some(toml::Value::Float(p.avg_price)),
+            other: toml::Table::new(),
+        }
+    }
 }
 
 /// Keys of one `[keybindings]` action: a bare string or a list of them.
@@ -352,26 +471,29 @@ fn resolve_extended_source(cfg: &Config, warnings: &mut Vec<String>) {
 /// `[[positions]]`: a broken entry warns and is dropped, the rest stand.
 /// Symbols are upper-cased the way the watchlist is, so a holding written
 /// in lower case still meets its quote.
-fn resolve_positions(raw: &[Position], warnings: &mut Vec<String>) -> Vec<Position> {
+fn resolve_positions(raw: &[PositionEntry], warnings: &mut Vec<String>) -> Vec<Position> {
     let mut out: Vec<Position> = Vec::new();
     for entry in raw {
-        let symbol = entry.symbol.trim().to_uppercase();
-        if symbol.is_empty() {
+        let Some(symbol) = entry.symbol() else {
             warnings.push("[[positions]]: an entry has no symbol, skipping it".to_string());
             continue;
-        }
-        if !entry.qty.is_finite() || entry.qty == 0.0 {
+        };
+        let Some(qty) =
+            PositionEntry::number(entry.qty.as_ref()).filter(|q| q.is_finite() && *q != 0.0)
+        else {
             warnings.push(format!(
                 "[[positions]] {symbol}: qty must be a non-zero number, skipping it"
             ));
             continue;
-        }
-        if !entry.avg_price.is_finite() || entry.avg_price < 0.0 {
+        };
+        let Some(avg_price) =
+            PositionEntry::number(entry.avg_price.as_ref()).filter(|p| p.is_finite() && *p >= 0.0)
+        else {
             warnings.push(format!(
-                "[[positions]] {symbol}: avg_price must be zero or more, skipping it"
+                "[[positions]] {symbol}: avg_price must be a number, zero or more, skipping it"
             ));
             continue;
-        }
+        };
         if out.iter().any(|kept| kept.symbol == symbol) {
             warnings.push(format!(
                 "[[positions]] {symbol}: listed twice, keeping the first entry"
@@ -380,8 +502,8 @@ fn resolve_positions(raw: &[Position], warnings: &mut Vec<String>) -> Vec<Positi
         }
         out.push(Position {
             symbol,
-            qty: entry.qty,
-            avg_price: entry.avg_price,
+            qty,
+            avg_price,
         });
     }
     out
@@ -670,21 +792,38 @@ pub fn path() -> Option<PathBuf> {
     Some(base.join("alphai-tui").join("config.toml"))
 }
 
+/// What `load_at` found at the config path.
+#[derive(Clone, Debug, PartialEq)]
+pub enum FileState {
+    /// No file yet: a first run.
+    Missing,
+    Loaded,
+    /// A file that does not load, with the reason. The session runs on the
+    /// defaults, and nothing writes over the file while it stays that way
+    /// (Save in the settings screen keeps a copy first): the keys typed
+    /// into it would go with it.
+    Broken(String),
+}
+
 /// Load from an explicit path (the `--config` flag) or the default
-/// location. Returns the config, whether a file existed, and the path Save
-/// must write back to (None when the platform has no config dir). A missing
+/// location. Returns the config, what was found, and the path Save must
+/// write back to (None when the platform has no config dir). A missing
 /// file is a normal first run; an unreadable one degrades to defaults with
 /// a stderr warning rather than blocking startup.
-pub fn load_at(override_path: Option<&Path>) -> (Config, bool, Option<PathBuf>) {
+pub fn load_at(override_path: Option<&Path>) -> (Config, FileState, Option<PathBuf>) {
     let Some(p) = override_path.map(Path::to_path_buf).or_else(path) else {
-        return (Config::default(), false, None);
+        return (Config::default(), FileState::Missing, None);
     };
     match load_from(&p) {
-        Ok(Some(cfg)) => (cfg, true, Some(p)),
-        Ok(None) => (Config::default(), false, Some(p)),
+        Ok(Some(cfg)) => (cfg, FileState::Loaded, Some(p)),
+        Ok(None) => (Config::default(), FileState::Missing, Some(p)),
         Err(e) => {
             eprintln!("warning: ignoring bad config at {}: {e:#}", p.display());
-            (Config::default(), false, Some(p))
+            (
+                Config::default(),
+                FileState::Broken(load_error(&e)),
+                Some(p),
+            )
         }
     }
 }
@@ -695,6 +834,135 @@ pub fn load_from(p: &Path) -> Result<Option<Config>> {
     }
     let raw = std::fs::read_to_string(p).context("read failed")?;
     Ok(Some(toml::from_str(&raw).context("parse failed")?))
+}
+
+/// One line on why `load_from` failed, short enough for the footer: the
+/// TOML error's first line names the line and column, the rest of it is a
+/// drawing of the spot.
+fn load_error(e: &anyhow::Error) -> String {
+    let cause = e.root_cause().to_string();
+    cause.lines().next().unwrap_or_default().trim().to_string()
+}
+
+/// Copies a config that does not load to `<name>.broken` before an
+/// explicit Save replaces it, so what was typed into it, the keys first,
+/// is still on disk to copy back.
+fn set_aside(p: &Path) -> Result<PathBuf> {
+    let mut aside = p.as_os_str().to_owned();
+    aside.push(".broken");
+    let aside = PathBuf::from(aside);
+    std::fs::copy(p, &aside).context("could not keep a copy of the config that did not load")?;
+    Ok(aside)
+}
+
+/// The config file's name for a message, or a generic one without a path.
+pub fn file_label(path: Option<&Path>) -> String {
+    path.and_then(Path::file_name).map_or_else(
+        || "The config file".to_string(),
+        |name| name.to_string_lossy().into_owned(),
+    )
+}
+
+/// Holds `<config>.lock` for one read, change and write of the config.
+/// Two processes on one file (tmux panes) each read the same version
+/// otherwise, and the later write drops what the earlier one added: the
+/// atomic rename keeps the file whole, not the other change. The lock
+/// file stays beside the config; released when this is dropped.
+struct Lock {
+    _file: std::fs::File,
+}
+
+/// A write holds the lock for milliseconds. One held much longer belongs
+/// to a process that is stuck, and the keypress should say so rather than
+/// freeze the screen.
+const LOCK_WAIT: Duration = Duration::from_secs(2);
+
+fn lock(p: &Path) -> Result<Lock> {
+    lock_within(p, LOCK_WAIT)
+}
+
+fn lock_within(p: &Path, wait: Duration) -> Result<Lock> {
+    if let Some(dir) = p.parent() {
+        std::fs::create_dir_all(dir).context("create config dir failed")?;
+    }
+    let mut name = p.as_os_str().to_owned();
+    name.push(".lock");
+    let mut options = std::fs::OpenOptions::new();
+    options.create(true).truncate(false).write(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    let file = options
+        .open(name)
+        .context("could not open the config lock")?;
+    let deadline = std::time::Instant::now() + wait;
+    loop {
+        match file.try_lock() {
+            Ok(()) => return Ok(Lock { _file: file }),
+            Err(std::fs::TryLockError::WouldBlock) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Err(std::fs::TryLockError::WouldBlock) => {
+                anyhow::bail!("another alphai-tui held {} too long", file_label(Some(p)))
+            }
+            // A filesystem without locks (some network mounts) saved fine
+            // before there was a lock, and still does, just unguarded.
+            Err(std::fs::TryLockError::Error(e)) if e.kind() == std::io::ErrorKind::Unsupported => {
+                return Ok(Lock { _file: file });
+            }
+            Err(std::fs::TryLockError::Error(e)) => {
+                return Err(e).context("could not lock the config");
+            }
+        }
+    }
+}
+
+/// Applies `change` to the config as it is on disk and writes it back,
+/// all under the lock, and returns what was written. `missing` stands in
+/// when there is no file yet. A file that does not load is left alone
+/// rather than replaced by the defaults a session runs on, keys and all.
+pub fn update(p: &Path, missing: &Config, change: impl Fn(&mut Config)) -> Result<Config> {
+    let _lock = lock(p)?;
+    let mut on_disk = match load_from(p) {
+        Ok(Some(cfg)) => cfg,
+        Ok(None) => missing.clone(),
+        Err(e) => anyhow::bail!("{} did not load ({})", file_label(Some(p)), load_error(&e)),
+    };
+    change(&mut on_disk);
+    save_to(p, &on_disk)?;
+    Ok(on_disk)
+}
+
+/// Save in the settings screen: writes `cfg` whole, under the lock. The
+/// holdings are not on that screen, so they come from the file as it is
+/// now, with `pending` (the keypress edits that never reached it) on top.
+/// A file that does not load is copied aside first, and the copy's path
+/// returned, since what is on screen is about to replace it.
+/// `on_defaults` is a session that started on a file that did not load:
+/// its `cfg` holds the defaults, so if the file loads now it was fixed
+/// while the app ran, and writing would put those defaults over the fix,
+/// keys and every section the settings screen does not show.
+pub fn save_whole(
+    p: &Path,
+    cfg: &mut Config,
+    on_defaults: bool,
+    pending: impl Fn(&mut Config),
+) -> Result<Option<PathBuf>> {
+    let _lock = lock(p)?;
+    let aside = match load_from(p) {
+        Ok(Some(_)) if on_defaults => anyhow::bail!(
+            "{} loads now, restart alphai-tui to pick it up",
+            file_label(Some(p))
+        ),
+        Ok(Some(on_disk)) => {
+            cfg.positions = on_disk.positions;
+            pending(cfg);
+            None
+        }
+        Ok(None) => None,
+        Err(_) => Some(set_aside(p)?),
+    };
+    save_to(p, cfg)?;
+    Ok(aside)
 }
 
 /// Save to the path `load_at` resolved (the settings screen passes it back).
@@ -711,20 +979,32 @@ pub fn save_to(p: &Path, cfg: &Config) -> Result<()> {
     let raw = toml::to_string_pretty(cfg).context("serialize failed")?;
     // Written beside the target and renamed over it. The position prompt
     // saves on every edit, so a torn write is no longer a once-a-session
-    // risk, and this file also holds the API keys. The mode is set on the
-    // temporary file, before it takes the real name.
+    // risk, and this file also holds the API keys.
     let tmp = p.with_extension(format!("toml.tmp{}", std::process::id()));
-    std::fs::write(&tmp, raw).context("write failed")?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600));
-    }
-    if let Err(e) = std::fs::rename(&tmp, p) {
+    let saved = write_private(&tmp, &raw)
+        .context("write failed")
+        .and_then(|()| std::fs::rename(&tmp, p).context("replace failed"));
+    if saved.is_err() {
         let _ = std::fs::remove_file(&tmp);
-        return Err(e).context("replace failed");
     }
-    Ok(())
+    saved
+}
+
+/// Creates `path` user-only before a byte of it is written: a mode set
+/// after the write left the keys readable to other local users in
+/// between, and a failed chmod went unnoticed.
+fn write_private(path: &Path, raw: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    // A leftover from a run that died mid-save (its pid may come round
+    // again) would keep its own mode, so it goes first.
+    let _ = std::fs::remove_file(path);
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    let mut file = options.open(path)?;
+    file.write_all(raw.as_bytes())?;
+    file.sync_all()
 }
 
 #[cfg(test)]
@@ -826,11 +1106,11 @@ avg_price = 100
             source_fallback: Some(false),
             extended_source: Some("yahoo".into()),
             news_open: Some("original".into()),
-            positions: vec![Position {
+            positions: vec![PositionEntry::from(&Position {
                 symbol: "AAPL".into(),
                 qty: 12.0,
                 avg_price: 182.31,
-            }],
+            })],
             keys: BTreeMap::from([
                 ("finnhub".to_string(), "fh-key".to_string()),
                 ("alphai".to_string(), "ak_live_x".to_string()),
@@ -874,6 +1154,223 @@ avg_price = 100
         let loaded = load_from(&p).unwrap().unwrap();
         assert_eq!(loaded, cfg);
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("alphai-tui-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir.join("config.toml")
+    }
+
+    /// A holding missing a field, or with a word for a number, used to fail
+    /// the whole file: the keys and the watchlist went with it. Now that
+    /// entry alone is skipped, and a save writes it back as it was typed.
+    #[test]
+    fn a_broken_position_is_skipped_alone_and_kept_in_the_file() {
+        let raw = r#"
+watchlist = ["AAPL"]
+
+[keys]
+alphai = "ak_live_x"
+
+[[positions]]
+symbol = "AAPL"
+qty = 12
+avg_prcie = 180
+
+[[positions]]
+symbol = "MSFT"
+qty = "ten"
+avg_price = 400
+
+[[positions]]
+symbol = "NVDA"
+qty = 3
+avg_price = 100.5
+"#;
+        let cfg: Config = toml::from_str(raw).unwrap();
+        assert_eq!(
+            cfg.keys.get("alphai").map(String::as_str),
+            Some("ak_live_x")
+        );
+        let (resolved, warnings) = resolve(&cfg, None);
+        assert_eq!(resolved.positions.len(), 1);
+        assert_eq!(resolved.positions[0].symbol, "NVDA");
+        assert_eq!(resolved.positions[0].qty, 3.0);
+        assert!(
+            warnings.iter().any(|w| w.contains("AAPL: avg_price")),
+            "{warnings:?}"
+        );
+        assert!(
+            warnings.iter().any(|w| w.contains("MSFT: qty")),
+            "{warnings:?}"
+        );
+
+        let p = scratch("broken-entry");
+        save_to(&p, &cfg).unwrap();
+        let loaded = load_from(&p).unwrap().unwrap();
+        assert_eq!(loaded.positions, cfg.positions);
+        assert_eq!(loaded.positions[0].avg_price, None);
+        // The misspelled field is the number someone typed: it stays.
+        let written = std::fs::read_to_string(&p).unwrap();
+        assert!(written.contains("avg_prcie = 180"), "file:\n{written}");
+
+        // So does it when the prompt writes the holding over that entry.
+        let mut fixed = loaded;
+        fixed.set_position(&Position {
+            symbol: "AAPL".into(),
+            qty: 12.0,
+            avg_price: 180.0,
+        });
+        assert_eq!(
+            fixed.positions[0].avg_price,
+            Some(toml::Value::Float(180.0))
+        );
+        assert_eq!(
+            fixed.positions[0].other.get("avg_prcie"),
+            Some(&toml::Value::Integer(180))
+        );
+        std::fs::remove_dir_all(p.parent().unwrap()).ok();
+    }
+
+    /// The prompt's write replaces the entry for its ticker however it was
+    /// typed, a broken one included, and clearing takes out duplicates too.
+    #[test]
+    fn set_and_clear_position_find_the_ticker_in_any_case() {
+        let mut cfg: Config = toml::from_str(
+            r#"
+[[positions]]
+symbol = "aapl"
+qty = 12
+
+[[positions]]
+symbol = "MSFT"
+qty = 1
+avg_price = 400
+
+[[positions]]
+symbol = "AAPL"
+qty = 5
+avg_price = 100
+"#,
+        )
+        .unwrap();
+        let held = Position {
+            symbol: "AAPL".into(),
+            qty: 10.0,
+            avg_price: 180.0,
+        };
+        cfg.set_position(&held);
+        assert_eq!(cfg.positions.len(), 3);
+        assert_eq!(cfg.positions[0], PositionEntry::from(&held));
+        cfg.clear_position("AAPL");
+        assert_eq!(cfg.positions.len(), 1);
+        assert!(cfg.positions[0].is_for("MSFT"));
+    }
+
+    /// A file that does not parse is not a first run: it says why, and it
+    /// is copied aside rather than lost when Save replaces it.
+    #[test]
+    fn a_config_that_does_not_parse_is_broken_not_missing() {
+        let p = scratch("broken-file");
+        assert_eq!(load_at(Some(&p)).1, FileState::Missing);
+
+        let raw = "every = \"often\"\n[keys]\nalphai = \"ak_live_x\"\n";
+        std::fs::write(&p, raw).unwrap();
+        let (cfg, state, path) = load_at(Some(&p));
+        assert_eq!(cfg, Config::default());
+        assert_eq!(path.as_deref(), Some(p.as_path()));
+        let FileState::Broken(why) = state else {
+            panic!("not reported as broken: {state:?}");
+        };
+        assert!(why.contains("line 1"), "{why}");
+        assert!(!why.contains('\n'), "{why}");
+
+        let aside = set_aside(&p).unwrap();
+        assert_eq!(aside.file_name().unwrap(), "config.toml.broken");
+        assert_eq!(std::fs::read_to_string(&aside).unwrap(), raw);
+        std::fs::remove_dir_all(p.parent().unwrap()).ok();
+    }
+
+    /// The lock is what keeps two panes' changes apart: held, another
+    /// taker waits and then gives up with a reason; let go, it is free.
+    #[test]
+    fn the_config_lock_is_held_until_dropped() {
+        let p = scratch("lock");
+        let held = lock(&p).unwrap();
+        let refused = lock_within(&p, Duration::from_millis(30))
+            .err()
+            .expect("lock was shared");
+        assert!(
+            format!("{refused:#}").contains("held config.toml"),
+            "{refused:#}"
+        );
+        drop(held);
+        lock_within(&p, Duration::from_millis(30)).unwrap();
+        std::fs::remove_dir_all(p.parent().unwrap()).ok();
+    }
+
+    /// Writers that each add their own tickers at the same time: every
+    /// one of them ends up in the file. Without the lock two of them read
+    /// the same version and the later write drops the earlier ticker.
+    #[test]
+    fn concurrent_updates_keep_every_change() {
+        let p = scratch("concurrent");
+        save_to(
+            &p,
+            &Config {
+                watchlist: vec!["AAPL".into()],
+                ..Config::default()
+            },
+        )
+        .unwrap();
+        std::thread::scope(|scope| {
+            for writer in 0..4 {
+                let p = &p;
+                scope.spawn(move || {
+                    for n in 0..10 {
+                        let edit = Edit::Watch(format!("T{writer}X{n}"));
+                        update(p, &Config::default(), |cfg| edit.apply(cfg, &[])).unwrap();
+                    }
+                });
+            }
+        });
+        let saved = load_from(&p).unwrap().unwrap();
+        assert_eq!(saved.watchlist.len(), 41, "{:?}", saved.watchlist);
+        std::fs::remove_dir_all(p.parent().unwrap()).ok();
+    }
+
+    /// The file holds keys: it is user-only from its first byte, and a
+    /// temp file a crashed save left behind does not lend it its mode.
+    #[cfg(unix)]
+    #[test]
+    fn a_saved_config_is_private_from_the_first_byte() {
+        use std::os::unix::fs::PermissionsExt;
+        let p = scratch("private");
+        let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+        let tmp = p.with_extension(format!("toml.tmp{}", std::process::id()));
+        let leave_over = || {
+            std::fs::write(&tmp, "left over").unwrap();
+            std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o644)).unwrap();
+        };
+        // The temp file itself, before any rename: writing into a leftover
+        // kept its 0644 for as long as the keys sat in it.
+        leave_over();
+        write_private(&tmp, "alphai = \"ak_live_x\"").unwrap();
+        assert_eq!(mode(&tmp), 0o600);
+
+        leave_over();
+
+        let cfg = Config {
+            keys: BTreeMap::from([("alphai".to_string(), "ak_live_x".to_string())]),
+            ..Config::default()
+        };
+        save_to(&p, &cfg).unwrap();
+        assert_eq!(mode(&p), 0o600);
+        assert!(!tmp.exists(), "the temp file was left behind");
+        assert_eq!(load_from(&p).unwrap().unwrap(), cfg);
+        std::fs::remove_dir_all(p.parent().unwrap()).ok();
     }
 
     #[test]
