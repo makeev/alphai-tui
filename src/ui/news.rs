@@ -4,9 +4,11 @@ use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Cell, Paragraph, Row, Table, Wrap};
+use unicode_width::UnicodeWidthStr;
 
 use crate::alphai::{self, Article};
 use crate::app::{App, FeedKind, NewsLayout, NewsScope};
+use crate::category::{self, Categories};
 use crate::keymap::Action;
 use crate::theme::Theme;
 use crate::ui::{Hint, View, ViewId};
@@ -46,9 +48,9 @@ impl View for NewsView {
             Hint::act(&[Action::CycleLayout], "layout"),
             Hint::act(&[Action::CycleScope], "scope"),
             Hint::act(&[Action::ScoreUp, Action::ScoreDown], "score"),
-            Hint::act(&[Action::Refresh], "refresh"),
-            // No settings hint: the widest footer of the app, it must fit
-            // 110 columns and the help overlay lists s anyway.
+            Hint::act(&[Action::Categories], "category"),
+            // No settings or refresh hint: the widest footer of the app, it
+            // must fit 110 columns and the help overlay lists s and r anyway.
             Hint::act(&[Action::Help], "help"),
         ];
         HINTS
@@ -67,9 +69,12 @@ impl View for NewsView {
         let scope = app.news_scope;
         let symbol = app.selected_symbol().to_string();
         let label = scope.label(&symbol).to_string();
-        let mut block = app
-            .theme
-            .panel_titled(news_title(scope, &label, app.news_min_score));
+        let mut block = app.theme.panel_titled(news_title(
+            scope,
+            &label,
+            app.news_min_score,
+            app.news_categories,
+        ));
 
         if render_gate(f, area, &block, app, &key) {
             return;
@@ -82,7 +87,7 @@ impl View for NewsView {
         f.render_widget(head_line(app, bundle.sentiment()), head);
 
         if bundle.articles.is_empty() {
-            let msg = empty_feed_message(scope, &label, app.news_min_score);
+            let msg = empty_feed_message(scope, &label, app.news_min_score, app.news_categories);
             f.render_widget(
                 Paragraph::new(Line::from(msg).style(app.theme.subtle())).block(block),
                 main,
@@ -152,7 +157,7 @@ impl View for NewsView {
         }
 
         let now = Utc::now();
-        let widths = article_widths(scope, full);
+        let widths = article_widths(scope, full, category_width(&bundle.articles));
         let ctx = RowCtx {
             scope,
             symbol: &symbol,
@@ -278,24 +283,45 @@ pub(crate) fn feed_bottom_hint(
     })
 }
 
-/// Block title of a news list: the scope label plus the active score filter
+/// Block title of a news list: the scope label plus the active filters
 /// (trending is server-curated, there is no filter to show).
-fn news_title(scope: NewsScope, label: &str, min_score: u8) -> String {
-    match scope {
-        NewsScope::Trending => format!(" News · {label} "),
-        _ => format!(" News · {label} · score {min_score}+ "),
+fn news_title(scope: NewsScope, label: &str, min_score: u8, categories: Categories) -> String {
+    match (scope, categories.label()) {
+        (NewsScope::Trending, _) => format!(" News · {label} "),
+        (_, Some(picked)) => format!(" News · {label} · score {min_score}+ · {picked} "),
+        (_, None) => format!(" News · {label} · score {min_score}+ "),
     }
 }
 
-fn empty_feed_message(scope: NewsScope, label: &str, min_score: u8) -> String {
-    match scope {
-        NewsScope::Trending => "no trending stories right now".to_string(),
-        _ if min_score > 1 => {
-            format!(
-                "no recent news for {label} with score {min_score}+ (press - to lower the filter)"
-            )
-        }
-        _ => format!("no recent news for {label}"),
+/// What an empty list says: which filters emptied it and the keys that
+/// loosen them.
+fn empty_feed_message(
+    scope: NewsScope,
+    label: &str,
+    min_score: u8,
+    categories: Categories,
+) -> String {
+    if scope == NewsScope::Trending {
+        return "no trending stories right now".to_string();
+    }
+    let mut filters = Vec::new();
+    let mut keys = Vec::new();
+    if min_score > 1 {
+        filters.push(format!("score {min_score}+"));
+        keys.push("- lowers the score");
+    }
+    if let Some(picked) = categories.label() {
+        filters.push(picked);
+        keys.push("C changes the categories");
+    }
+    if filters.is_empty() {
+        format!("no recent news for {label}")
+    } else {
+        format!(
+            "no recent news for {label} with {} ({})",
+            filters.join(" · "),
+            keys.join(", ")
+        )
     }
 }
 
@@ -306,9 +332,12 @@ pub fn render_panel(f: &mut Frame, area: Rect, app: &mut App) {
     let key = app.news_cache_key();
     let scope = app.news_scope;
     let label = scope.label(app.selected_symbol()).to_string();
-    let block = app
-        .theme
-        .panel_titled(news_title(scope, &label, app.news_min_score));
+    let block = app.theme.panel_titled(news_title(
+        scope,
+        &label,
+        app.news_min_score,
+        app.news_categories,
+    ));
 
     if !app.alphai_enabled {
         let line = Line::from(
@@ -328,7 +357,7 @@ pub fn render_panel(f: &mut Frame, area: Rect, app: &mut App) {
     }
     let bundle = &app.feeds[&key];
     if bundle.articles.is_empty() {
-        let msg = empty_feed_message(scope, &label, app.news_min_score);
+        let msg = empty_feed_message(scope, &label, app.news_min_score, app.news_categories);
         f.render_widget(
             Paragraph::new(Line::from(msg).style(app.theme.subtle())).block(block),
             area,
@@ -338,7 +367,7 @@ pub fn render_panel(f: &mut Frame, area: Rect, app: &mut App) {
 
     let now = Utc::now();
     // The strip has no cursor, so no marker column to account for.
-    let widths = article_widths(scope, false);
+    let widths = article_widths(scope, false, category_width(&bundle.articles));
     let ctx = RowCtx {
         scope,
         symbol: app.selected_symbol(),
@@ -455,7 +484,7 @@ pub(crate) fn title_width(widths: &[Constraint], area_width: u16, marker: bool) 
     area_width.saturating_sub(fixed + gaps + chrome) as usize
 }
 
-fn article_widths(scope: NewsScope, full: bool) -> Vec<Constraint> {
+fn article_widths(scope: NewsScope, full: bool, category_w: u16) -> Vec<Constraint> {
     let mut widths = vec![Constraint::Length(4), Constraint::Length(2)];
     if full {
         widths.push(Constraint::Length(2)); // novelty
@@ -466,7 +495,7 @@ fn article_widths(scope: NewsScope, full: bool) -> Vec<Constraint> {
         widths.push(Constraint::Length(12)); // tickers
         widths.push(Constraint::Length(3)); // outlet count
     }
-    widths.push(Constraint::Length(8)); // category
+    widths.push(Constraint::Length(category_w));
     widths.push(Constraint::Min(20)); // title
     widths
 }
@@ -650,34 +679,45 @@ fn sources_cell(count: Option<i64>, theme: &Theme) -> Cell<'static> {
 /// the form (8-K, or a foreign private issuer's 6-K) in the accent color.
 /// Coverage of the same quarter is also categorised "earnings", but only the
 /// filing carries a structured read, and in a busy feed that is the row a
-/// reader is looking for.
+/// reader is looking for. Every other row names its category, the
+/// catch-all "other" included: left blank, a third of a ticker's feed read
+/// as if the column was not there. A category this build does not know yet
+/// shows as the server spells it.
 fn category_cell(a: &Article, theme: &Theme) -> Cell<'static> {
+    let style = if alphai::is_earnings_filing(a) {
+        Style::new().fg(theme.accent)
+    } else {
+        theme.subtle()
+    };
+    Cell::from(category_label(a)).style(style)
+}
+
+fn category_label(a: &Article) -> String {
     if alphai::is_earnings_filing(a) {
         let form = if a.original.source.contains("6-K") {
             "6-K"
         } else {
             "8-K"
         };
-        return Cell::from(form).style(Style::new().fg(theme.accent));
+        return form.into();
     }
-    Cell::from(short_category(a)).style(theme.subtle())
+    match a.enrichment.category.as_deref() {
+        Some(api) => {
+            category::by_api(api).map_or_else(|| api.replace('_', " "), |c| c.short.into())
+        }
+        None => String::new(),
+    }
 }
 
-fn short_category(a: &Article) -> &'static str {
-    match a.enrichment.category.as_deref() {
-        Some("earnings") => "earnings",
-        Some("mergers_acquisitions") => "m&a",
-        Some("regulation") => "reg",
-        Some("macro_economy") => "macro",
-        Some("sector_analysis") => "sector",
-        Some("market_movers") => "movers",
-        Some("technology") => "tech",
-        Some("commodities") => "commod",
-        Some("crypto") => "crypto",
-        Some("ipo") => "ipo",
-        Some("geopolitics") => "geo",
-        Some("insider") => "insider",
-        Some("corporate_actions") => "corp",
-        _ => "",
-    }
+/// The category column fits the longest label among the feed's rows, up to
+/// the longest one there is: a feed of earnings and m&a keeps the title room
+/// that "geopolitics" would take, which on a narrow list is the difference
+/// between a readable ticker column and a cut one.
+fn category_width(articles: &[Article]) -> u16 {
+    let longest = articles
+        .iter()
+        .map(|a| category_label(a).width())
+        .max()
+        .unwrap_or(0);
+    (longest as u16).clamp(3, category::COLUMN_WIDTH)
 }

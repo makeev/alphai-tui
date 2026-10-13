@@ -23,6 +23,7 @@ use tokio::sync::Notify;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
 use crate::alphai::{self, Article};
+use crate::category::{self, Categories};
 use crate::config::{self, ChartDefaults, Config, UiDefaults};
 use crate::domain::{Interval, Range, Sessions, TickerData};
 use crate::indicators::MaType;
@@ -124,6 +125,17 @@ pub struct Prompt {
 pub struct HelpOverlay {
     pub open: bool,
     pub scroll: u16,
+}
+
+/// State of the category picker (C where a news feed is shown). It edits a
+/// draft that Enter applies, so walking the list costs nothing and Esc
+/// leaves the feed as it was.
+#[derive(Default)]
+pub struct CategoryPicker {
+    pub open: bool,
+    /// Row under the cursor, an index into `category::ALL`.
+    pub cursor: usize,
+    pub draft: Categories,
 }
 
 /// Where the News view puts the article card pane relative to the list
@@ -399,6 +411,11 @@ pub struct App {
     /// this filters by dollar value. Seeded from `[ui] insider_min_score`;
     /// +/- adjust whichever feed the visible view shows.
     pub insider_min_score: u8,
+    /// Which categories the ticker and market news feeds show (applied
+    /// server-side, trending has no such filter). Seeded from `[ui]
+    /// news_categories` or `news_exclude_categories`, then session-only via
+    /// the C picker, like the score.
+    pub news_categories: Categories,
     /// Window of the Insider view's chart panel (g cycles off/3m/12m).
     pub insider_chart: InsiderChartWindow,
     /// The Insider view's card column beside the filing list; v toggles it.
@@ -440,6 +457,7 @@ pub struct App {
     pub news_table_state: TableState,
     pub article_overlay: ArticleOverlay,
     pub help: HelpOverlay,
+    pub category_picker: CategoryPicker,
     pub settings: SettingsState,
     pub prompt: Prompt,
     /// The watchlist as the price poller sees it; kept in step with
@@ -538,6 +556,7 @@ impl App {
             news_layout: init.ui.news_layout,
             news_min_score: init.ui.news_min_score,
             insider_min_score: init.ui.insider_min_score,
+            news_categories: init.ui.news_categories,
             insider_chart: init.ui.insider_chart,
             insider_card: true,
             insider_card_fits: false,
@@ -561,6 +580,7 @@ impl App {
             portfolio_state: TableState::default(),
             article_overlay: ArticleOverlay::default(),
             help: HelpOverlay::default(),
+            category_picker: CategoryPicker::default(),
             settings: SettingsState::default(),
             config: init.config,
             config_path: init.config_path,
@@ -886,6 +906,9 @@ impl App {
         if self.help.open {
             return self.handle_help_key(key);
         }
+        if self.category_picker.open {
+            return self.handle_category_key(key);
+        }
         if key.code == KeyCode::Esc {
             return true;
         }
@@ -1012,6 +1035,13 @@ impl App {
             }
             Action::InsiderChart if self.view_id() == ui::ViewId::Insider => {
                 self.insider_chart = self.insider_chart.next();
+            }
+            Action::Categories if news_feed => {
+                self.category_picker = CategoryPicker {
+                    open: true,
+                    cursor: 0,
+                    draft: self.news_categories,
+                }
             }
             Action::ScoreUp if any_feed => self.adjust_min_score(1),
             Action::ScoreDown if any_feed => self.adjust_min_score(-1),
@@ -1364,6 +1394,48 @@ impl App {
             Some(Action::Down) => self.help.scroll = self.help.scroll.saturating_add(1),
             Some(Action::PageUp) => self.help.scroll = self.help.scroll.saturating_sub(10),
             Some(Action::PageDown) => self.help.scroll = self.help.scroll.saturating_add(10),
+            _ => {}
+        }
+        false
+    }
+
+    /// Keys while the category picker is open; it swallows everything, like
+    /// the help overlay. The picker's own keys are fixed (space, o, a,
+    /// Enter); moving and quitting follow the keymap, and the key that
+    /// opened the picker applies it, so pressing it twice reads as a toggle.
+    fn handle_category_key(&mut self, key: KeyEvent) -> bool {
+        let plain = !key
+            .modifiers
+            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT);
+        let picker = &mut self.category_picker;
+        match key.code {
+            KeyCode::Esc => {
+                self.category_picker = CategoryPicker::default();
+                return false;
+            }
+            KeyCode::Enter => {
+                self.apply_categories();
+                return false;
+            }
+            KeyCode::Char(' ') if plain => {
+                picker.draft.toggle(picker.cursor);
+                return false;
+            }
+            KeyCode::Char('o') if plain => {
+                picker.draft = Categories::only([picker.cursor]);
+                return false;
+            }
+            KeyCode::Char('a') if plain => {
+                picker.draft = Categories::default();
+                return false;
+            }
+            _ => {}
+        }
+        match self.keymap.resolve(&key) {
+            Some(Action::Quit) => return true,
+            Some(Action::Categories) => self.apply_categories(),
+            Some(Action::Up) => picker.cursor = picker.cursor.saturating_sub(1),
+            Some(Action::Down) => picker.cursor = (picker.cursor + 1).min(category::ALL.len() - 1),
             _ => {}
         }
         false

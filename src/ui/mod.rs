@@ -1,5 +1,6 @@
 pub mod article;
 pub mod calendar;
+pub mod categories;
 pub mod chart;
 pub mod earnings;
 pub mod help;
@@ -192,6 +193,9 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     if app.help.open {
         help::render(f, app);
     }
+    if app.category_picker.open {
+        categories::render(f, app);
+    }
     if app.settings.open {
         settings::render(f, app);
     }
@@ -324,6 +328,8 @@ fn footer_line(app: &App) -> Paragraph<'static> {
         " ↑↓/jk scroll · pgup/pgdn page · ⏎ open in browser · esc/v close".to_string()
     } else if app.help.open {
         " ↑↓/jk scroll · pgup/pgdn page · esc/? close".to_string()
+    } else if app.category_picker.open {
+        " ↑↓ move · space toggle · o only this · a all · enter apply · esc cancel".to_string()
     } else {
         hints_text(app)
     };

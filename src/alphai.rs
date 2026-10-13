@@ -20,6 +20,7 @@ use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
+use crate::category::Categories;
 use crate::poller::SourceEvent;
 
 pub const DEFAULT_BASE_URL: &str = "https://api.alphai.io";
@@ -179,6 +180,8 @@ impl Client {
     /// (`sources_count` reports the outlet count). The symbol-scoped feed is
     /// left uncollapsed: the collapse filter matches the story root, which may
     /// not mention the symbol, and would silently drop relevant coverage.
+    /// `categories` narrows the feed to the categories the reader picked,
+    /// also on the server (see `Categories::param`).
     /// `sort` picks the ordering: `Published` is the reverse-chronological
     /// feed this pages through, `Ingested` is delta mode (see `Sort`), where
     /// the same `cursor` slot carries a position in the arrival stream.
@@ -188,6 +191,7 @@ impl Client {
         cursor: Option<&str>,
         page_size: Option<u8>,
         min_relevance: Option<u8>,
+        categories: Categories,
         sort: Sort,
     ) -> Result<NewsPage> {
         let mut query: Vec<(&str, &str)> = Vec::new();
@@ -205,6 +209,10 @@ impl Client {
         let min = min_relevance.map(|n| n.to_string());
         if let Some(min) = &min {
             query.push(("min_relevance", min));
+        }
+        let category = categories.param();
+        if let Some((name, list)) = &category {
+            query.push((name, list));
         }
         if let Some(order) = sort.param() {
             query.push(("sort", order));
@@ -358,11 +366,13 @@ pub enum Cmd {
     /// `min_relevance` is the score filter the app wants (echoed back on the
     /// resulting `Event::Feed` so the bundle can record it). `sort` picks the
     /// published feed or a delta poll of it (see `Sort`); a delta fetch skips
-    /// the sentiment rollup, which the bundle already holds.
+    /// the sentiment rollup, which the bundle already holds. `categories`
+    /// is echoed back the same way as the score filter.
     FetchNews {
         symbol: Option<String>,
         cursor: Option<String>,
         min_relevance: Option<u8>,
+        categories: Categories,
         sort: Sort,
     },
     /// Fetch the 48h trending top 10 (cached under `TRENDING_KEY`).
@@ -404,6 +414,9 @@ pub enum Event {
         /// (trending, insider). The bundle records it so a changed setting
         /// marks the cached feed stale.
         min_relevance: Option<u8>,
+        /// The category filter this fetch carried, recorded for the same
+        /// reason; every category for feeds that cannot filter on it.
+        categories: Categories,
     },
     /// A load-more failed. The shown feed stays; `gated` marks the archive
     /// horizon (terminal for this feed, offer an upgrade instead of a retry).
@@ -471,9 +484,9 @@ pub const CALENDAR_KEY: &str = "~calendar";
 pub const CALENDAR_DAYS: i64 = 45;
 pub const CALENDAR_LOOKBACK_DAYS: i64 = 7;
 
-/// Which paginated feed a page fetch targets, each with its score filter.
+/// Which paginated feed a page fetch targets, each with its filters.
 enum Feed<'a> {
-    News(Option<&'a str>, Option<u8>),
+    News(Option<&'a str>, Option<u8>, Categories),
     Insider(&'a str, Option<u8>),
 }
 
@@ -497,7 +510,11 @@ async fn fetch_feed_page(
         || (page50.is_none() && cursor.is_some() && sort == Sort::Published);
     if try50 {
         let result = match &feed {
-            Feed::News(symbol, min) => client.news(*symbol, cursor, Some(50), *min, sort).await,
+            Feed::News(symbol, min, categories) => {
+                client
+                    .news(*symbol, cursor, Some(50), *min, *categories, sort)
+                    .await
+            }
             Feed::Insider(symbol, min) => {
                 client
                     .insider_news(symbol, cursor, Some(50), *min, sort)
@@ -517,9 +534,9 @@ async fn fetch_feed_page(
         }
     }
     match &feed {
-        Feed::News(symbol, min) => {
+        Feed::News(symbol, min, categories) => {
             client
-                .news(*symbol, cursor, Some(PAGE_SIZE), *min, sort)
+                .news(*symbol, cursor, Some(PAGE_SIZE), *min, *categories, sort)
                 .await
         }
         Feed::Insider(symbol, min) => {
@@ -581,6 +598,7 @@ pub async fn run(
                 symbol,
                 cursor,
                 min_relevance,
+                categories,
                 sort,
             } => {
                 let key = news_key(symbol.as_deref());
@@ -597,7 +615,7 @@ pub async fn run(
                         let (p, senti) = tokio::join!(
                             fetch_feed_page(
                                 client,
-                                Feed::News(Some(s), min_relevance),
+                                Feed::News(Some(s), min_relevance, categories),
                                 None,
                                 sort,
                                 &mut page50,
@@ -609,7 +627,7 @@ pub async fn run(
                     _ => (
                         fetch_feed_page(
                             client,
-                            Feed::News(symbol.as_deref(), min_relevance),
+                            Feed::News(symbol.as_deref(), min_relevance, categories),
                             cursor.as_deref(),
                             sort,
                             &mut page50,
@@ -626,6 +644,7 @@ pub async fn run(
                         next_cursor: p.next_cursor,
                         mode,
                         min_relevance,
+                        categories,
                     },
                     Err(e) => error_event(key, e, mode, cursor.as_deref()),
                 };
@@ -648,6 +667,7 @@ pub async fn run(
                         next_cursor: None,
                         mode: FeedMode::Replace,
                         min_relevance: None,
+                        categories: Categories::default(),
                     },
                     Err(e) => Event::Error {
                         key,
@@ -704,6 +724,7 @@ pub async fn run(
                         next_cursor: p.next_cursor,
                         mode,
                         min_relevance,
+                        categories: Categories::default(),
                     },
                     Err(e) => error_event(key, e, mode, cursor.as_deref()),
                 };
@@ -2049,6 +2070,7 @@ mod tests {
                 None,
                 Some(PAGE_SIZE),
                 Some(4),
+                Categories::default(),
                 Sort::Published,
             )
             .await
@@ -2063,7 +2085,14 @@ mod tests {
         // and must fetch an older second page.
         let cursor = news.next_cursor.expect("no next_cursor on page 1");
         let page2 = client
-            .news(Some("NVDA"), Some(&cursor), None, Some(4), Sort::Published)
+            .news(
+                Some("NVDA"),
+                Some(&cursor),
+                None,
+                Some(4),
+                Categories::default(),
+                Sort::Published,
+            )
             .await
             .unwrap();
         assert!(!page2.results.is_empty(), "empty second news page");
@@ -2131,7 +2160,14 @@ mod tests {
         // what has arrived since, which is usually nothing, and still hands
         // back a position (there is no terminal page in this mode).
         let prime = client
-            .news(Some("NVDA"), None, Some(PAGE_SIZE), Some(4), Sort::Ingested)
+            .news(
+                Some("NVDA"),
+                None,
+                Some(PAGE_SIZE),
+                Some(4),
+                Categories::default(),
+                Sort::Ingested,
+            )
             .await
             .unwrap();
         assert!(!prime.results.is_empty(), "empty priming delta page");
@@ -2142,6 +2178,7 @@ mod tests {
                 Some(&delta_cursor),
                 None,
                 Some(4),
+                Categories::default(),
                 Sort::Ingested,
             )
             .await
@@ -2154,7 +2191,14 @@ mod tests {
         // reprime path exists because this is a 400 and not a silent restart
         // into a different range of the feed.
         let crossed = match client
-            .news(Some("NVDA"), Some(&cursor), None, Some(4), Sort::Ingested)
+            .news(
+                Some("NVDA"),
+                Some(&cursor),
+                None,
+                Some(4),
+                Categories::default(),
+                Sort::Ingested,
+            )
             .await
         {
             Ok(_) => panic!("a published cursor was accepted in delta mode"),

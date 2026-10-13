@@ -5,6 +5,25 @@ the crates.io releases; from 0.7.0 on each one is also a git tag and a
 GitHub release with prebuilt binaries. The Homebrew tap, the AUR and the
 apt repository joined later, and carry every version since.
 
+## 0.31.0 - 2026-10-13
+
+- News can be filtered by category. `C` in the News and Split views opens
+  a checklist of the feed's fourteen categories: `space` toggles one, `o`
+  keeps only the one under the cursor, `a` brings them all back and
+  `Enter` applies the choice. The server does the filtering, as it does
+  for the score, so a hidden category takes no slot on the page, and
+  applying a choice refetches the feed once. The panel title names what is left
+  (`without movers, other`). `news_categories` (only these) or
+  `news_exclude_categories` (all but these) in `[ui]` set the starting
+  choice. The trending scope is a curated top ten and is not filtered.
+- Every row of the news list names its category. Articles filed as "other"
+  used to leave the column blank, which on a ticker feed could be a third
+  of the rows or more, and some labels were cut to three letters (`reg`,
+  `geo`, `corp`). The column now spells them out and is as wide as the
+  longest label in the feed. The article card shows the full name.
+- The News footer shows `C category` in place of `r refresh` to stay
+  within 110 columns; `?` still lists every key.
+
 ## 0.30.1 - 2026-10-09
 
 - A config file that does not load is no longer written over. Such a file

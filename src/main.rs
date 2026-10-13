@@ -1,6 +1,7 @@
 mod alphai;
 mod app;
 mod cache;
+mod category;
 mod config;
 mod domain;
 mod indicators;

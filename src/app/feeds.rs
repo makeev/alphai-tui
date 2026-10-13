@@ -11,7 +11,7 @@
 //! and merges that into the top of the bundle, so the loaded pages, the side
 //! payload and the row under the reader's cursor all survive. The head fetch
 //! that replaces the bundle outright now runs only when the feed is missing,
-//! when the score filter moved, and every `SIDE_REFRESH_FACTOR` TTLs to renew
+//! when a filter moved (score or categories), and every `SIDE_REFRESH_FACTOR` TTLs to renew
 //! the side payload. Either way it is at most one request per TTL per
 //! visible feed, exactly the budget it was before.
 
@@ -22,6 +22,7 @@ use std::time::{Duration, Instant};
 use chrono::{DateTime, Utc};
 
 use crate::alphai::{self, Article, FeedMode, FeedPayload, InsiderTrades, SentimentSummary, Sort};
+use crate::category::Categories;
 use crate::ui;
 
 use super::{App, CalendarSlot, EarningsSlot, NewsScope};
@@ -83,6 +84,9 @@ pub struct FeedBundle {
     /// (trending, insider). A mismatch with the live `news_min_score`
     /// marks the bundle stale.
     pub min_score: Option<u8>,
+    /// Category filter the head fetch carried; every category for feeds
+    /// that cannot filter on it. Stale on a mismatch, like `min_score`.
+    pub categories: Categories,
     /// When the head fetch behind this bundle landed: the age of the side
     /// payload, and what the periodic full refresh is measured against.
     pub fetched: Instant,
@@ -107,6 +111,7 @@ impl FeedBundle {
             gated: false,
             poll_stopped: false,
             min_score: None,
+            categories: Categories::default(),
             fetched: now,
             polled: now,
         }
@@ -165,12 +170,14 @@ impl App {
                     symbol: Some(self.selected_symbol().to_string()),
                     cursor: None,
                     min_relevance: Some(self.news_min_score),
+                    categories: self.news_categories,
                     sort: Sort::Published,
                 },
                 NewsScope::Market => alphai::Cmd::FetchNews {
                     symbol: None,
                     cursor: None,
                     min_relevance: Some(self.news_min_score),
+                    categories: self.news_categories,
                     sort: Sort::Published,
                 },
                 NewsScope::Trending => alphai::Cmd::FetchTrending,
@@ -192,6 +199,7 @@ impl App {
                     .then(|| self.selected_symbol().to_string()),
                 cursor: Some(cursor),
                 min_relevance: Some(self.news_min_score),
+                categories: self.news_categories,
                 sort: Sort::Published,
             },
             FeedKind::Insider => alphai::Cmd::FetchInsider {
@@ -222,6 +230,7 @@ impl App {
                     .then(|| self.selected_symbol().to_string()),
                 cursor,
                 min_relevance: Some(self.news_min_score),
+                categories: self.news_categories,
                 sort: Sort::Ingested,
             },
             FeedKind::Insider => alphai::Cmd::FetchInsider {
@@ -304,6 +313,7 @@ impl App {
                 next_cursor,
                 mode,
                 min_relevance,
+                categories,
             } => {
                 self.inflight.remove(&key);
                 self.alphai_errors.remove(&key);
@@ -361,16 +371,16 @@ impl App {
                     _ => {
                         let mut b = FeedBundle::new(articles, side, next_cursor);
                         b.min_score = min_relevance;
+                        b.categories = categories;
                         // Unseen markers: the first sight of a feed is a
-                        // baseline, and a refetch caused by moving the score
-                        // filter is the reader slicing differently, so both
-                        // count as already seen. A plain TTL or manual
+                        // baseline, and a refetch caused by moving a filter
+                        // is the reader slicing differently, so both count
+                        // as already seen. A plain TTL or manual
                         // refetch leaves genuinely new uids outside
                         // `feed_seen` and they render marked until hovered.
-                        let filter_moved = self
-                            .feeds
-                            .get(&key)
-                            .is_some_and(|old| old.min_score != min_relevance);
+                        let filter_moved = self.feeds.get(&key).is_some_and(|old| {
+                            old.min_score != min_relevance || old.categories != categories
+                        });
                         let first_sight = !self.feed_seen.contains_key(&key);
                         // The article under the cursor stays under it: a
                         // head refetch that slipped a new story into row 0
@@ -487,6 +497,7 @@ impl App {
             || self.article_overlay.open
             || self.help.open
             || self.prompt.open
+            || self.category_picker.open
             || self.symbols.is_empty()
         {
             return;
@@ -504,12 +515,15 @@ impl App {
         let Some((key, kind)) = self.active_feed() else {
             return;
         };
-        // The score filter a head fetch of this feed would carry right now
-        // (trending is the exception: server-curated 8+, no filter).
-        let wanted = match kind {
-            FeedKind::News if self.news_scope != NewsScope::Trending => Some(self.news_min_score),
-            FeedKind::News => None,
-            FeedKind::Insider => Some(self.insider_min_score),
+        // The filters a head fetch of this feed would carry right now
+        // (trending is the exception: server-curated 8+, no filter; insider
+        // rows are all one category).
+        let (wanted, wanted_categories) = match kind {
+            FeedKind::News if self.news_scope != NewsScope::Trending => {
+                (Some(self.news_min_score), self.news_categories)
+            }
+            FeedKind::News => (None, Categories::default()),
+            FeedKind::Insider => (Some(self.insider_min_score), Categories::default()),
         };
         if self.inflight.contains(&key) || self.alphai_errors.contains_key(&key) {
             return;
@@ -517,15 +531,15 @@ impl App {
         // A head fetch replaces the whole bundle, dropping loaded pages and
         // the reader's place, so it waits until the reader is back at the top
         // row (missing bundles fetch regardless; the Split strip has no
-        // selection and stays at 0). A changed score filter is the exception:
-        // page 1 of the new filter is exactly what the user asked for.
+        // selection and stays at 0). A changed filter is the exception: page
+        // 1 of the new filter is exactly what the user asked for.
         let at_top = self.news_selected == 0;
         let ttl = self.alphai_ttl;
         let cmd = match self.feeds.get(&key) {
             None => Some(self.head_cmd(kind)),
             Some(b) => {
-                let filter_moved =
-                    matches!((b.min_score, wanted), (Some(have), Some(want)) if have != want);
+                let filter_moved = matches!((b.min_score, wanted), (Some(have), Some(want)) if have != want)
+                    || b.categories != wanted_categories;
                 // A polling feed keeps its rows current by merging arrivals,
                 // so its head fetch is only there to renew the side payload
                 // (the sentiment rollup, the Form 4 chart) and to re-anchor
@@ -707,6 +721,20 @@ impl App {
         let new = (*field as i8).saturating_add(delta).clamp(1, 10) as u8;
         if new != *field {
             *field = new;
+            self.news_selected = 0;
+            self.card_scroll = 0;
+        }
+    }
+
+    /// Enter in the category picker: the draft becomes the filter. Like the
+    /// score keys this fetches nothing itself: the visible bundle's recorded
+    /// `categories` stop matching and `ensure_alphai_data` refetches page 1,
+    /// one request per change however many boxes were ticked.
+    pub(super) fn apply_categories(&mut self) {
+        let draft = self.category_picker.draft;
+        self.category_picker = super::CategoryPicker::default();
+        if draft != self.news_categories {
+            self.news_categories = draft;
             self.news_selected = 0;
             self.card_scroll = 0;
         }

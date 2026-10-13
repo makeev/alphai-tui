@@ -252,7 +252,10 @@ fn card_lines(
 
     let mut details = Vec::new();
     if let Some(category) = &a.enrichment.category {
-        details.push(category.replace('_', " "));
+        details.push(
+            crate::category::by_api(category)
+                .map_or_else(|| category.replace('_', " "), |c| c.name.to_string()),
+        );
     }
     details.push(format!("score {}", a.score()));
     if let Some(n) = a.novelty() {

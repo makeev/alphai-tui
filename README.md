@@ -93,7 +93,19 @@ keeps its place even when it appears later in the provider's analysis.
 
 The feed shows articles scoring 7 and up by default. `+` and `-` move that
 bar live, the server does the filtering, so nothing you filtered out eats a
-slot on the page. Articles fresher than 15 minutes light up their age, and
+slot on the page.
+
+Every row names its category: earnings, corporate, m&a, movers, tech,
+macro, other and so on. `C` opens a checklist of all fourteen with their
+full names: `space` ticks one on or off, `o` keeps only the one under the
+cursor, `a` brings them all back, and `Enter` applies the choice with a
+single refetch. The server filters here too, and the panel title says what is
+left (`without movers, other`, or `earnings, m&a`). The choice covers the
+ticker and market scopes; trending is a curated top ten and stays as it is.
+To start every session with a choice, set `news_categories` or
+`news_exclude_categories` in the config.
+
+Articles fresher than 15 minutes light up their age, and
 rows that arrived since you last looked carry a `●` that goes out once the
 cursor rests on them. New arrivals are placed at the top of the list even
 when the rows below them are newer: a story reaches the feed a while after
@@ -617,6 +629,7 @@ defaults. API keys can also come from env vars, which win over the config:
 | `↓` / `j` on the last row | news, insider | load the next page of the feed |
 | `f` | news, split | cycle news scope: selected ticker, whole market, trending |
 | `+` / `-` | news, insider, split | raise / lower the visible feed's score filter (news: relevance, starts at 7; insider: trade size, starts at 4) |
+| `C` | news, split | pick the news categories to show: `space` toggles, `o` only this one, `a` all, `Enter` applies, `Esc` cancels |
 | `g` | insider | cycle the trades chart window: 3 months, 12 months, off |
 | `c` | chart, split | toggle candlestick / line chart |
 | `m` | chart, split | toggle the two moving average overlays |
@@ -860,9 +873,10 @@ Three things happen here instead:
   than re-reading the newest page, which costs the same single request,
   keeps the pages you loaded and the row you are on, and is the only way to
   see an article that entered the feed behind its own publish time. The
-  relevance filter is applied by the server, so filtered-out articles never
-  occupy page slots; moving it with `+`/`-` refetches the visible feed, one
-  request per press at most.
+  relevance and category filters are applied by the server, so
+  filtered-out articles never occupy page slots; moving the score with
+  `+`/`-` refetches the visible feed, one request per press at most, and a
+  new choice of categories refetches it once, when it is applied.
   The Insider view's rollup and trades chart arrive as one bundle
   alongside the feed's first page and live in the same cache, so the
   chart costs no extra requests and the `g` window switch is free.
@@ -912,7 +926,7 @@ all, say after a TOML syntax error, runs the session on the defaults, says
 so in the footer and is not written to until it loads again; Save in the
 settings screen keeps a copy as `config.toml.broken` before replacing it.
 Fixed while the app runs, it is picked up by a restart. The `[ui]` and `[chart]` sections set startup
-defaults; the session keys (`x`, `f`, `g`, `+`, `-`, `c`, `m`, `i`, `b`, `e`, `n`, `t`)
+defaults; the session keys (`x`, `f`, `g`, `+`, `-`, `C`, `c`, `m`, `i`, `b`, `e`, `n`, `t`)
 still change everything live without persisting it:
 
 ```toml
@@ -942,6 +956,8 @@ news_layout = "chart"     # chart | stacked | side (also a row in the settings s
 news_scope = "ticker"     # ticker | market | trending
 borders = "rounded"       # frame lines: rounded | plain, or none for tinted panels (also a settings row)
 news_min_score = 7        # minimum relevance score in news feeds, 1 to 10
+news_categories = []      # only these categories, e.g. ["earnings", "m&a"]; empty means all
+news_exclude_categories = []  # or all but these, e.g. ["crypto", "other"]
 insider_min_score = 4     # insider feed filter; the score tracks trade size
 insider_chart = "3m"      # insider trades chart window at start: 3m | 12m | off
 alphai_ttl_secs = 300     # news/sentiment/insider cache lifetime, 30 to 86400
@@ -1110,11 +1126,12 @@ The actions: `quit`, `next_view`, `prev_view`, `settings`, `help`,
 `insider_chart`, `chart_style`, `toggle_sma`, `toggle_rsi`,
 `toggle_volume`, `news_markers`, `ma_type`, `next_preset`, `prev_preset`,
 `next_theme`, `prev_theme`, `toggle_bare`, `add_ticker`, `remove_ticker`,
-`position`, `extended_hours`.
+`position`, `extended_hours`, `categories`.
 The `?` help overlay shows this list with the current keys next to it.
 
 Reserved and never remappable: `ctrl-c` (force quit), `esc`, the digits
-`1` to `9` (view hotkeys), and the keys inside the settings form. A bad or
+`1` to `9` (view hotkeys), the keys inside the settings form, and `space`,
+`o`, `a` and `enter` inside the category picker. A bad or
 reserved key, an unknown action, or a key claimed by two actions prints a
 warning on startup and falls back safely; the footer always shows the keys
 that are actually bound.

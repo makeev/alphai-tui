@@ -15,6 +15,7 @@ use crate::app::{
     App, AppInit, ChartStyle, FeedBundle, NewsLayout, NewsScope, PRICE_FLASH, SettingsRow,
     settings_rows,
 };
+use crate::category::{self, Categories};
 use crate::config::{ChartDefaults, Config, UiDefaults};
 use crate::domain::{Candle, Interval, Quote, Range, Sessions, TickerData};
 use crate::poller::SourceEvent;
@@ -2759,6 +2760,224 @@ fn score_keys_adjust_filter_and_refetch() {
     );
 }
 
+/// C opens the category picker over a news feed. It edits a draft: nothing
+/// is fetched while it is open, Enter applies it, and like the score keys
+/// that costs one head refetch of page 1 carrying the new filter.
+#[test]
+fn category_picker_applies_on_enter_and_refetches() {
+    let (mut app, mut cmds) = empty_app_with_cmds(vec!["AAPL".into()]);
+    cache_empty_calendar(&mut app);
+    app.view_idx = ui::view_index(ui::ViewId::News);
+    let mut bundle = FeedBundle::new(
+        vec![
+            article("Apple beats expectations", "AAPL", 9, "positive"),
+            article("Supplier note", "AAPL", 8, "negative"),
+        ],
+        None,
+        None,
+    );
+    bundle.min_score = Some(app.news_min_score);
+    app.feeds.insert("AAPL".into(), bundle);
+    app.news_selected = 1;
+    app.ensure_alphai_data();
+    assert!(cmds.try_recv().is_err(), "matching filter refetched");
+
+    press(&mut app, KeyCode::Char('C'));
+    assert!(app.category_picker.open);
+    let screen = render(&mut app);
+    assert!(
+        screen.contains("News categories"),
+        "picker missing:\n{screen}"
+    );
+    // The full name next to the label the list column uses for it.
+    assert!(screen.contains("mergers & acquisitions"), "{screen}");
+    assert!(screen.contains("m&a"), "{screen}");
+    assert!(screen.contains("space toggle"), "{screen}");
+
+    // Corporate actions is the second row.
+    press(&mut app, KeyCode::Down);
+    press(&mut app, KeyCode::Char(' '));
+    assert!(
+        app.news_categories.is_all(),
+        "the draft applied before Enter"
+    );
+    assert!(render(&mut app).contains("13 of 14 shown"));
+    // Even a missing feed waits for the picker to close.
+    let parked = app.feeds.remove("AAPL").unwrap();
+    app.ensure_alphai_data();
+    assert!(cmds.try_recv().is_err(), "fetched with the picker open");
+    app.feeds.insert("AAPL".into(), parked);
+
+    press(&mut app, KeyCode::Enter);
+    assert!(!app.category_picker.open);
+    let corporate = category::find("corporate_actions").unwrap();
+    assert!(!app.news_categories.shows(corporate));
+    assert_eq!(
+        app.news_selected, 0,
+        "selection not reset on a filter change"
+    );
+    let screen = render(&mut app);
+    assert!(
+        screen.contains("score 7+ · without corporate"),
+        "filter missing from the title:\n{screen}"
+    );
+
+    app.ensure_alphai_data();
+    match cmds.try_recv() {
+        Ok(alphai::Cmd::FetchNews {
+            symbol,
+            cursor,
+            categories,
+            sort,
+            ..
+        }) => {
+            assert_eq!(symbol.as_deref(), Some("AAPL"));
+            assert_eq!(cursor, None, "filter change must restart from page 1");
+            assert_eq!(sort, alphai::Sort::Published);
+            assert_eq!(
+                categories.param(),
+                Some(("exclude_categories", "corporate_actions".to_string()))
+            );
+        }
+        other => panic!("expected a filtered head fetch, got {:?}", other.is_ok()),
+    }
+    app.ensure_alphai_data();
+    assert!(
+        cmds.try_recv().is_err(),
+        "duplicate refetch for one filter change"
+    );
+}
+
+/// The picker's own keys: o keeps only the row under the cursor, a brings
+/// every category back, the last one shown cannot be hidden, Esc throws
+/// the draft away, and C applies it like Enter does.
+#[test]
+fn category_picker_keys() {
+    let mut app = empty_app(vec!["AAPL".into()]);
+    app.view_idx = ui::view_index(ui::ViewId::News);
+    press(&mut app, KeyCode::Char('C'));
+    press(&mut app, KeyCode::Char('o'));
+    assert_eq!(app.category_picker.draft, Categories::only([0]));
+    press(&mut app, KeyCode::Char(' '));
+    assert!(
+        app.category_picker.draft.shows(0),
+        "the last shown category was hidden"
+    );
+    press(&mut app, KeyCode::Char('a'));
+    assert!(app.category_picker.draft.is_all());
+    for _ in 0..30 {
+        press(&mut app, KeyCode::Down);
+    }
+    assert_eq!(app.category_picker.cursor, category::ALL.len() - 1);
+    press(&mut app, KeyCode::Char('o'));
+    press(&mut app, KeyCode::Esc);
+    assert!(!app.category_picker.open);
+    assert!(app.news_categories.is_all(), "Esc applied the draft");
+
+    press(&mut app, KeyCode::Char('C'));
+    assert_eq!(
+        app.category_picker.cursor, 0,
+        "the picker reopened mid-list"
+    );
+    press(&mut app, KeyCode::Char('o'));
+    press(&mut app, KeyCode::Char('C'));
+    assert!(!app.category_picker.open);
+    assert_eq!(app.news_categories, Categories::only([0]));
+    assert!(render(&mut app).contains("score 7+ · earnings"));
+}
+
+/// The insider feed is one category, so C means nothing there.
+#[test]
+fn category_picker_is_for_news_only() {
+    let mut app = empty_app(vec!["AAPL".into()]);
+    app.view_idx = ui::view_index(ui::ViewId::Insider);
+    press(&mut app, KeyCode::Char('C'));
+    assert!(!app.category_picker.open);
+    app.view_idx = ui::view_index(ui::ViewId::Split);
+    press(&mut app, KeyCode::Char('C'));
+    assert!(
+        app.category_picker.open,
+        "the Split strip is a news feed too"
+    );
+}
+
+/// The delta poll and a load-more ask for the same categories as the page
+/// they extend, or arrivals and older pages would bring the hidden ones back.
+#[test]
+fn polls_and_pages_carry_the_category_filter() {
+    let (mut app, mut cmds) = empty_app_with_cmds(vec!["AAPL".into()]);
+    cache_empty_calendar(&mut app);
+    app.view_idx = ui::view_index(ui::ViewId::News);
+    app.news_categories = Categories::only([category::find("earnings").unwrap()]);
+    let mut bundle = FeedBundle::new(
+        vec![article("Apple beats expectations", "AAPL", 9, "positive")],
+        None,
+        Some("c1".into()),
+    );
+    bundle.min_score = Some(app.news_min_score);
+    bundle.categories = app.news_categories;
+    bundle.polled = Instant::now() - std::time::Duration::from_secs(600);
+    app.feeds.insert("AAPL".into(), bundle);
+
+    app.ensure_alphai_data();
+    match cmds.try_recv() {
+        Ok(alphai::Cmd::FetchNews {
+            sort: alphai::Sort::Ingested,
+            categories,
+            ..
+        }) => assert_eq!(categories, app.news_categories),
+        other => panic!("expected a delta poll, got {:?}", other.is_ok()),
+    }
+    app.apply_alphai(alphai::Event::PollReprime { key: "AAPL".into() });
+    press(&mut app, KeyCode::Down);
+    match cmds.try_recv() {
+        Ok(alphai::Cmd::FetchNews {
+            cursor, categories, ..
+        }) => {
+            assert_eq!(cursor.as_deref(), Some("c1"));
+            assert_eq!(categories, app.news_categories);
+        }
+        other => panic!("expected a page fetch, got {:?}", other.is_ok()),
+    }
+}
+
+/// Every row names its category, the catch-all included: blank "other"
+/// cells made the column look absent on a third of a ticker's feed.
+#[test]
+fn news_list_names_every_category() {
+    let mut app = fake_app();
+    app.view_idx = ui::view_index(ui::ViewId::News);
+    let mut other = article("Analyst starts coverage", "AAPL", 8, "positive");
+    other.enrichment.category = Some("other".into());
+    let mut corporate = article("Board approves buyback", "AAPL", 8, "positive");
+    corporate.enrichment.category = Some("corporate_actions".into());
+    app.feeds.insert(
+        "AAPL".into(),
+        FeedBundle::new(vec![other, corporate], None, None),
+    );
+    let screen = render_sized(&mut app, 140, 30);
+    for line in ["other     Analyst starts", "corporate Board approves"] {
+        assert!(screen.contains(line), "{line:?} missing:\n{screen}");
+    }
+}
+
+/// An empty feed names the filters that emptied it and the keys that
+/// loosen them.
+#[test]
+fn empty_feed_names_the_category_filter() {
+    let mut app = fake_app();
+    app.view_idx = ui::view_index(ui::ViewId::News);
+    app.news_categories = Categories::only([category::find("ipo").unwrap()]);
+    let mut bundle = FeedBundle::new(Vec::new(), None, None);
+    bundle.categories = app.news_categories;
+    app.feeds.insert("AAPL".into(), bundle);
+    let screen = render_sized(&mut app, 160, 30);
+    assert!(
+        screen.contains("with score 7+ · ipo (- lowers the score, C changes the categories)"),
+        "{screen}"
+    );
+}
+
 #[test]
 fn score_filter_clamps_at_bounds() {
     let mut app = empty_app(vec!["AAPL".into()]);
@@ -2915,6 +3134,7 @@ fn head_fetch(app: &mut App, key: &str, articles: Vec<Article>, min_relevance: O
         next_cursor: None,
         mode: alphai::FeedMode::Replace,
         min_relevance,
+        categories: Default::default(),
     });
 }
 
@@ -2935,6 +3155,7 @@ fn page_append_extends_list_and_dedupes() {
         next_cursor: Some("c2".into()),
         mode: alphai::FeedMode::Append,
         min_relevance: Some(7),
+        categories: Default::default(),
     });
     let b = &app.feeds["AAPL"];
     assert_eq!(b.articles.len(), 2, "page boundary duplicate not dropped");
@@ -3029,6 +3250,7 @@ fn pagination_and_filter_moves_never_mark() {
         next_cursor: None,
         mode: alphai::FeedMode::Append,
         min_relevance: Some(7),
+        categories: Default::default(),
     });
     assert!(
         !app.is_unseen("AAPL", &app.feeds["AAPL"].articles[1]),
@@ -3048,6 +3270,24 @@ fn pagination_and_filter_moves_never_mark() {
     assert!(
         !app.is_unseen("AAPL", &app.feeds["AAPL"].articles[1]),
         "filter-revealed row marked as new"
+    );
+
+    // So does a different choice of categories.
+    app.apply_alphai(alphai::Event::Feed {
+        key: "AAPL".into(),
+        articles: vec![
+            uid_article("aaa", "First"),
+            uid_article("geo", "Category-revealed story"),
+        ],
+        side: None,
+        next_cursor: None,
+        mode: alphai::FeedMode::Replace,
+        min_relevance: Some(6),
+        categories: Categories::without([category::find("crypto").unwrap()]),
+    });
+    assert!(
+        !app.is_unseen("AAPL", &app.feeds["AAPL"].articles[1]),
+        "category-revealed row marked as new"
     );
 }
 
@@ -3130,6 +3370,7 @@ fn delta_page(app: &mut App, key: &str, articles: Vec<Article>, cursor: &str) {
         next_cursor: Some(cursor.into()),
         mode: alphai::FeedMode::Merge,
         min_relevance: Some(7),
+        categories: Default::default(),
     });
 }
 
@@ -3519,6 +3760,7 @@ fn head_refresh_still_waits_for_top_row() {
         next_cursor: Some("delta1".into()),
         mode: alphai::FeedMode::Merge,
         min_relevance: None,
+        categories: Default::default(),
     });
     app.news_selected = 0;
     app.ensure_alphai_data();
@@ -4047,6 +4289,7 @@ fn insider_tick_polls_and_head_refresh_waits_for_top_row() {
         next_cursor: Some("delta1".into()),
         mode: alphai::FeedMode::Merge,
         min_relevance: None,
+        categories: Default::default(),
     });
     app.news_selected = 0;
     app.ensure_alphai_data();

@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::alphai;
 use crate::app::{ChartStyle, InsiderChartWindow, NewsLayout, NewsScope, RANGE_PRESETS};
+use crate::category::{self, Categories};
 use crate::domain::{Interval, Range};
 use crate::indicators::{self, MaType};
 use crate::keymap::Keymap;
@@ -238,6 +239,11 @@ pub struct UiConfig {
     /// warning in `resolve`, not fail deserializing the whole file.
     pub news_min_score: Option<i64>,
     pub insider_min_score: Option<i64>,
+    /// Start the news feeds on only these categories, or on all but these:
+    /// a list of names (a bare string works too). Raw values, so a number
+    /// in the list degrades to a warning instead of failing the file.
+    pub news_categories: Option<toml::Value>,
+    pub news_exclude_categories: Option<toml::Value>,
     /// Whether the quote rail under the header is drawn (default true).
     pub quote_rail: Option<bool>,
     /// Start in bare mode: no header, no footer (default false).
@@ -390,6 +396,7 @@ pub struct UiDefaults {
     pub news_scope: NewsScope,
     pub news_min_score: u8,
     pub insider_min_score: u8,
+    pub news_categories: Categories,
     pub insider_chart: InsiderChartWindow,
     pub alphai_ttl: Duration,
 }
@@ -406,6 +413,7 @@ impl Default for UiDefaults {
             news_scope: NewsScope::default(),
             news_min_score: DEFAULT_NEWS_MIN_SCORE,
             insider_min_score: DEFAULT_INSIDER_MIN_SCORE,
+            news_categories: Categories::default(),
             insider_chart: InsiderChartWindow::default(),
             alphai_ttl: alphai::CACHE_TTL,
         }
@@ -721,6 +729,24 @@ fn resolve_ui(raw: Option<&UiConfig>, warnings: &mut Vec<String>) -> UiDefaults 
         "insider_min_score",
         warnings,
     );
+    let only = category_names(raw.news_categories.as_ref(), "news_categories", warnings);
+    let without = category_names(
+        raw.news_exclude_categories.as_ref(),
+        "news_exclude_categories",
+        warnings,
+    );
+    out.news_categories = match (only, without) {
+        (Some(only), Some(_)) => {
+            warnings.push(
+                "[ui] news_categories and news_exclude_categories are both set, using news_categories"
+                    .into(),
+            );
+            Categories::only(only)
+        }
+        (Some(only), None) => Categories::only(only),
+        (None, Some(without)) => Categories::without(without),
+        (None, None) => out.news_categories,
+    };
     if let Some(secs) = raw.alphai_ttl_secs {
         if ALPHAI_TTL_RANGE.contains(&secs) {
             out.alphai_ttl = Duration::from_secs(secs as u64);
@@ -734,6 +760,38 @@ fn resolve_ui(raw: Option<&UiConfig>, warnings: &mut Vec<String>) -> UiDefaults 
         }
     }
     out
+}
+
+/// One `[ui] news_*categories` entry as indices into `category::ALL`: None
+/// when absent or empty, so an empty list means "no filter" and never
+/// clashes with the other key. Any spelling `category::find` knows is
+/// accepted; an unknown name or a non-string is skipped with a warning.
+fn category_names(
+    raw: Option<&toml::Value>,
+    name: &str,
+    warnings: &mut Vec<String>,
+) -> Option<Vec<usize>> {
+    let items: Vec<&toml::Value> = match raw? {
+        toml::Value::Array(items) => items.iter().collect(),
+        one => vec![one],
+    };
+    if items.is_empty() {
+        return None;
+    }
+    let mut found = Vec::new();
+    for item in items {
+        match item.as_str().and_then(category::find) {
+            Some(i) => found.push(i),
+            None => {
+                let known: Vec<&str> = category::ALL.iter().map(|c| c.api).collect();
+                warnings.push(format!(
+                    "[ui] {name}: unknown category {item} (one of {}), skipping it",
+                    known.join(", ")
+                ));
+            }
+        }
+    }
+    Some(found)
 }
 
 /// One `[ui] *_min_score` entry: 1..=10 or a warning plus the default.
@@ -1124,6 +1182,8 @@ avg_price = 100
                 borders: Some("plain".into()),
                 news_min_score: Some(6),
                 insider_min_score: Some(5),
+                news_categories: Some(toml::Value::Array(vec!["earnings".into(), "m&a".into()])),
+                news_exclude_categories: None,
                 insider_chart: Some("12m".into()),
                 alphai_ttl_secs: Some(120),
                 quote_rail: Some(false),
@@ -1684,6 +1744,44 @@ avg_price = 100
         let (resolved, warnings) = resolve(&cfg, None);
         assert!(warnings.is_empty(), "{warnings:?}");
         assert!(resolved.ui.bare);
+    }
+
+    #[test]
+    fn news_categories_resolve_with_warnings_per_entry() {
+        let resolve_ui = |toml_src: &str| {
+            let cfg: Config = toml::from_str(toml_src).expect("must parse");
+            let (resolved, warnings) = resolve(&cfg, None);
+            (resolved.ui.news_categories, warnings)
+        };
+        let find = |n: &str| crate::category::find(n).unwrap();
+
+        let (only, warnings) = resolve_ui("[ui]\nnews_categories = [\"earnings\", \"M&A\"]");
+        assert_eq!(only, Categories::only([find("earnings"), find("m&a")]));
+        assert!(warnings.is_empty(), "{warnings:?}");
+
+        // A bare string is a list of one; any spelling of a name works.
+        let (without, warnings) = resolve_ui("[ui]\nnews_exclude_categories = \"macro_economy\"");
+        assert_eq!(without, Categories::without([find("macro")]));
+        assert!(warnings.is_empty(), "{warnings:?}");
+
+        // Unknown names and non-strings are skipped, the rest still applies.
+        let (kept, warnings) =
+            resolve_ui("[ui]\nnews_exclude_categories = [\"crypto\", \"weather\", 3]");
+        assert_eq!(kept, Categories::without([find("crypto")]));
+        assert_eq!(warnings.len(), 2, "{warnings:?}");
+        assert!(warnings[0].contains("\"weather\""), "{warnings:?}");
+
+        // Both keys: the narrower one wins, and the clash is reported.
+        let (both, warnings) =
+            resolve_ui("[ui]\nnews_categories = [\"ipo\"]\nnews_exclude_categories = [\"crypto\"]");
+        assert_eq!(both, Categories::only([find("ipo")]));
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+
+        // Empty lists mean no filter, and never count as a clash.
+        let (empty, warnings) =
+            resolve_ui("[ui]\nnews_categories = []\nnews_exclude_categories = []");
+        assert!(empty.is_all());
+        assert!(warnings.is_empty(), "{warnings:?}");
     }
 
     #[test]
