@@ -216,3 +216,49 @@ fn column_ladder_and_unicode_fitting_stay_inside_the_cell_budget() {
     assert_eq!(fmt_reference_period("2026-08"), "Aug 2026");
     assert_eq!(fmt_reference_period("2026-09-12"), "12 Sep 2026");
 }
+
+#[test]
+fn overview_counts_remaining_events_over_seven_et_dates_across_dst() {
+    // UTC is already Sunday, but ET is still Saturday before the fall DST
+    // change. The last evening of the seven-date window is in UTC day 8.
+    let now = time("2026-11-01T03:30:30Z");
+    let mut events = vec![
+        event("passed", "2026-11-01T03:29:59Z"),
+        event("now", "2026-11-01T03:30:00Z"),
+        event("tomorrow", "2026-11-01T04:00:00Z"),
+        event("last evening", "2026-11-07T04:59:59Z"),
+        event("outside", "2026-11-07T05:00:00Z"),
+        event("undated", ""),
+    ];
+    for status in ["cancelled", "postponed", "new-status"] {
+        let mut e = event(status, "2026-11-01T03:45:00Z");
+        e.schedule_status = status.into();
+        events.push(e);
+    }
+    let mut estimated = event("estimated", "2026-11-01T03:40:00Z");
+    estimated.schedule_basis = "inferred".into();
+    estimated.importance = "medium".into();
+    events.extend([estimated, event("now", "2026-11-01T03:30:00Z")]);
+    let reports = [
+        ("TODAY".into(), day("2026-10-31")),
+        ("TODAY".into(), day("2026-10-31")),
+        ("LAST".into(), day("2026-11-06")),
+        ("OUTSIDE".into(), day("2026-11-07")),
+    ];
+    let rows = build_agenda(&events, &reports, now);
+    assert_eq!(
+        context::counts(&rows, now),
+        [
+            context::Counts {
+                macros: 2,
+                high: 1,
+                reports: 1
+            },
+            context::Counts {
+                macros: 4,
+                high: 3,
+                reports: 2
+            },
+        ]
+    );
+}

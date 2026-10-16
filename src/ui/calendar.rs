@@ -1,6 +1,8 @@
 //! Watchlist agenda. Dates without a time stay dates, and every projection
 //! (table, cursor, open target and rail) uses the same normalized events.
 
+mod context;
+
 use std::collections::HashSet;
 use std::time::Instant;
 
@@ -779,7 +781,7 @@ pub(crate) fn render_calendar_at(f: &mut Frame, area: Rect, app: &mut App, now: 
     } else {
         u16::from(inner.height >= 3)
     };
-    let table_area = Rect {
+    let content_area = Rect {
         height: inner.height.saturating_sub(status_height),
         ..inner
     };
@@ -789,7 +791,7 @@ pub(crate) fn render_calendar_at(f: &mut Frame, area: Rect, app: &mut App, now: 
         .take(status_height as usize)
         .enumerate()
     {
-        let status_area = Rect::new(inner.x, table_area.bottom() + i as u16, inner.width, 1);
+        let status_area = Rect::new(inner.x, content_area.bottom() + i as u16, inner.width, 1);
         let style = if (i == 0 && app.alphai_errors.contains_key(alphai::CALENDAR_KEY))
             || (i == 1 && app.report_dates_paused.is_some())
         {
@@ -802,6 +804,7 @@ pub(crate) fn render_calendar_at(f: &mut Frame, area: Rect, app: &mut App, now: 
             status_area,
         );
     }
+    let table_area = context::render(f, content_area, app, &rows, selected, now);
     if rows.is_empty() {
         app.calendar_state.select(None);
         let text = if app.is_loading(alphai::CALENDAR_KEY)

@@ -5,6 +5,19 @@ the crates.io releases; from 0.7.0 on each one is also a git tag and a
 GitHub release with prebuilt binaries. The Homebrew tap, the AUR and the
 apt repository joined later, and carry every version since.
 
+## 0.32.0 - 2026-10-16
+
+- Calendar opens with a summary of the remaining macro events and watchlist
+  reports today and over the next seven ET dates, including today. It
+  separates high-importance releases and marks counts based on incomplete
+  checks or cached data as known. An unloaded macro schedule is labelled
+  loading or unavailable instead of showing a zero count.
+- The selected calendar event has a detail area below the list with its
+  full name, schedule status, reference period, press-conference time,
+  source and freshness. It gives space back to the agenda in short panes;
+  narrow panes use a compact summary. Both additions use data already
+  loaded, with no extra requests or new keys.
+
 ## 0.31.0 - 2026-10-13
 
 - News can be filtered by category. `C` in the News and Split views opens

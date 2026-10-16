@@ -303,6 +303,20 @@ Event names use up to 48 columns when needed, while shorter names leave
 more space for Details. Color highlights the event and its importance;
 dates and source details keep a quieter style.
 
+At the top, `Today (ET)` and `Next 7d (ET)` count the remaining scheduled
+macro events, the high-importance ones and confirmed watchlist reports.
+The seven-day window includes today and the following six ET dates.
+Estimated schedules count too; cancelled, postponed and undated events
+do not. A report with no time stays in today's count for the whole day.
+`known` marks counts based on incomplete checks or cached data; an unloaded
+macro schedule shows loading or unavailable instead of a zero.
+
+When there is room below the list, the selected event shows its full name,
+schedule status, reference period, press-conference time, source and data
+freshness. Macro timestamps use your chosen timezone; the overview always
+uses ET. Short panes give that space back to the agenda, and narrow panes
+show just the high-importance macro count in the overview.
+
 `↑` / `↓` select an event, `PgUp` / `PgDn` move ten events, and `Enter`
 opens a macro event's source or the company's Earnings view. That view
 contains published reads, so it may show the previous quarter until a new

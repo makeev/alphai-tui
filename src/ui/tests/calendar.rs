@@ -518,3 +518,178 @@ fn paging_skips_the_now_separator_and_reentry_resets_table_offset() {
     assert_eq!(app.calendar_state.offset(), 0);
     assert_eq!(app.calendar_selection.resolve(&rows), Some(initial));
 }
+
+#[test]
+fn overview_qualifies_missing_failed_and_stale_checks_without_requesting_data() {
+    let (mut app, mut cmds) = fixture();
+    let full = screen(&mut app, 110, 32);
+    assert!(
+        full.contains("Today (ET): 0 macro (0 high) · 0 reports"),
+        "{full}"
+    );
+    assert!(
+        full.contains("Next 7d (ET): 2 macro (2 high) · 1 report"),
+        "{full}"
+    );
+
+    app.earnings.remove("AVGO");
+    let partial = screen(&mut app, 110, 32);
+    assert!(
+        partial.contains("2 macro (2 high) · 1 known report"),
+        "{partial}"
+    );
+    report(&mut app, "AVGO", None);
+    app.earnings.get_mut("NVDA").unwrap().fetched = Instant::now() - app.calendar_ttl();
+    let stale = screen(&mut app, 110, 32);
+    assert!(stale.contains("1 known report"), "{stale}");
+
+    report(&mut app, "NVDA", Some("2026-09-22"));
+    app.alphai_errors
+        .insert(alphai::earnings_key("NVDA"), "offline".into());
+    let failed = screen(&mut app, 110, 32);
+    assert!(failed.contains("1 known report"), "{failed}");
+    app.calendar.as_mut().unwrap().fetched = Instant::now() - app.calendar_ttl();
+    let cached = screen(&mut app, 52, 20);
+    let week = cached
+        .lines()
+        .find(|line| line.contains("Next 7d (ET)"))
+        .unwrap();
+    assert!(
+        week.contains("2 known high") && week.contains("1 known report"),
+        "{week}"
+    );
+    assert!(!week.contains('…'), "{week}");
+    assert!(
+        cmds.try_recv().is_err(),
+        "rendering context must not enqueue fetches"
+    );
+}
+
+#[test]
+fn overview_distinguishes_unavailable_macro_data_and_partial_windows_from_zero() {
+    let (mut app, _cmds) = fixture();
+    app.calendar.as_mut().unwrap().to = "2026-09-19".parse().unwrap();
+    let partial = screen(&mut app, 110, 32);
+    assert!(
+        partial.contains("Today (ET): 0 macro (0 high)"),
+        "{partial}"
+    );
+    assert!(
+        partial.contains("Next 7d (ET): 2 known macro (2 high)"),
+        "{partial}"
+    );
+    app.calendar = None;
+    let loading = screen(&mut app, 110, 32);
+    assert!(loading.contains("Today (ET): macro loading"), "{loading}");
+    app.alphai_errors
+        .insert(alphai::CALENDAR_KEY.into(), "offline".into());
+    let failed = screen(&mut app, 110, 32);
+    assert!(failed.contains("Today (ET): macro unavailable"), "{failed}");
+    window(&mut app, vec![]);
+    let empty = screen(&mut app, 110, 32);
+    assert!(empty.contains("Today (ET): 0 macro (0 high)"), "{empty}");
+}
+
+#[test]
+fn selected_event_expands_title_period_conference_source_and_freshness() {
+    let (mut app, mut cmds) = fixture();
+    let name =
+        "Federal Open Market Committee rate decision with the quarterly economic projections";
+    let mut event = macro_event(name, "2026-09-23T18:00:00Z");
+    event.reference_period = "2026-Q3".into();
+    event.schedule_basis = "inferred".into();
+    event.press_conference_at = Some("2026-09-23T18:30:00Z".into());
+    event.has_sep = true;
+    event.source_url =
+        Some("https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm".into());
+    window(&mut app, vec![event]);
+    let rows = agenda::agenda(&app, now());
+    let index = rows
+        .iter()
+        .position(|r| matches!(r.kind, Kind::Macro { .. }))
+        .unwrap();
+    app.calendar_selection.choose(&rows, index);
+    let full = screen(&mut app, 110, 32);
+    let detail = full.split("Selected event").nth(1).unwrap();
+    for expected in [
+        name,
+        "estimated schedule",
+        "period: Q3 2026",
+        "press conference",
+        "14:30 ET",
+        "projections",
+        "source: www.federalreserve.gov",
+        "updated just now",
+    ] {
+        assert!(detail.contains(expected), "missing {expected}:\n{full}");
+    }
+    app.chart.timezone = crate::config::ChartTimezone::Utc;
+    let utc = screen(&mut app, 110, 32);
+    let detail = utc.split("Selected event").nth(1).unwrap();
+    assert!(detail.contains("18:30 UTC"), "{detail}");
+    assert!(utc.contains("Next 7d (ET)"), "{utc}");
+
+    app.alphai_errors
+        .insert(alphai::CALENDAR_KEY.into(), "offline".into());
+    let failed = screen(&mut app, 110, 32);
+    let detail = failed.split("Selected event").nth(1).unwrap();
+    assert!(detail.contains("cached just now"), "{detail}");
+    assert!(cmds.try_recv().is_err());
+}
+
+#[test]
+fn report_detail_keeps_its_et_date_and_follows_selection_after_arrivals_and_resize() {
+    let (mut app, mut cmds) = fixture();
+    app.chart.timezone = crate::config::ChartTimezone::Utc;
+    let rows = agenda::agenda(&app, now());
+    let index = rows
+        .iter()
+        .position(|r| matches!(r.kind, Kind::Report { .. }))
+        .unwrap();
+    app.calendar_selection.choose(&rows, index);
+    app.calendar
+        .as_mut()
+        .unwrap()
+        .events
+        .push(macro_event("New arrival", "2026-09-18T11:00:00Z"));
+    let full = screen(&mut app, 110, 32);
+    let detail = full.split("Selected event").nth(1).unwrap();
+    for expected in [
+        "NVDA reports",
+        "confirmed date",
+        "Tue 22 Sep 2026 ET",
+        "time not provided",
+        "source: AlphAI",
+    ] {
+        assert!(detail.contains(expected), "missing {expected}:\n{detail}");
+    }
+    assert!(
+        !detail.contains("00:00") && !detail.contains("04:00"),
+        "{detail}"
+    );
+    let short = screen(&mut app, 60, 12);
+    assert!(
+        !short.contains("Selected event") && short.contains("NVDA reports"),
+        "{short}"
+    );
+    assert!(short.contains("2/2 checked"), "{short}");
+    let narrow = screen(&mut app, 40, 32);
+    assert!(
+        !narrow.contains("Today (ET)") && !narrow.contains("Selected event"),
+        "{narrow}"
+    );
+    let restored = screen(&mut app, 110, 32);
+    assert!(
+        restored
+            .split("Selected event")
+            .nth(1)
+            .unwrap()
+            .contains("NVDA reports"),
+        "{restored}"
+    );
+    assert_eq!(
+        agenda::open_target(&app, now()),
+        Some(OpenTarget::Earnings("NVDA".into()))
+    );
+    assert!(cmds.try_recv().is_err());
+}
