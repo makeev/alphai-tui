@@ -208,6 +208,9 @@ pub struct QuoteTiming {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Quote {
     pub symbol: String,
+    /// Instrument name when it accompanies the quote; no separate lookup.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     /// The regular session's price: the last trade while the exchange was
     /// open, which is what every view has always shown.
     pub price: f64,

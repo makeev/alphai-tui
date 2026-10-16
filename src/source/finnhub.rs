@@ -97,6 +97,7 @@ impl DataSource for Finnhub {
                     ..Default::default()
                 },
                 symbol: symbol.to_string(),
+                name: None,
                 price: q.c,
                 prev_close: Some(q.pc),
                 currency: None, // /quote does not report currency (US listings: USD)

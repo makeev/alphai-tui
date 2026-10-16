@@ -1,6 +1,7 @@
 mod calendar;
 mod design;
 mod motion;
+mod ticker_search;
 
 use std::sync::{Arc, RwLock};
 use std::time::Instant;
@@ -30,6 +31,7 @@ use crate::ui;
 /// more of them later does not mean editing every construction site.
 fn plain_quote(symbol: &str, price: f64, prev_close: Option<f64>, currency: Option<&str>) -> Quote {
     Quote {
+        name: None,
         timing: Default::default(),
         symbol: symbol.into(),
         price,

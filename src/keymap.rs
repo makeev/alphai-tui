@@ -51,11 +51,12 @@ pub enum Action {
     ToggleExtended,
     NewsMarkers,
     Categories,
+    FindTicker,
 }
 
 /// Every action with its snake_case config name, the single source of truth
 /// for `[keybindings]` parsing and for the coverage test.
-pub const ACTIONS: [(Action, &str); 35] = [
+pub const ACTIONS: [(Action, &str); 36] = [
     (Action::Quit, "quit"),
     (Action::NextView, "next_view"),
     (Action::PrevView, "prev_view"),
@@ -91,6 +92,7 @@ pub const ACTIONS: [(Action, &str); 35] = [
     (Action::ToggleExtended, "extended_hours"),
     (Action::NewsMarkers, "news_markers"),
     (Action::Categories, "categories"),
+    (Action::FindTicker, "find_ticker"),
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -179,6 +181,7 @@ fn default_keys(action: Action) -> Vec<KeyCombo> {
         // Shift-C for Categories, the way E got Extended: c is the chart
         // style, and the lowercase letters left have no mnemonic.
         Action::Categories => vec![ch('C')],
+        Action::FindTicker => vec![ch('/')],
     }
 }
 

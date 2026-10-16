@@ -211,6 +211,7 @@ mod tests {
     fn data(price: f64) -> TickerData {
         TickerData {
             quote: Quote {
+                name: None,
                 timing: Default::default(),
                 symbol: "AAPL".into(),
                 price,

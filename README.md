@@ -78,6 +78,18 @@ away, the way a holding is saved. A session started on tickers from the
 command line (`alphai-tui TSLA`) leaves a saved watchlist alone and says
 so in the footer; Save in the settings screen keeps such a list on purpose.
 
+`/` finds a ticker in your watchlist from any view. Type part of its symbol
+or company name, use `↑`/`↓` to choose a result, then `Enter` to switch;
+`Esc` cancels without losing your place. Exact symbols come first. The
+results show regular-session prices and daily changes, with cached or stale
+quotes labelled. Names are available once a Yahoo quote has loaded (including
+from the cache); other sources support symbol search. Searching is local,
+does not change the watchlist order and requests no additional data until
+you select a ticker. `Ctrl-U` clears the query; `PgUp`/`PgDn` and
+`Home`/`End` move through a long list.
+In Portfolio, selecting a held ticker focuses its row; an unheld ticker
+opens in Chart.
+
 Enter ticker symbols rather than company or index names. Names containing
 spaces are rejected locally, including in command-line arguments and the
 saved watchlist, before any data request. Ticker punctuation such as `^`,
@@ -633,6 +645,7 @@ defaults. API keys can also come from env vars, which win over the config:
 | `Tab` / `1`..`9` | everywhere | switch view |
 | `↑` `↓` / `j` `k` | table, chart, split | select ticker |
 | `a` | everywhere | add a ticker: type the symbol, `Enter` adds it, `Esc` cancels |
+| `/` | everywhere | find a watchlist ticker by symbol or loaded company name; `↑`/`↓` choose, `Enter` selects, `Esc` cancels |
 | `d` | everywhere | remove the selected ticker (the last one stays) |
 | `p` | everywhere | set what you hold of the ticker: `qty avg`, `Enter` saves it to the config, an empty line clears it |
 | `↑` `↓` / `j` `k` | news, insider | scroll articles |
@@ -1148,13 +1161,14 @@ The actions: `quit`, `next_view`, `prev_view`, `settings`, `help`,
 `insider_chart`, `chart_style`, `toggle_sma`, `toggle_rsi`,
 `toggle_volume`, `news_markers`, `ma_type`, `next_preset`, `prev_preset`,
 `next_theme`, `prev_theme`, `toggle_bare`, `add_ticker`, `remove_ticker`,
-`position`, `extended_hours`, `categories`.
+`position`, `extended_hours`, `categories`, `find_ticker`.
 The `?` help overlay shows this list with the current keys next to it.
 
 Reserved and never remappable: `ctrl-c` (force quit), `esc`, the digits
 `1` to `9` (view hotkeys), the keys inside the settings form, and `space`,
-`o`, `a` and `enter` inside the category picker. A bad or
-reserved key, an unknown action, or a key claimed by two actions prints a
+`o`, `a` and `enter` inside the category picker. The ticker search uses fixed
+arrow, paging and text-editing keys while open; letters always type the query.
+A bad or reserved key, an unknown action, or a key claimed by two actions prints a
 warning on startup and falls back safely; the footer always shows the keys
 that are actually bound.
 

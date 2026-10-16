@@ -427,6 +427,7 @@ fn quote_from_snapshot(symbol: &str, snap: &Snapshot, whole_market_volume: bool)
     };
     Ok(Quote {
         symbol: symbol.to_string(),
+        name: None,
         price,
         prev_close: close(&snap.prev_daily_bar),
         // Both endpoint families quote in USD; the API reports no currency.

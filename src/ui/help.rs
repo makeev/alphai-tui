@@ -32,6 +32,7 @@ static ROWS: &[Row] = &[
     Row::Act(Action::PrevView, "previous view"),
     Row::Fixed("1-9", "jump to a view"),
     Row::Act(Action::AddTicker, "add a ticker to the watchlist"),
+    Row::Act(Action::FindTicker, "find a ticker in the watchlist"),
     Row::Act(Action::RemoveTicker, "remove the selected ticker"),
     Row::Act(Action::Position, "set what you hold of the ticker"),
     Row::Act(Action::Quit, "quit"),

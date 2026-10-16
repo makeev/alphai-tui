@@ -685,6 +685,7 @@ mod tests {
 
     fn plain(price: f64, prev_close: Option<f64>) -> Quote {
         Quote {
+            name: None,
             timing: Default::default(),
             symbol: "AAPL".into(),
             price,

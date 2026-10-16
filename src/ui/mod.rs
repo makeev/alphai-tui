@@ -15,6 +15,7 @@ pub mod settings;
 pub mod split;
 pub mod summary;
 pub mod table;
+pub mod ticker_search;
 mod time_axis;
 
 use ratatui::Frame;
@@ -77,6 +78,7 @@ pub static DEFAULT_HINTS: &[Hint] = &[
     Hint::fixed("tab/1-9", "view"),
     Hint::act(&[Action::Up, Action::Down], "select"),
     Hint::act(&[Action::AddTicker], "add"),
+    Hint::act(&[Action::FindTicker], "find"),
     Hint::act(&[Action::NextPreset], "interval"),
     Hint::act(&[Action::Refresh], "refresh"),
     Hint::act(&[Action::Settings], "settings"),
@@ -202,6 +204,9 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     if app.prompt.open {
         prompt::render(f, app);
     }
+    if app.ticker_search.open {
+        ticker_search::render(f, app);
+    }
 }
 
 /// Cut to display cells, preserving grapheme clusters (wide characters,
@@ -321,6 +326,8 @@ fn footer_line(app: &App) -> Paragraph<'static> {
                 " qty and average price · enter save · empty clears · esc cancel".to_string()
             }
         }
+    } else if app.ticker_search.open {
+        " type to find · ↑↓ move · enter select · esc cancel".to_string()
     } else if app.settings.open {
         // The settings form is a text input; its keys are not remappable.
         " ↑↓ move · ←→ change · enter edit/save · esc close".to_string()

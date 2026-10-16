@@ -5,9 +5,11 @@
 mod feeds;
 mod runtime;
 mod settings;
+mod ticker_search;
 
 pub use feeds::{FeedBundle, FeedKind};
 pub use settings::{SettingsRow, SettingsState, settings_rows};
+pub use ticker_search::TickerSearch;
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -457,6 +459,7 @@ pub struct App {
     pub article_overlay: ArticleOverlay,
     pub help: HelpOverlay,
     pub category_picker: CategoryPicker,
+    pub ticker_search: TickerSearch,
     pub settings: SettingsState,
     pub prompt: Prompt,
     /// The watchlist as the price poller sees it; kept in step with
@@ -580,6 +583,7 @@ impl App {
             article_overlay: ArticleOverlay::default(),
             help: HelpOverlay::default(),
             category_picker: CategoryPicker::default(),
+            ticker_search: TickerSearch::default(),
             settings: SettingsState::default(),
             config: init.config,
             config_path: init.config_path,
@@ -896,6 +900,9 @@ impl App {
         if self.prompt.open {
             return self.handle_prompt_key(key);
         }
+        if self.ticker_search.open {
+            return self.handle_ticker_search_key(key);
+        }
         if self.settings.open {
             return self.handle_settings_key(key);
         }
@@ -939,6 +946,7 @@ impl App {
             }
             Action::RemoveTicker => self.remove_selected_symbol(),
             Action::Position => self.open_position_prompt(),
+            Action::FindTicker => self.open_ticker_search(),
             Action::NextView => self.switch_view((self.view_idx + 1) % ui::VIEWS.len()),
             Action::PrevView => {
                 self.switch_view((self.view_idx + ui::VIEWS.len() - 1) % ui::VIEWS.len())

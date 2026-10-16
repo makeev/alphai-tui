@@ -448,6 +448,7 @@ impl Tiingo {
         Ok(TickerData {
             quote: Quote {
                 symbol: symbol.to_string(),
+                name: None,
                 price,
                 prev_close,
                 currency: symbol.rsplit_once('-').map(|(_, q)| q.to_string()),
@@ -737,6 +738,7 @@ fn stock_quote(
         .filter(|(lo, hi)| lo.is_finite() && hi.is_finite() && *lo > 0.0 && lo <= hi);
     let mut q = Quote {
         symbol: symbol.to_string(),
+        name: None,
         price,
         prev_close: top.prev_close.filter(|p| p.is_finite() && *p > 0.0),
         currency: Some("USD".into()),

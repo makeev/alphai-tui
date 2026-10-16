@@ -40,6 +40,7 @@ static HINTS: &[Hint] = &[
     Hint::fixed("tab/1-9", "view"),
     Hint::act(&[Action::Up, Action::Down], "select"),
     Hint::act(&[Action::AddTicker], "add"),
+    Hint::act(&[Action::FindTicker], "find"),
     Hint::act(&[Action::NextPreset], "interval"),
     Hint::act(&[Action::Refresh], "refresh"),
     Hint::act(&[Action::Help], "help"),

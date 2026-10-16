@@ -157,6 +157,7 @@ impl DataSource for Yahoo {
         Ok(TickerData {
             quote: Quote {
                 symbol: meta.symbol.clone(),
+                name: meta.instrument_name().map(str::to_string),
                 price,
                 prev_close: meta
                     .previous_close
@@ -310,6 +311,8 @@ struct ChartResult {
 #[serde(rename_all = "camelCase")]
 struct Meta {
     symbol: String,
+    long_name: Option<String>,
+    short_name: Option<String>,
     currency: Option<String>,
     regular_market_price: Option<f64>,
     regular_market_time: Option<i64>,
@@ -332,6 +335,16 @@ struct Meta {
     regular_market_volume: Option<f64>,
     regular_market_day_high: Option<f64>,
     regular_market_day_low: Option<f64>,
+}
+
+impl Meta {
+    fn instrument_name(&self) -> Option<&str> {
+        [self.long_name.as_deref(), self.short_name.as_deref()]
+            .into_iter()
+            .flatten()
+            .map(str::trim)
+            .find(|name| !name.is_empty())
+    }
 }
 
 #[derive(Deserialize)]
@@ -440,6 +453,50 @@ mod tests {
         assert_eq!(meta.regular_market_volume, Some(64_902_991.0));
     }
 
+    #[tokio::test]
+    async fn instrument_name_comes_with_the_quote_and_survives_caching() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let source = Yahoo::test_at(format!("http://{}", listener.local_addr().unwrap()));
+        let raw = CHART_AFTER_HOURS.replace(
+            "\"symbol\": \"AAPL\"",
+            "\"symbol\": \"AAPL\", \"longName\": \" Apple Inc. \", \"shortName\": \"Apple\"",
+        );
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            while !request.ends_with(b"\r\n\r\n") {
+                request.push(stream.read_u8().await.unwrap());
+            }
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{raw}",
+                raw.len()
+            );
+            stream.write_all(response.as_bytes()).await.unwrap();
+        });
+        let data = source
+            .fetch("AAPL", Range::D1, Interval::M5, Sessions::Regular)
+            .await
+            .unwrap();
+        server.await.unwrap();
+        assert_eq!(data.quote.name.as_deref(), Some("Apple Inc."));
+        let mut json = serde_json::to_value(&data).unwrap();
+        let restored: TickerData = serde_json::from_value(json.clone()).unwrap();
+        assert_eq!(restored.quote.name, data.quote.name);
+        // A pre-search cache file remains readable, with no invented name.
+        json["quote"].as_object_mut().unwrap().remove("name");
+        let old: TickerData = serde_json::from_value(json).unwrap();
+        assert_eq!(old.quote.name, None);
+
+        let mut meta = parse(CHART_AFTER_HOURS).meta;
+        assert_eq!(meta.instrument_name(), None);
+        meta.long_name = Some(" ".into());
+        meta.short_name = Some(" Apple ".into());
+        assert_eq!(meta.instrument_name(), Some("Apple"));
+    }
+
     /// The headline price stays the regular close while the late print goes
     /// to its own field, so the day still reads as down 0.28% and the
     /// after-hours move as up 0.68% at the same time.
@@ -447,6 +504,7 @@ mod tests {
     fn the_quote_keeps_the_two_prices_apart() {
         let meta = parse(CHART_AFTER_HOURS).meta;
         let quote = Quote {
+            name: None,
             timing: Default::default(),
             symbol: meta.symbol.clone(),
             price: meta.regular_market_price.unwrap(),
@@ -471,6 +529,7 @@ mod tests {
         let raw = CHART_AFTER_HOURS.replace("\"fulldayPrice\": 317.47", "\"fulldayPrice\": 315.34");
         let meta = parse(&raw).meta;
         let quote = Quote {
+            name: None,
             timing: Default::default(),
             symbol: meta.symbol.clone(),
             price: meta.regular_market_price.unwrap(),

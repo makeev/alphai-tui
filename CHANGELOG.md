@@ -7,8 +7,22 @@ apt repository joined later, and carry every version since.
 
 ## Unreleased
 
+## 0.34.0 - 2026-10-16
+
+- `/` finds a watchlist ticker from any view.
+  Type part of its symbol or company name, move with the arrow keys and
+  press Enter to select it; Esc leaves the ticker and reading position
+  alone. Exact symbols come first, then prefixes and other matches. The
+  results show regular-session quotes, daily changes and cached or stale
+  labels where needed. Company names come with Yahoo quotes and survive
+  in the quote cache; other sources can still be searched by symbol.
+  Searching adds no requests and does not edit the saved watchlist.
+  Portfolio selects the matching holding, or opens the chart if it is not held.
+  The opening key can be changed with `find_ticker` in `[keybindings]`.
 - Split gives the chart 70% of the height, with the watchlist and news
   sharing the remaining 30% below it.
+- Update the locked transitive `chacha20` dependency from the yanked
+  0.10.1 release to 0.10.2, removing the packaging warning.
 
 ## 0.33.0 - 2026-10-16
 
