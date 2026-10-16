@@ -58,10 +58,8 @@ impl View for SplitView {
         true
     }
 
-    /// The chart across the full width of the top half, where it shows
-    /// twice the candles a half-width chart could; the watchlist and the
-    /// news strip share the bottom half. A short watchlist used to leave
-    /// half of its panel empty under the chart's full height.
+    /// The full-width chart gets 70% of the height, with the watchlist
+    /// and news strip sharing the remaining 30% below it.
     fn render(&self, f: &mut Frame, area: Rect, app: &mut App) {
         if area.height < NEWS_MIN_BODY_HEIGHT {
             let [left, right] =
@@ -72,7 +70,7 @@ impl View for SplitView {
             return;
         }
         let [top, bottom] =
-            Layout::vertical([Constraint::Percentage(50), Constraint::Percentage(50)]).areas(area);
+            Layout::vertical([Constraint::Percentage(70), Constraint::Percentage(30)]).areas(area);
         chart::render_chart(f, top, app);
         let [left, right] =
             Layout::horizontal([Constraint::Percentage(45), Constraint::Percentage(55)])

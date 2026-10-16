@@ -5,6 +5,11 @@ the crates.io releases; from 0.7.0 on each one is also a git tag and a
 GitHub release with prebuilt binaries. The Homebrew tap, the AUR and the
 apt repository joined later, and carry every version since.
 
+## Unreleased
+
+- Split gives the chart 70% of the height, with the watchlist and news
+  sharing the remaining 30% below it.
+
 ## 0.33.0 - 2026-10-16
 
 - Instrument names containing spaces are rejected before being added to the

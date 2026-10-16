@@ -66,8 +66,8 @@ off, and a terminal under 12 rows gives the row back to the view.
 
 ![alphai-tui split view: a full-width candlestick chart with moving averages, news marks and shaded pre-market and after-hours sessions on top, the watchlist and the scored news feed side by side underneath](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/split.png)
 
-The chart across the top half, the watchlist and the news feed side by
-side in the bottom half. One screen that says what you follow, what it is
+The chart across the top 70%, the watchlist and the news feed side by
+side in the bottom 30%. One screen that says what you follow, what it is
 doing and what is being said about it; the chart gets the full width, so
 it shows twice the candles a half-width one could. On very small terminals
 the feed steps aside and the watchlist and the chart share the row.
