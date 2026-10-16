@@ -78,6 +78,14 @@ away, the way a holding is saved. A session started on tickers from the
 command line (`alphai-tui TSLA`) leaves a saved watchlist alone and says
 so in the footer; Save in the settings screen keeps such a list on purpose.
 
+Enter ticker symbols rather than company or index names. Names containing
+spaces are rejected locally, including in command-line arguments and the
+saved watchlist, before any data request. Ticker punctuation such as `^`,
+`.` and `-` is preserved; support still depends on the selected data source.
+If a saved watchlist contains a name, startup identifies the invalid entry.
+Correct it in the config file, or pass ticker symbols on the command line
+to use a different list for that session.
+
 ### 2 News: the story and what it means
 
 ![alphai-tui news view: the ticker's chart over the article list with the selected story marked on it, and the full AI analysis card on the right with sentiment, price impact, trading value and context](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/news.png)

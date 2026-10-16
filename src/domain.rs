@@ -1,6 +1,19 @@
 use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 
+/// Normalize a user-supplied ticker, without trying to resolve company or
+/// index names. Providers still decide whether the ticker is supported.
+pub fn normalize_symbol(raw: &str) -> Result<String, String> {
+    let symbol = raw.trim().to_uppercase();
+    if symbol.is_empty() {
+        return Err("type a ticker, e.g. AAPL".into());
+    }
+    if symbol.chars().any(char::is_whitespace) {
+        return Err("use a ticker without spaces, e.g. AAPL".into());
+    }
+    Ok(symbol)
+}
+
 /// History window requested from a data source.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 pub enum Range {
@@ -369,6 +382,24 @@ pub fn fmt_volume(v: f64) -> String {
 mod tests {
     use super::*;
     use crate::indicators::SMA_SLOW;
+
+    #[test]
+    fn ticker_input_preserves_provider_syntax_and_rejects_names() {
+        for (raw, want) in [
+            (" aapl ", "AAPL"),
+            ("^ixic", "^IXIC"),
+            ("brk.b", "BRK.B"),
+            ("btc-usd", "BTC-USD"),
+            ("eurusd=x", "EURUSD=X"),
+            ("0700.hk", "0700.HK"),
+            ("nasdaq:aapl", "NASDAQ:AAPL"),
+        ] {
+            assert_eq!(normalize_symbol(raw).unwrap(), want);
+        }
+        for raw in ["", "  ", "NASDAQ COMPOSITE", "S&P\t500", "ACME\u{a0}CORP"] {
+            assert!(normalize_symbol(raw).is_err(), "accepted {raw:?}");
+        }
+    }
 
     fn instant(s: &str) -> chrono::DateTime<chrono::Utc> {
         chrono::DateTime::parse_from_rfc3339(s).unwrap().to_utc()

@@ -37,6 +37,7 @@ use crate::domain::{Interval, Range, Sessions, fetch_range, fmt_price};
 )]
 struct Args {
     /// Ticker symbols to watch, e.g. AAPL MSFT NVDA BTC-USD (default: saved watchlist)
+    #[arg(value_parser = domain::normalize_symbol)]
     symbols: Vec<String>,
 
     #[arg(short, long, help = source::registry::cli_source_help())]
@@ -73,7 +74,7 @@ struct Args {
 
     /// Print the latest AlphAI earnings read for one ticker and exit
     /// (no TUI); needs an API key. One request.
-    #[arg(long, value_name = "TICKER")]
+    #[arg(long, value_name = "TICKER", value_parser = domain::normalize_symbol)]
     earnings: Option<String>,
 
     /// Use an alternate config file (the settings screen saves back to it)
@@ -91,16 +92,7 @@ fn main() -> Result<()> {
         eprintln!("warning: {w}");
     }
 
-    let symbols: Vec<String> = if !args.symbols.is_empty() {
-        args.symbols.iter().map(|s| s.to_uppercase()).collect()
-    } else if !cfg.watchlist.is_empty() {
-        cfg.watchlist.iter().map(|s| s.to_uppercase()).collect()
-    } else {
-        config::DEFAULT_WATCHLIST
-            .iter()
-            .map(|s| s.to_string())
-            .collect()
-    };
+    let symbols = startup_symbols(&args.symbols, &cfg.watchlist)?;
 
     let source_name = args
         .source
@@ -236,6 +228,25 @@ fn main() -> Result<()> {
     let result = rt.block_on(app.run(&mut terminal));
     ratatui::restore();
     result
+}
+
+fn startup_symbols(cli: &[String], saved: &[String]) -> Result<Vec<String>> {
+    let (raw, origin) = if !cli.is_empty() {
+        (cli, "command line")
+    } else if !saved.is_empty() {
+        (saved, "config watchlist")
+    } else {
+        return Ok(config::DEFAULT_WATCHLIST
+            .iter()
+            .map(|s| s.to_string())
+            .collect());
+    };
+    raw.iter()
+        .map(|symbol| {
+            domain::normalize_symbol(symbol)
+                .map_err(|error| anyhow::anyhow!("invalid ticker {symbol:?} in {origin}: {error}"))
+        })
+        .collect()
 }
 
 /// `--earnings TICKER`: the newest earnings read in plain text, for a pipe
@@ -610,6 +621,32 @@ fn trimmed(v: f64, places: i32) -> f64 {
 mod tests {
     use super::*;
     use crate::domain::{Candle, Quote, TickerData};
+
+    #[test]
+    fn names_are_rejected_in_cli_and_saved_watchlists() {
+        for args in [
+            vec!["alphai-tui", "NASDAQ COMPOSITE"],
+            vec!["alphai-tui", "--earnings", "NASDAQ COMPOSITE"],
+        ] {
+            let error = Args::try_parse_from(args).unwrap_err().to_string();
+            assert!(error.contains("use a ticker without spaces"), "{error}");
+        }
+        let saved = vec!["AAPL".into(), "NASDAQ COMPOSITE".into()];
+        let error = startup_symbols(&[], &saved).unwrap_err().to_string();
+        assert!(error.contains("config watchlist"), "{error}");
+        assert!(error.contains("NASDAQ COMPOSITE"), "{error}");
+        // An explicit valid list still overrides a broken saved one.
+        let args = Args::parse_from(["alphai-tui", "^ixic", "btc-usd"]);
+        assert_eq!(
+            startup_symbols(&args.symbols, &saved).unwrap(),
+            ["^IXIC", "BTC-USD"]
+        );
+        assert_eq!(startup_symbols(&[], &[" aapl ".into()]).unwrap(), ["AAPL"]);
+        assert_eq!(
+            startup_symbols(&[], &[]).unwrap(),
+            config::DEFAULT_WATCHLIST
+        );
+    }
 
     #[test]
     fn startup_uses_the_full_fifteen_minute_preset_and_respects_overrides() {

@@ -208,10 +208,7 @@ fn clear(symbol: &str) -> Result<Entry, String> {
 }
 
 fn normalize_symbol(raw: &str) -> Result<String, String> {
-    let symbol = raw.trim().to_uppercase();
-    if symbol.is_empty() {
-        return Err("name a ticker".to_string());
-    }
+    let symbol = crate::domain::normalize_symbol(raw)?;
     if symbol.parse::<f64>().is_ok() {
         return Err(format!("{symbol} is not a ticker"));
     }

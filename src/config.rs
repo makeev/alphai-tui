@@ -145,11 +145,17 @@ impl Edit {
                 return;
             }
             Self::Watch(symbol) => {
-                if !cfg.watchlist.iter().any(|s| s.eq_ignore_ascii_case(symbol)) {
+                if !cfg
+                    .watchlist
+                    .iter()
+                    .any(|s| s.trim().eq_ignore_ascii_case(symbol))
+                {
                     cfg.watchlist.push(symbol.clone());
                 }
             }
-            Self::Unwatch(symbol) => cfg.watchlist.retain(|s| !s.eq_ignore_ascii_case(symbol)),
+            Self::Unwatch(symbol) => cfg
+                .watchlist
+                .retain(|s| !s.trim().eq_ignore_ascii_case(symbol)),
         }
         if cfg.watchlist.is_empty() {
             cfg.watchlist = live.to_vec();
@@ -485,6 +491,13 @@ fn resolve_positions(raw: &[PositionEntry], warnings: &mut Vec<String>) -> Vec<P
         let Some(symbol) = entry.symbol() else {
             warnings.push("[[positions]]: an entry has no symbol, skipping it".to_string());
             continue;
+        };
+        let symbol = match crate::domain::normalize_symbol(&symbol) {
+            Ok(symbol) => symbol,
+            Err(error) => {
+                warnings.push(format!("[[positions]] {symbol}: {error}, skipping it"));
+                continue;
+            }
         };
         let Some(qty) =
             PositionEntry::number(entry.qty.as_ref()).filter(|q| q.is_finite() && *q != 0.0)
@@ -1103,6 +1116,11 @@ avg_price = -1
 symbol = "AAPL"
 qty = 5
 avg_price = 100
+
+[[positions]]
+symbol = "NASDAQ COMPOSITE"
+qty = 1
+avg_price = 100
 "#,
         )
         .unwrap();
@@ -1112,10 +1130,28 @@ avg_price = 100
         // its quote.
         assert_eq!(resolved.positions[0].symbol, "AAPL");
         assert_eq!(resolved.positions[0].qty, 12.0);
-        assert_eq!(warnings.len(), 3, "{warnings:?}");
+        assert_eq!(warnings.len(), 4, "{warnings:?}");
         assert!(warnings.iter().any(|w| w.contains("MSFT")), "{warnings:?}");
         assert!(warnings.iter().any(|w| w.contains("NVDA")), "{warnings:?}");
         assert!(warnings.iter().any(|w| w.contains("twice")), "{warnings:?}");
+        assert!(
+            warnings.iter().any(|w| w.contains("NASDAQ COMPOSITE")),
+            "{warnings:?}"
+        );
+    }
+
+    #[test]
+    fn watchlist_edits_match_trimmed_tickers() {
+        let mut cfg = Config {
+            watchlist: vec![" aapl ".into(), "MSFT".into()],
+            ..Default::default()
+        };
+        let live = vec!["AAPL".into(), "MSFT".into()];
+        assert!(crate::app::watchlist_is_saved(&cfg.watchlist, &live));
+        Edit::Watch("AAPL".into()).apply(&mut cfg, &live);
+        assert_eq!(cfg.watchlist.len(), 2);
+        Edit::Unwatch("AAPL".into()).apply(&mut cfg, &["MSFT".into()]);
+        assert_eq!(cfg.watchlist, ["MSFT"]);
     }
 
     /// A typo reads as auto, and alpaca without its keys as the source's

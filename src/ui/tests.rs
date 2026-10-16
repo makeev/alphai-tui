@@ -489,6 +489,41 @@ fn a_adds_a_ticker_and_the_poller_sees_it() {
     assert_eq!(*app.shared_symbols.read().unwrap(), app.symbols);
 }
 
+#[test]
+fn adding_an_instrument_name_keeps_it_out_of_the_watchlist() {
+    let mut app = fake_app();
+    press(&mut app, KeyCode::Char('a'));
+    for c in "NASDAQ COMPOSITE".chars() {
+        press(&mut app, KeyCode::Char(c));
+    }
+    press(&mut app, KeyCode::Enter);
+
+    assert!(
+        app.prompt.open,
+        "the name needs correcting before it is added"
+    );
+    assert_eq!(app.prompt.input, "NASDAQ COMPOSITE");
+    assert_eq!(app.symbols, vec!["AAPL", "MSFT"]);
+    assert_eq!(*app.shared_symbols.read().unwrap(), app.symbols);
+    assert_eq!(app.selected, 0);
+    assert!(app.config.watchlist.is_empty(), "nothing was saved");
+    assert!(
+        render(&mut app).contains("use a ticker without spaces, e.g. AAPL"),
+        "the prompt must show a usable correction"
+    );
+    // Correcting the input in place must still add an index ticker.
+    for _ in 0..app.prompt.input.len() {
+        press(&mut app, KeyCode::Backspace);
+    }
+    for c in "^ixic".chars() {
+        press(&mut app, KeyCode::Char(c));
+    }
+    press(&mut app, KeyCode::Enter);
+    assert!(!app.prompt.open, "{:?}", app.prompt.error);
+    assert_eq!(app.selected_symbol(), "^IXIC");
+    assert_eq!(*app.shared_symbols.read().unwrap(), app.symbols);
+}
+
 /// Typing has to win over the key bindings while the prompt is open, or a
 /// ticker with a bound letter in it cannot be typed at all.
 #[test]

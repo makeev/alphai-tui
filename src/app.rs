@@ -105,9 +105,8 @@ pub enum PromptKind {
     Position,
 }
 
-/// State of the prompt overlay (a and p anywhere). A typed symbol is not
-/// validated here: whether it exists is the source's answer, and the row
-/// carries that answer already, as a price or as an error.
+/// State of the prompt overlay (a and p anywhere). Ticker syntax is checked
+/// before adding it; whether it exists is still the source's answer.
 #[derive(Default)]
 pub struct Prompt {
     pub open: bool,
@@ -1161,7 +1160,7 @@ impl App {
     fn commit_prompt(&mut self) -> Result<(), String> {
         let typed = self.prompt.input.clone();
         match self.prompt.kind {
-            PromptKind::Ticker => self.add_symbol(typed.trim().to_uppercase().as_str()),
+            PromptKind::Ticker => self.add_symbol(&typed),
             PromptKind::Position => {
                 let target = self.prompt.target.clone();
                 let entry = portfolio::parse_entry(&typed, &target)?;
@@ -1315,20 +1314,18 @@ impl App {
     /// the nudge makes that cycle start now instead of up to one interval
     /// later.
     fn add_symbol(&mut self, symbol: &str) -> Result<(), String> {
-        if symbol.is_empty() {
-            return Err("type a ticker, e.g. AAPL".into());
-        }
-        if let Some(at) = self.symbols.iter().position(|s| s == symbol) {
+        let symbol = crate::domain::normalize_symbol(symbol)?;
+        if let Some(at) = self.symbols.iter().position(|s| s == &symbol) {
             // Not an error worth dwelling on: put the cursor where the
             // ticker already is, and say why nothing was added.
             self.select_symbol(at);
             return Err(format!("{symbol} is already on the watchlist"));
         }
-        self.symbols.push(symbol.to_string());
+        self.symbols.push(symbol.clone());
         self.sync_shared_symbols();
         self.select_symbol(self.symbols.len() - 1);
         self.refresh.notify_one();
-        self.persist_watchlist(config::Edit::Watch(symbol.to_string()));
+        self.persist_watchlist(config::Edit::Watch(symbol));
         Ok(())
     }
 
@@ -1615,7 +1612,7 @@ pub(crate) fn watchlist_is_saved(saved: &[String], symbols: &[String]) -> bool {
     saved.is_empty()
         || saved
             .iter()
-            .map(|s| s.to_uppercase())
+            .map(|s| s.trim().to_uppercase())
             .eq(symbols.iter().cloned())
 }
 

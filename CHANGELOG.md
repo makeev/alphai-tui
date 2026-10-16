@@ -5,6 +5,15 @@ the crates.io releases; from 0.7.0 on each one is also a git tag and a
 GitHub release with prebuilt binaries. The Homebrew tap, the AUR and the
 apt repository joined later, and carry every version since.
 
+## 0.33.0 - 2026-10-16
+
+- Instrument names containing spaces are rejected before being added to the
+  watchlist or sent to a data provider. The add-ticker prompt explains the
+  correction; CLI arguments and saved ticker entries use the same check.
+  A saved watchlist with an invalid entry stops startup and names the entry
+  to correct. Ticker punctuation is preserved, and surrounding whitespace
+  is trimmed consistently when loading or editing the watchlist.
+
 ## 0.32.0 - 2026-10-16
 
 - Calendar opens with a summary of the remaining macro events and watchlist
