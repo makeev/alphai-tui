@@ -48,6 +48,15 @@ const EARNINGS_TTL_FACTOR: u32 = 12;
 const CALENDAR_TTL_FACTOR: u32 = 72;
 pub(crate) const REPORT_DATE_PACE: Duration = Duration::from_secs(4);
 
+/// Ticker and market feeds use plain symbols or `*`; the other surfaces
+/// have reserved keys. A provider's ticker may itself contain a colon.
+fn is_groupable_news(key: &str) -> bool {
+    !key.starts_with("ins:")
+        && !key.starts_with("earn:")
+        && key != alphai::CALENDAR_KEY
+        && key != alphai::TRENDING_KEY
+}
+
 /// The AlphAI feeds a view can display (`View::feed_shown`). Trending is
 /// not a kind: it is a news scope, a different cache key of the news feed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -171,6 +180,7 @@ impl App {
                     cursor: None,
                     min_relevance: Some(self.news_min_score),
                     categories: self.news_categories,
+                    collapse: self.collapse_news,
                     sort: Sort::Published,
                 },
                 NewsScope::Market => alphai::Cmd::FetchNews {
@@ -178,6 +188,7 @@ impl App {
                     cursor: None,
                     min_relevance: Some(self.news_min_score),
                     categories: self.news_categories,
+                    collapse: self.collapse_news,
                     sort: Sort::Published,
                 },
                 NewsScope::Trending => alphai::Cmd::FetchTrending,
@@ -200,6 +211,7 @@ impl App {
                 cursor: Some(cursor),
                 min_relevance: Some(self.news_min_score),
                 categories: self.news_categories,
+                collapse: self.collapse_news,
                 sort: Sort::Published,
             },
             FeedKind::Insider => alphai::Cmd::FetchInsider {
@@ -231,6 +243,7 @@ impl App {
                 cursor,
                 min_relevance: Some(self.news_min_score),
                 categories: self.news_categories,
+                collapse: self.collapse_news,
                 sort: Sort::Ingested,
             },
             FeedKind::Insider => alphai::Cmd::FetchInsider {
@@ -304,6 +317,22 @@ impl App {
         if self.alphai_key_pending > 0 {
             return;
         }
+        let feed_key = match &event {
+            alphai::Event::Feed { key, .. }
+            | alphai::Event::PageError { key, .. }
+            | alphai::Event::PollError { key, .. }
+            | alphai::Event::PollReprime { key }
+            | alphai::Event::Error { key, .. } => Some(key),
+            _ => None,
+        };
+        if let Some(key) = feed_key
+            && self.discarded_news_requests.remove(key)
+        {
+            // Keep the inflight guard until this old reply retires. Even a
+            // late error must not block the newly selected grouping mode.
+            self.inflight.remove(key);
+            return;
+        }
         match event {
             alphai::Event::KeyChanged => unreachable!(),
             alphai::Event::Feed {
@@ -317,6 +346,7 @@ impl App {
             } => {
                 self.inflight.remove(&key);
                 self.alphai_errors.remove(&key);
+                let collapse = self.collapse_news && is_groupable_news(&key);
                 // Read before the bundle is borrowed: a merge into the feed
                 // under the reader's cursor has to move the cursor with it.
                 // The Split strip shows a feed but navigates nothing, so it
@@ -338,7 +368,7 @@ impl App {
                             .entry(key)
                             .or_default()
                             .extend(uids(&articles));
-                        append_page(&mut b.articles, articles);
+                        append_page(&mut b.articles, articles, collapse);
                     }
                     // A delta page merges arrivals into the top: the loaded
                     // pages, the side payload and the row under the cursor all
@@ -353,7 +383,7 @@ impl App {
                         b.delta_cursor = next_cursor;
                         b.page_error = None;
                         b.polled = Instant::now();
-                        let fresh = merge_arrivals(&mut b.articles, articles, prime);
+                        let fresh = merge_arrivals(&mut b.articles, articles, prime, collapse);
                         if active.as_deref() == Some(key.as_str()) {
                             self.news_selected += fresh.len();
                         }
@@ -680,6 +710,32 @@ impl App {
         self.report_dates_paused = None;
         self.alphai_errors.clear();
         self.inflight.clear();
+        self.discarded_news_requests.clear();
+    }
+
+    /// Save applies grouping to both news scopes. Discard their pages and
+    /// both cursor families together; only the visible feed refetches.
+    pub(super) fn set_collapse_news(&mut self, collapse: bool) {
+        if self.collapse_news == collapse {
+            return;
+        }
+        self.collapse_news = collapse;
+        self.discarded_news_requests.extend(
+            self.inflight
+                .iter()
+                .filter(|key| is_groupable_news(key))
+                .cloned(),
+        );
+        self.feeds.retain(|key, _| !is_groupable_news(key));
+        self.feed_seen.retain(|key, _| !is_groupable_news(key));
+        self.alphai_errors.retain(|key, _| !is_groupable_news(key));
+        if self
+            .active_feed()
+            .is_some_and(|(key, kind)| kind == FeedKind::News && is_groupable_news(&key))
+        {
+            self.news_selected = 0;
+            self.card_scroll = 0;
+        }
     }
 
     /// j at the last row: ask for the feed's next page (explicitly
@@ -850,10 +906,15 @@ fn uids(articles: &[Article]) -> impl Iterator<Item = String> + '_ {
 /// serves it in its published place. Later polls keep every arrival, floor or
 /// not, because those demonstrably arrived while the reader was watching, and
 /// that is the whole point of polling by arrival.
-fn merge_arrivals(articles: &mut Vec<Article>, page: Vec<Article>, prime: bool) -> Vec<String> {
-    let seen: HashSet<String> = articles
+fn merge_arrivals(
+    articles: &mut Vec<Article>,
+    page: Vec<Article>,
+    prime: bool,
+    collapse: bool,
+) -> Vec<String> {
+    let mut seen: HashSet<String> = articles
         .iter()
-        .map(|a| a.original.uid.clone())
+        .map(|a| article_identity(a, collapse).to_string())
         .filter(|uid| !uid.is_empty())
         .collect();
     // The bottom of the window the reader is looking at. A bundle that shows
@@ -863,12 +924,14 @@ fn merge_arrivals(articles: &mut Vec<Article>, page: Vec<Article>, prime: bool) 
         .flatten();
     let mut fresh: Vec<Article> = page
         .into_iter()
-        .filter(|a| !a.original.uid.is_empty() && !seen.contains(&a.original.uid))
         .filter(|a| match (floor, a.published()) {
             // An unreadable timestamp cannot be judged against the floor;
             // keep it, the block sort already pins it to the bottom.
             (Some(floor), Some(published)) => published >= floor,
             _ => true,
+        })
+        .filter(|a| {
+            !a.original.uid.is_empty() && seen.insert(article_identity(a, collapse).to_string())
         })
         .collect();
     // Descending publication, with an unparsable timestamp pinned to the
@@ -883,14 +946,23 @@ fn merge_arrivals(articles: &mut Vec<Article>, page: Vec<Article>, prime: bool) 
 /// Extend a feed with the next page, dropping rows already shown (a fresh
 /// article can shift the window between requests and repeat on the page
 /// boundary). Rows without a uid cannot be matched and are kept.
-fn append_page(articles: &mut Vec<Article>, page: Vec<Article>) {
-    let seen: HashSet<String> = articles
+fn append_page(articles: &mut Vec<Article>, page: Vec<Article>, collapse: bool) {
+    let mut seen: HashSet<String> = articles
         .iter()
-        .map(|a| a.original.uid.clone())
+        .map(|a| article_identity(a, collapse).to_string())
         .filter(|uid| !uid.is_empty())
         .collect();
-    articles.extend(
-        page.into_iter()
-            .filter(|a| a.original.uid.is_empty() || !seen.contains(&a.original.uid)),
-    );
+    articles.extend(page.into_iter().filter(|a| {
+        a.original.uid.is_empty() || seen.insert(article_identity(a, collapse).to_string())
+    }));
+}
+
+/// Grouped feeds may receive a new representative of an already shown
+/// story after a root change. Keep one row across pages and delta polls;
+/// older API responses without a story identity still deduplicate by uid.
+fn article_identity(article: &Article, collapse: bool) -> &str {
+    if collapse && let Some(story) = article.story_id.as_deref().filter(|id| !id.is_empty()) {
+        return story;
+    }
+    &article.original.uid
 }

@@ -98,6 +98,14 @@ pub struct Client {
     key: String,
 }
 
+/// Filters shared by every page and delta poll of a news feed.
+#[derive(Clone, Copy)]
+pub struct NewsFilters {
+    pub min_relevance: Option<u8>,
+    pub categories: Categories,
+    pub collapse: bool,
+}
+
 impl Client {
     pub fn new(key: String) -> Result<Self> {
         let base = std::env::var("ALPHAI_API_URL")
@@ -176,11 +184,11 @@ impl Client {
     /// a silent clamp), `min_relevance`
     /// filters server-side by score 1..10 (the server defaults to 4 when
     /// omitted) so low-score rows never occupy page slots.
-    /// Market-wide requests collapse syndicated reprints to one row per story
-    /// (`sources_count` reports the outlet count). The symbol-scoped feed is
-    /// left uncollapsed: the collapse filter matches the story root, which may
-    /// not mention the symbol, and would silently drop relevant coverage.
-    /// `categories` narrows the feed to the categories the reader picked,
+    /// `filters.collapse` requests one representative per story in either
+    /// scope (`sources_count` reports the outlet count). The API applies the
+    /// other filters to that representative; turning grouping off includes
+    /// matching articles whose representative does not pass those filters.
+    /// `filters.categories` narrows the feed to the categories the reader picked,
     /// also on the server (see `Categories::param`).
     /// `sort` picks the ordering: `Published` is the reverse-chronological
     /// feed this pages through, `Ingested` is delta mode (see `Sort`), where
@@ -190,14 +198,15 @@ impl Client {
         symbol: Option<&str>,
         cursor: Option<&str>,
         page_size: Option<u8>,
-        min_relevance: Option<u8>,
-        categories: Categories,
+        filters: NewsFilters,
         sort: Sort,
     ) -> Result<NewsPage> {
         let mut query: Vec<(&str, &str)> = Vec::new();
-        match symbol {
-            Some(s) => query.push(("symbol", s)),
-            None => query.push(("collapse", "story")),
+        if let Some(s) = symbol {
+            query.push(("symbol", s));
+        }
+        if filters.collapse {
+            query.push(("collapse", "story"));
         }
         if let Some(c) = cursor {
             query.push(("cursor", c));
@@ -206,11 +215,11 @@ impl Client {
         if let Some(size) = &size {
             query.push(("page_size", size));
         }
-        let min = min_relevance.map(|n| n.to_string());
+        let min = filters.min_relevance.map(|n| n.to_string());
         if let Some(min) = &min {
             query.push(("min_relevance", min));
         }
-        let category = categories.param();
+        let category = filters.categories.param();
         if let Some((name, list)) = &category {
             query.push((name, list));
         }
@@ -373,6 +382,7 @@ pub enum Cmd {
         cursor: Option<String>,
         min_relevance: Option<u8>,
         categories: Categories,
+        collapse: bool,
         sort: Sort,
     },
     /// Fetch the 48h trending top 10 (cached under `TRENDING_KEY`).
@@ -486,7 +496,7 @@ pub const CALENDAR_LOOKBACK_DAYS: i64 = 7;
 
 /// Which paginated feed a page fetch targets, each with its filters.
 enum Feed<'a> {
-    News(Option<&'a str>, Option<u8>, Categories),
+    News(Option<&'a str>, NewsFilters),
     Insider(&'a str, Option<u8>),
 }
 
@@ -510,10 +520,8 @@ async fn fetch_feed_page(
         || (page50.is_none() && cursor.is_some() && sort == Sort::Published);
     if try50 {
         let result = match &feed {
-            Feed::News(symbol, min, categories) => {
-                client
-                    .news(*symbol, cursor, Some(50), *min, *categories, sort)
-                    .await
+            Feed::News(symbol, filters) => {
+                client.news(*symbol, cursor, Some(50), *filters, sort).await
             }
             Feed::Insider(symbol, min) => {
                 client
@@ -534,9 +542,9 @@ async fn fetch_feed_page(
         }
     }
     match &feed {
-        Feed::News(symbol, min, categories) => {
+        Feed::News(symbol, filters) => {
             client
-                .news(*symbol, cursor, Some(PAGE_SIZE), *min, *categories, sort)
+                .news(*symbol, cursor, Some(PAGE_SIZE), *filters, sort)
                 .await
         }
         Feed::Insider(symbol, min) => {
@@ -599,6 +607,7 @@ pub async fn run(
                 cursor,
                 min_relevance,
                 categories,
+                collapse,
                 sort,
             } => {
                 let key = news_key(symbol.as_deref());
@@ -607,6 +616,11 @@ pub async fn run(
                     continue;
                 };
                 let mode = feed_mode(sort, cursor.as_deref());
+                let filters = NewsFilters {
+                    min_relevance,
+                    categories,
+                    collapse,
+                };
                 // Sentiment is a nice-to-have on the initial symbol fetch:
                 // its failure must not blank the news list, so it degrades
                 // to None. Pages and delta polls never refetch it.
@@ -615,7 +629,7 @@ pub async fn run(
                         let (p, senti) = tokio::join!(
                             fetch_feed_page(
                                 client,
-                                Feed::News(Some(s), min_relevance, categories),
+                                Feed::News(Some(s), filters),
                                 None,
                                 sort,
                                 &mut page50,
@@ -627,7 +641,7 @@ pub async fn run(
                     _ => (
                         fetch_feed_page(
                             client,
-                            Feed::News(symbol.as_deref(), min_relevance, categories),
+                            Feed::News(symbol.as_deref(), filters),
                             cursor.as_deref(),
                             sort,
                             &mut page50,
@@ -815,8 +829,11 @@ pub struct Article {
     pub original: Original,
     #[serde(default)]
     pub enrichment: Enrichment,
-    /// Story-collapse only: distinct outlets covering this story. None in the
-    /// symbol-scoped feed and on rows predating the field.
+    /// Stable identity of the story, even when its representative changes.
+    #[serde(default)]
+    pub story_id: Option<String>,
+    /// Story-collapse only: distinct outlets covering this story. None when
+    /// grouping is off and on rows predating the field.
     #[serde(default)]
     pub sources_count: Option<i64>,
     /// Insider feed only: the structured Form 4 event behind this row.
@@ -2051,6 +2068,77 @@ mod tests {
         assert_eq!(fmt_usd("garbage"), "garbage");
     }
 
+    #[tokio::test]
+    async fn news_grouping_is_sent_for_both_scopes_pages_and_delta() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        for symbol in [Some("CRWV"), None] {
+            for collapse in [false, true] {
+                for (sort, cursor) in [
+                    (Sort::Published, None),
+                    (Sort::Published, Some("older")),
+                    (Sort::Ingested, Some("delta")),
+                ] {
+                    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+                    let base = format!("http://{}", listener.local_addr().unwrap());
+                    let server = tokio::spawn(async move {
+                        let (mut socket, _) = listener.accept().await.unwrap();
+                        let mut request = Vec::new();
+                        let mut buffer = [0; 2048];
+                        while !request.windows(4).any(|w| w == b"\r\n\r\n") {
+                            let n = socket.read(&mut buffer).await.unwrap();
+                            assert!(n > 0);
+                            request.extend_from_slice(&buffer[..n]);
+                        }
+                        let body = r#"{"results":[],"next_cursor":null}"#;
+                        socket.write_all(format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                            body.len()
+                        ).as_bytes()).await.unwrap();
+                        String::from_utf8(request).unwrap()
+                    });
+                    let client = Client {
+                        http: reqwest::Client::new(),
+                        base,
+                        key: "test".into(),
+                    };
+                    let filters = NewsFilters {
+                        min_relevance: Some(7),
+                        categories: Categories::default(),
+                        collapse,
+                    };
+                    // Use the worker's page helper too: confirmed Pro pages
+                    // exercise its 50-row branch; other cases use 20.
+                    let mut page50 = cursor.map(|_| true);
+                    fetch_feed_page(
+                        &client,
+                        Feed::News(symbol, filters),
+                        cursor,
+                        sort,
+                        &mut page50,
+                    )
+                    .await
+                    .unwrap();
+                    let request = server.await.unwrap();
+                    let path = request.split_whitespace().nth(1).unwrap();
+                    let url = reqwest::Url::parse(&format!("http://localhost{path}")).unwrap();
+                    let params: std::collections::HashMap<_, _> =
+                        url.query_pairs().into_owned().collect();
+                    assert_eq!(url.path(), "/api/news/");
+                    assert_eq!(params.get("symbol").map(String::as_str), symbol);
+                    assert_eq!(
+                        params.get("collapse").map(String::as_str),
+                        collapse.then_some("story")
+                    );
+                    assert_eq!(params.get("cursor").map(String::as_str), cursor);
+                    assert_eq!(params.get("sort").map(String::as_str), sort.param());
+                    assert_eq!(params.get("min_relevance").map(String::as_str), Some("7"));
+                }
+            }
+        }
+    }
+
     /// Live end-to-end check against the real API (14 requests).
     /// Run: ALPHAI_API_KEY=ak_live_… cargo test live_api -- --ignored
     #[tokio::test]
@@ -2069,8 +2157,11 @@ mod tests {
                 Some("NVDA"),
                 None,
                 Some(PAGE_SIZE),
-                Some(4),
-                Categories::default(),
+                NewsFilters {
+                    min_relevance: Some(4),
+                    categories: Categories::default(),
+                    collapse: true,
+                },
                 Sort::Published,
             )
             .await
@@ -2089,8 +2180,11 @@ mod tests {
                 Some("NVDA"),
                 Some(&cursor),
                 None,
-                Some(4),
-                Categories::default(),
+                NewsFilters {
+                    min_relevance: Some(4),
+                    categories: Categories::default(),
+                    collapse: true,
+                },
                 Sort::Published,
             )
             .await
@@ -2164,8 +2258,11 @@ mod tests {
                 Some("NVDA"),
                 None,
                 Some(PAGE_SIZE),
-                Some(4),
-                Categories::default(),
+                NewsFilters {
+                    min_relevance: Some(4),
+                    categories: Categories::default(),
+                    collapse: true,
+                },
                 Sort::Ingested,
             )
             .await
@@ -2177,8 +2274,11 @@ mod tests {
                 Some("NVDA"),
                 Some(&delta_cursor),
                 None,
-                Some(4),
-                Categories::default(),
+                NewsFilters {
+                    min_relevance: Some(4),
+                    categories: Categories::default(),
+                    collapse: true,
+                },
                 Sort::Ingested,
             )
             .await
@@ -2195,8 +2295,11 @@ mod tests {
                 Some("NVDA"),
                 Some(&cursor),
                 None,
-                Some(4),
-                Categories::default(),
+                NewsFilters {
+                    min_relevance: Some(4),
+                    categories: Categories::default(),
+                    collapse: true,
+                },
                 Sort::Ingested,
             )
             .await

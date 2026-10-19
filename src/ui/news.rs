@@ -431,8 +431,8 @@ fn article_row(a: &Article, ctx: &RowCtx, unseen: bool) -> Row<'static> {
             .map(String::as_str)
             .collect();
         cells.push(Cell::from(tickers.join(",")).bold());
-        cells.push(sources_cell(a.sources_badge(), theme));
     }
+    cells.push(sources_cell(a.sources_badge(), theme));
     cells.push(category_cell(a, theme));
     cells.push(title_cell(
         a.original.title.clone(),
@@ -493,8 +493,8 @@ fn article_widths(scope: NewsScope, full: bool, category_w: u16) -> Vec<Constrai
         widths.push(Constraint::Length(2)); // sentiment glyph
     } else {
         widths.push(Constraint::Length(12)); // tickers
-        widths.push(Constraint::Length(3)); // outlet count
     }
+    widths.push(Constraint::Length(3)); // outlet count
     widths.push(Constraint::Length(category_w));
     widths.push(Constraint::Min(20)); // title
     widths
@@ -503,8 +503,13 @@ fn article_widths(scope: NewsScope, full: bool, category_w: u16) -> Vec<Constrai
 fn head_line(app: &App, sentiment: Option<&crate::alphai::SentimentSummary>) -> Paragraph<'static> {
     match app.news_scope {
         NewsScope::Market => {
+            let grouping = if app.collapse_news {
+                "reprints collapsed (×N = outlets)"
+            } else {
+                "all articles"
+            };
             return Paragraph::new(
-                Line::from(" market-wide feed · reprints collapsed (×N = outlets) · f: trending")
+                Line::from(format!(" market-wide feed · {grouping} · f: trending"))
                     .style(app.theme.subtle()),
             );
         }

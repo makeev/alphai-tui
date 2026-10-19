@@ -1,6 +1,7 @@
 mod calendar;
 mod design;
 mod motion;
+mod news_collapse;
 mod ticker_search;
 
 use std::sync::{Arc, RwLock};

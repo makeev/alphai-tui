@@ -238,6 +238,8 @@ pub struct UiConfig {
     pub default_view: Option<String>,
     pub news_layout: Option<String>,
     pub news_scope: Option<String>,
+    /// Group ticker and market news by story (default true).
+    pub collapse_news: Option<bool>,
     /// Panel look: "rounded" (the default) or "plain" frame lines, or
     /// "none" for tinted panels without lines.
     pub borders: Option<String>,
@@ -400,6 +402,7 @@ pub struct UiDefaults {
     pub synchronized_output: bool,
     pub news_layout: NewsLayout,
     pub news_scope: NewsScope,
+    pub collapse_news: bool,
     pub news_min_score: u8,
     pub insider_min_score: u8,
     pub news_categories: Categories,
@@ -417,6 +420,7 @@ impl Default for UiDefaults {
             synchronized_output: true,
             news_layout: NewsLayout::default(),
             news_scope: NewsScope::default(),
+            collapse_news: true,
             news_min_score: DEFAULT_NEWS_MIN_SCORE,
             insider_min_score: DEFAULT_INSIDER_MIN_SCORE,
             news_categories: Categories::default(),
@@ -701,6 +705,9 @@ fn resolve_ui(raw: Option<&UiConfig>, warnings: &mut Vec<String>) -> UiDefaults 
     }
     if let Some(on) = raw.synchronized_output {
         out.synchronized_output = on;
+    }
+    if let Some(on) = raw.collapse_news {
+        out.collapse_news = on;
     }
     if let Some(layout) = &raw.news_layout {
         match NewsLayout::from_name(layout) {
@@ -1215,6 +1222,7 @@ avg_price = 100
                 default_view: Some("news".into()),
                 news_layout: Some("stacked".into()),
                 news_scope: None,
+                collapse_news: Some(false),
                 borders: Some("plain".into()),
                 news_min_score: Some(6),
                 insider_min_score: Some(5),

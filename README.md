@@ -146,8 +146,14 @@ the next page.
 ![alphai-tui news view in the market-wide scope: filings marked 8-K and 6-K, insider rows, reprints collapsed with an outlet count, and an earnings read available for the selected filing](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/market.png)
 
 `f` cycles the scope: the selected ticker, the whole market, or the 48-hour
-trending top ten. The market-wide feed collapses syndicated reprints into
-one row and says how many outlets carry the story (`×4`), marks an earnings
+trending top ten. Ticker and market news collapse reprints into one row by
+default and say how many outlets carry the story (`×4`). In `s` settings,
+turn **Collapse news** off and Save to see every article, or set
+`collapse_news = false` under `[ui]` in the config file. Save refreshes the
+news feed without restarting. Grouping uses the story's representative
+article; turn it off to include matching articles whose representative
+does not match the selected ticker or filters. Trending always stays grouped.
+The market-wide feed marks an earnings
 filing as `8-K` or `6-K` rather than as coverage of one, and mixes in the
 insider rows.
 
@@ -989,6 +995,7 @@ animations = true         # price color fades and refresh spinner; also in setti
 synchronized_output = true # use synchronized frames only when terminfo advertises support
 news_layout = "chart"     # chart | stacked | side (also a row in the settings screen)
 news_scope = "ticker"     # ticker | market | trending
+collapse_news = true      # one row per story in ticker and market news; settings can toggle it
 borders = "rounded"       # frame lines: rounded | plain, or none for tinted panels (also a settings row)
 news_min_score = 7        # minimum relevance score in news feeds, 1 to 10
 news_categories = []      # only these categories, e.g. ["earnings", "m&a"]; empty means all

@@ -256,6 +256,11 @@ fn row_text(
             format!("‹ {} ›", s.news_layout_choice.name()),
             Hint::Plain(news_layout_hint(s.news_layout_choice)),
         ),
+        SettingsRow::CollapseNews => (
+            "Collapse news",
+            format!("‹ {} ›", if s.collapse_news_choice { "on" } else { "off" }),
+            Hint::Plain("one row per story in ticker and market news".to_string()),
+        ),
         SettingsRow::Borders => (
             "Panels",
             format!("‹ {} ›", s.borders_choice.name()),
@@ -358,6 +363,10 @@ fn describe(s: &SettingsState, info: &SourceInfo, row: SettingsRow) -> String {
         SettingsRow::NewsLayout => "How the News view splits: chart over the list, list over the \
              card, or list beside the card. x cycles it anywhere; the view behind this box \
              shows it live."
+            .to_string(),
+        SettingsRow::CollapseNews => "On shows one representative article per story in ticker \
+             and market news. Off shows every article, including reprints. Save refreshes \
+             the news feed; trending stays grouped."
             .to_string(),
         SettingsRow::Borders => "rounded and plain draw frame lines around panels; none tints \
              the panels instead and draws no lines. The view behind this box shows it live."

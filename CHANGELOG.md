@@ -7,6 +7,16 @@ apt repository joined later, and carry every version since.
 
 ## Unreleased
 
+## 0.35.0 - 2026-10-19
+
+- Ticker news now groups reprints into one row per story by default, like
+  the market feed, with an outlet count such as `×4`. The new **Collapse news**
+  setting controls both feeds; turn it off and Save to see every article.
+  The same choice is available as `[ui] collapse_news` in the config file.
+  Changing the option refreshes the news feed without restarting.
+  Grouped stories also stay together across pages and live updates when
+  their representative article changes. Trending remains grouped.
+
 ## 0.34.0 - 2026-10-16
 
 - `/` finds a watchlist ticker from any view.

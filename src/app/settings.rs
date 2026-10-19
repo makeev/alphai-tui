@@ -43,6 +43,8 @@ pub struct SettingsState {
     /// The News layout on screen; applies live as it cycles, and Save
     /// writes it to `[ui] news_layout`.
     pub news_layout_choice: NewsLayout,
+    /// Whether ticker and market news are grouped; applies on Save.
+    pub collapse_news_choice: bool,
     /// The panel look on screen; applies live as it cycles, and Save
     /// writes it to `[ui] borders`.
     pub borders_choice: Panels,
@@ -65,6 +67,8 @@ pub enum SettingsRow {
     NewsOpen,
     /// The News view layout (cycles the same list as the x key, live).
     NewsLayout,
+    /// Group ticker and market news by story (on by default).
+    CollapseNews,
     /// Tinted panels or frame lines (live).
     Borders,
     /// The color preset (cycles the same list as the p key, live).
@@ -117,6 +121,7 @@ pub fn settings_rows() -> &'static [SettingsRow] {
         rows.push(SettingsRow::Key(&ALPHAI_KEY_FIELD));
         rows.push(SettingsRow::NewsOpen);
         rows.push(SettingsRow::NewsLayout);
+        rows.push(SettingsRow::CollapseNews);
         rows.push(SettingsRow::Borders);
         rows.push(SettingsRow::ThemeChoice);
         rows.push(SettingsRow::Animations);
@@ -158,6 +163,7 @@ impl App {
         };
         s.theme_choice = self.theme_name;
         s.news_layout_choice = self.news_layout;
+        s.collapse_news_choice = self.collapse_news;
         s.borders_choice = self.theme.panels;
         s.animations_choice = self.animations;
     }
@@ -206,6 +212,7 @@ impl App {
                 | SettingsRow::ExtendedSource
                 | SettingsRow::NewsOpen
                 | SettingsRow::NewsLayout
+                | SettingsRow::CollapseNews
                 | SettingsRow::Borders
                 | SettingsRow::Animations
                 | SettingsRow::ThemeChoice => self.cycle_row(1),
@@ -251,6 +258,9 @@ impl App {
                 self.settings.news_layout_choice = layout;
                 self.news_layout = layout;
                 self.card_scroll = 0;
+            }
+            SettingsRow::CollapseNews => {
+                self.settings.collapse_news_choice = !self.settings.collapse_news_choice;
             }
             SettingsRow::Borders => {
                 let panels = self.settings.borders_choice.step(dir);
@@ -318,6 +328,7 @@ impl App {
         let mut ui = cfg.ui.take().unwrap_or_default();
         let layout = self.settings.news_layout_choice;
         ui.news_layout = (layout != NewsLayout::default()).then(|| layout.name().to_string());
+        ui.collapse_news = (!self.settings.collapse_news_choice).then_some(false);
         let panels = self.settings.borders_choice;
         ui.borders = (panels != Panels::default()).then(|| panels.name().to_string());
         ui.animations = (!self.settings.animations_choice).then_some(false);
@@ -400,6 +411,7 @@ impl App {
             let key = cfg.alphai_key();
             self.change_alphai_key(key);
         }
+        self.set_collapse_news(self.settings.collapse_news_choice);
 
         // The list on screen is the saved one from here on, so `a` and `d`
         // write it through even in a session started from the command line.

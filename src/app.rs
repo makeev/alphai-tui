@@ -404,6 +404,11 @@ pub struct App {
     pub news_selected: usize,
     pub news_scope: NewsScope,
     pub news_layout: NewsLayout,
+    /// Group ticker and market news by story; changed on Save in settings.
+    pub collapse_news: bool,
+    /// Requests still in flight when grouping changed. Their replies must
+    /// retire before a fresh request can refill the cleared news cache.
+    pub(super) discarded_news_requests: HashSet<String>,
     /// Minimum relevance score in the ticker and market news feeds (1..=10,
     /// applied server-side). Seeded from `[ui] news_min_score`, then
     /// session-only via +/-, like the scope and layout.
@@ -556,6 +561,8 @@ impl App {
             news_selected: 0,
             news_scope: init.ui.news_scope,
             news_layout: init.ui.news_layout,
+            collapse_news: init.ui.collapse_news,
+            discarded_news_requests: HashSet::new(),
             news_min_score: init.ui.news_min_score,
             insider_min_score: init.ui.insider_min_score,
             news_categories: init.ui.news_categories,
