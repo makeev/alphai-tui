@@ -49,6 +49,9 @@ pub struct SettingsState {
     /// writes it to `[ui] borders`.
     pub borders_choice: Panels,
     pub animations_choice: bool,
+    /// Whether the app takes the mouse; applies live, Save writes
+    /// `[ui] mouse`.
+    pub mouse_choice: bool,
     pub message: Option<String>,
 }
 
@@ -75,6 +78,8 @@ pub enum SettingsRow {
     ThemeChoice,
     /// Price color fades and the refresh spinner (live).
     Animations,
+    /// Clicks and the wheel, or the terminal's own text selection (live).
+    Mouse,
     /// The save button.
     Save,
 }
@@ -125,6 +130,7 @@ pub fn settings_rows() -> &'static [SettingsRow] {
         rows.push(SettingsRow::Borders);
         rows.push(SettingsRow::ThemeChoice);
         rows.push(SettingsRow::Animations);
+        rows.push(SettingsRow::Mouse);
         rows.push(SettingsRow::Save);
         rows
     });
@@ -166,6 +172,7 @@ impl App {
         s.collapse_news_choice = self.collapse_news;
         s.borders_choice = self.theme.panels;
         s.animations_choice = self.animations;
+        s.mouse_choice = self.mouse;
     }
 
     pub(super) fn handle_settings_key(&mut self, key: KeyEvent) -> bool {
@@ -215,6 +222,7 @@ impl App {
                 | SettingsRow::CollapseNews
                 | SettingsRow::Borders
                 | SettingsRow::Animations
+                | SettingsRow::Mouse
                 | SettingsRow::ThemeChoice => self.cycle_row(1),
                 SettingsRow::Key(field) => {
                     let s = &mut self.settings;
@@ -272,6 +280,10 @@ impl App {
                 self.animations = !self.animations;
                 self.settings.animations_choice = self.animations;
                 self.price_flash.clear();
+            }
+            SettingsRow::Mouse => {
+                self.toggle_mouse();
+                self.settings.mouse_choice = self.mouse;
             }
             _ => {}
         }
@@ -332,6 +344,7 @@ impl App {
         let panels = self.settings.borders_choice;
         ui.borders = (panels != Panels::default()).then(|| panels.name().to_string());
         ui.animations = (!self.settings.animations_choice).then_some(false);
+        ui.mouse = (!self.settings.mouse_choice).then_some(false);
         cfg.ui = (ui != config::UiConfig::default()).then_some(ui);
         if let Some(secs) = parse_every(&self.settings.every_input) {
             cfg.every = Some(secs);

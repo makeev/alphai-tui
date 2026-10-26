@@ -7,6 +7,25 @@ apt repository joined later, and carry every version since.
 
 ## Unreleased
 
+## 0.36.0 - 2026-10-27
+
+- Mouse support, on by default. A click on a header pill switches the
+  view; a click on a ticker in the quote rail, in the watchlist, on a
+  Summary card or on a Portfolio row selects it; a click on a news or
+  insider row selects it, and a second click on the same row opens its
+  card; a click on a row of the Split news strip opens the News view on
+  that article; a click on a Calendar row selects the event. The wheel
+  moves the cursor in lists and scrolls the article card, the earnings
+  read, the help and the settings. Inside the category picker a click
+  ticks a row, inside the ticker search it picks a result, and a click
+  outside the help or the article card closes it. The wheel never loads
+  another feed page and never changes the chart preset, so a trackpad
+  flick costs no requests.
+- `M` hands the mouse back to the terminal, which then selects text as
+  usual, and takes it again. The new **Mouse** row in settings does the
+  same and Save remembers it as `[ui] mouse = false`. The action is
+  `toggle_mouse` in `[keybindings]`.
+
 ## 0.35.0 - 2026-10-19
 
 - Ticker news now groups reprints into one row per story by default, like

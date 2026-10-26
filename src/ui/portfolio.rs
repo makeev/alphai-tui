@@ -21,6 +21,7 @@ use crate::domain::{Quote, fmt_price};
 use crate::keymap::Action;
 use crate::portfolio::{self, Position, fmt_money, fmt_signed};
 use crate::ui::chart::move_color;
+use crate::ui::hits::{Hits, ListKind};
 use crate::ui::{Hint, View, ViewId};
 
 const W_SYMBOL: u16 = 10;
@@ -177,18 +178,21 @@ pub(crate) fn render_portfolio_at(f: &mut Frame, area: Rect, app: &mut App, now:
     push(true, W_PCT, "P&L%");
     push(cols.weight, W_WEIGHT, "Wt%");
 
+    let block = app
+        .theme
+        .panel_titled(" Portfolio ")
+        .title_bottom(footnote(app, &totals, area.width));
+    let rows_area = Hits::rows_area(block.inner(area), 1);
     let table = Table::new(rows, widths)
         .header(Row::new(header).style(Style::new().bold().underlined()))
-        .block(
-            app.theme
-                .panel_titled(" Portfolio ")
-                .title_bottom(footnote(app, &totals, area.width)),
-        )
+        .block(block)
         .row_highlight_style(app.theme.selected())
         .highlight_symbol("▶ ");
 
     app.portfolio_state.select(Some(app.portfolio_selected));
     f.render_stateful_widget(table, area, &mut app.portfolio_state);
+    app.hits
+        .list(rows_area, app.portfolio_state.offset(), ListKind::Portfolio);
 }
 
 fn row(

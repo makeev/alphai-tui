@@ -19,6 +19,7 @@ use crate::config::ChartTimezone;
 use crate::keymap::Action;
 use crate::market;
 use crate::theme::Theme;
+use crate::ui::hits::{Hits, ListKind};
 use crate::ui::{Hint, View, ViewId, time_axis};
 
 static HINTS: &[Hint] = &[
@@ -839,23 +840,29 @@ pub(crate) fn render_calendar_at(f: &mut Frame, area: Rect, app: &mut App, now: 
     let cols = columns(table_area.width.saturating_sub(2), title_width);
     let anchor = rows.iter().position(|r| !r.elapsed).unwrap_or(rows.len());
     let mut displayed = Vec::new();
+    // Which agenda row each table row is, for the mouse; separators are
+    // rows too, but not ones a click can select.
+    let mut agenda_of = Vec::new();
     let mut selected_display = None;
     let mut undated = false;
     for i in 0..=rows.len() {
         if i == anchor {
             displayed.push(separator(&cols, now, app.chart.timezone, false, &app.theme));
+            agenda_of.push(None);
         }
         let Some(row) = rows.get(i) else {
             break;
         };
         if row.when == When::Unknown && !undated {
             displayed.push(separator(&cols, now, app.chart.timezone, true, &app.theme));
+            agenda_of.push(None);
             undated = true;
         }
         if selected == Some(i) {
             selected_display = Some(displayed.len());
         }
         displayed.push(event_row(row, &cols, app, now));
+        agenda_of.push(Some(i));
     }
     let headers: Vec<Cell> = cols
         .iter()
@@ -880,6 +887,12 @@ pub(crate) fn render_calendar_at(f: &mut Frame, area: Rect, app: &mut App, now: 
         .highlight_symbol("▶ ");
     app.calendar_state.select(selected_display);
     f.render_stateful_widget(table, table_area, &mut app.calendar_state);
+    app.hits.calendar_rows = agenda_of;
+    app.hits.list(
+        Hits::rows_area(table_area, 1),
+        app.calendar_state.offset(),
+        ListKind::Calendar,
+    );
 }
 
 #[cfg(test)]

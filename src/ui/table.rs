@@ -8,6 +8,7 @@ use crate::app::App;
 use crate::domain::fmt_price;
 use crate::portfolio::{fmt_money, fmt_signed};
 use crate::ui::chart::move_color;
+use crate::ui::hits::{Hits, ListKind};
 use crate::ui::{View, ViewId};
 
 pub struct TableView;
@@ -268,14 +269,20 @@ pub fn render_table(f: &mut Frame, area: Rect, app: &mut App) {
         widths.push(Constraint::Length(cols.spark));
         header.push(Cell::from("Spark"));
     }
+    let block = app.theme.panel_titled(" Watchlist ");
+    let rows_area = Hits::rows_area(block.inner(area), 1);
     let table = Table::new(rows, widths)
         .header(Row::new(header).style(Style::new().bold().underlined()))
-        .block(app.theme.panel_titled(" Watchlist "))
+        .block(block)
         .row_highlight_style(app.theme.selected())
         .highlight_symbol("▶ ");
 
     app.table_state.select(Some(app.selected));
     f.render_stateful_widget(table, area, &mut app.table_state);
+    // After the render: the table scrolls to keep the cursor visible, and
+    // the offset says which row it put first.
+    app.hits
+        .list(rows_area, app.table_state.offset(), ListKind::Watchlist);
 }
 
 /// Right-aligned cell content (numbers line up under each other).

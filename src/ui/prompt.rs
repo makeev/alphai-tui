@@ -14,11 +14,12 @@ use ratatui::widgets::{Clear, Paragraph};
 
 use crate::app::{App, PromptKind};
 use crate::ui::centered;
+use crate::ui::hits::Modal;
 
 /// Wide enough for the hint line, which is the longest thing in the box.
 const WIDTH: u16 = 56;
 
-pub fn render(f: &mut Frame, app: &App) {
+pub fn render(f: &mut Frame, app: &mut App) {
     let theme = &app.theme;
     let prompt = &app.prompt;
     // Three lines of content plus the frame: input, message, hint.
@@ -58,4 +59,5 @@ pub fn render(f: &mut Frame, app: &App) {
         Paragraph::new(vec![typed, message, hint]).block(theme.modal().title(theme.heading(title))),
         area,
     );
+    app.hits.modal = Some((area, Modal::Prompt));
 }

@@ -693,3 +693,60 @@ fn report_detail_keeps_its_et_date_and_follows_selection_after_arrivals_and_resi
     );
     assert!(cmds.try_recv().is_err());
 }
+
+#[test]
+fn calendar_rows_select_on_click_and_separators_do_not() {
+    use crate::ui::hits::ListKind;
+    use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+
+    let (mut app, _cmds) = fixture();
+    let mut terminal = Terminal::new(TestBackend::new(110, 30)).unwrap();
+    terminal.draw(|f| ui::draw(f, &mut app)).unwrap();
+    let rows = app
+        .hits
+        .lists
+        .iter()
+        .find(|l| l.kind == ListKind::Calendar)
+        .cloned()
+        .expect("calendar rows recorded");
+    let agenda = agenda::agenda(&app, now());
+    let click = |app: &mut App, y: u16| {
+        app.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: rows.area.x + 3,
+            row: y,
+            modifiers: KeyModifiers::NONE,
+        })
+    };
+    // The first table row is the earliest, elapsed event; the separator
+    // ("now") sits between it and the upcoming ones.
+    let separator = app
+        .hits
+        .calendar_rows
+        .iter()
+        .position(Option::is_none)
+        .expect("a separator row") as u16;
+    assert!(click(&mut app, rows.area.y));
+    assert_eq!(app.calendar_selection.resolve(&agenda), Some(0));
+    assert!(!click(&mut app, rows.area.y + separator));
+    assert_eq!(app.calendar_selection.resolve(&agenda), Some(0));
+    // The row after the separator is the first upcoming event; NVDA's
+    // report date is in the agenda too, and clicking it moves the ticker.
+    let nvda = app
+        .hits
+        .calendar_rows
+        .iter()
+        .position(|r| {
+            r.is_some_and(
+                |i| matches!(&agenda[i].kind, agenda::Kind::Report { symbol } if symbol == "NVDA"),
+            )
+        })
+        .expect("NVDA's report row") as u16;
+    assert!(click(&mut app, rows.area.y + nvda));
+    assert_eq!(app.selected_symbol(), "NVDA");
+    let selected = app.calendar_selection.resolve(&agenda).unwrap();
+    assert!(matches!(
+        &agenda[selected].kind,
+        agenda::Kind::Report { .. }
+    ));
+}

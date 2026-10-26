@@ -258,6 +258,9 @@ pub struct UiConfig {
     pub bare: Option<bool>,
     /// Price color fades and the refresh spinner (default true).
     pub animations: Option<bool>,
+    /// Take the mouse: clicks and the wheel drive the views (default true).
+    /// Off leaves it to the terminal, which then selects text as usual.
+    pub mouse: Option<bool>,
     /// Allow synchronized frames when terminfo advertises support.
     pub synchronized_output: Option<bool>,
     /// Startup window of the Insider view's chart panel: "3m" (default),
@@ -399,6 +402,8 @@ pub struct UiDefaults {
     /// Start without the header and footer; `--bare` also turns it on.
     pub bare: bool,
     pub animations: bool,
+    /// Whether the app takes the mouse; `M` toggles it live.
+    pub mouse: bool,
     pub synchronized_output: bool,
     pub news_layout: NewsLayout,
     pub news_scope: NewsScope,
@@ -417,6 +422,7 @@ impl Default for UiDefaults {
             quote_rail: true,
             bare: false,
             animations: true,
+            mouse: true,
             synchronized_output: true,
             news_layout: NewsLayout::default(),
             news_scope: NewsScope::default(),
@@ -702,6 +708,9 @@ fn resolve_ui(raw: Option<&UiConfig>, warnings: &mut Vec<String>) -> UiDefaults 
     }
     if let Some(on) = raw.animations {
         out.animations = on;
+    }
+    if let Some(on) = raw.mouse {
+        out.mouse = on;
     }
     if let Some(on) = raw.synchronized_output {
         out.synchronized_output = on;
@@ -1233,6 +1242,7 @@ avg_price = 100
                 quote_rail: Some(false),
                 bare: Some(true),
                 animations: Some(false),
+                mouse: Some(false),
                 synchronized_output: Some(false),
             }),
             chart: Some(ChartConfig {
@@ -1779,6 +1789,15 @@ avg_price = 100
         let (resolved, warnings) = resolve(&cfg, None);
         assert!(warnings.is_empty(), "{warnings:?}");
         assert!(!resolved.ui.quote_rail);
+    }
+
+    #[test]
+    fn ui_mouse_defaults_on_and_switches_off() {
+        assert!(UiDefaults::default().mouse);
+        let cfg: Config = toml::from_str("[ui]\nmouse = false").unwrap();
+        let (resolved, warnings) = resolve(&cfg, None);
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert!(!resolved.ui.mouse);
     }
 
     #[test]

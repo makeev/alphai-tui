@@ -12,6 +12,7 @@ use ratatui::widgets::{Block, Clear, Paragraph, Wrap};
 use crate::alphai::{self, Article, EarningsRead, KeyMetric, TickerAnalysis};
 use crate::app::App;
 use crate::theme::Theme;
+use crate::ui::hits::Modal;
 use crate::ui::{centered, news};
 
 /// The fullscreen card overlay (v in the News/Insider views).
@@ -51,6 +52,7 @@ pub fn render(f: &mut Frame, app: &mut App) {
     let mut scroll = app.article_overlay.scroll;
     render_card(f, area, block, lines, &mut scroll);
     app.article_overlay.scroll = scroll;
+    app.hits.modal = Some((area, Modal::Article));
 }
 
 /// The card as an embedded pane (News view layouts). Scrolls via

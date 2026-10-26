@@ -11,9 +11,10 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::app::App;
 use crate::domain::fmt_price;
+use crate::ui::hits::{ListKind, Modal};
 use crate::ui::{centered, ellipsize, pad_right};
 
-pub fn render(f: &mut Frame, app: &App) {
+pub fn render(f: &mut Frame, app: &mut App) {
     let matches = app.ticker_matches();
     let cursor = app.ticker_search.cursor(&matches);
     let theme = &app.theme;
@@ -149,4 +150,6 @@ pub fn render(f: &mut Frame, app: &App) {
         " ↑↓ move · enter select · esc cancel"
     };
     f.render_widget(Paragraph::new(hint).style(theme.subtle()), keys);
+    app.hits.modal = Some((area, Modal::TickerSearch));
+    app.hits.list(list, skip, ListKind::TickerSearch);
 }

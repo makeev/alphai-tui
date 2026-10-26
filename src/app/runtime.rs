@@ -1,9 +1,11 @@
 //! Input and data wake the UI directly; only visible effects need frames
 //! between events. The slow clock still drives ages, TTLs and fallback.
+use std::io;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use crossterm::event::{Event, EventStream, KeyEventKind};
+use crossterm::event::{DisableMouseCapture, EnableMouseCapture, Event, EventStream, KeyEventKind};
+use crossterm::execute;
 use futures_util::StreamExt;
 use ratatui::DefaultTerminal;
 
@@ -18,7 +20,11 @@ impl App {
         let mut frames = Frames::new(Instant::now());
         let mut source_open = true;
         let synchronized = self.synchronized_output && terminal::synchronized_output_supported();
+        let mut capture = MouseCapture::default();
         loop {
+            // The M key and the settings row flip the flag; the terminal
+            // follows here, before the frame that shows the notice.
+            capture.set(self.mouse)?;
             let now = Instant::now();
             frames.tick(now);
             self.fallback_if_stuck();
@@ -38,6 +44,11 @@ impl App {
                         Some(Event::Key(key)) if key.kind == KeyEventKind::Press => {
                             if self.handle_key(key) { return Ok(()); }
                             frames.dirty = true;
+                        }
+                        Some(Event::Mouse(mouse)) => {
+                            if self.handle_mouse(mouse) {
+                                frames.dirty = true;
+                            }
                         }
                         Some(Event::Resize(_, _) | Event::FocusGained) => frames.dirty = true,
                         _ => {}
@@ -71,6 +82,37 @@ impl App {
             Some(motion::SPINNER_FRAME)
         } else {
             None
+        }
+    }
+}
+
+/// The terminal's mouse reporting, kept in step with `App::mouse` and
+/// switched off again however the loop ends: a terminal left reporting
+/// the mouse prints escape codes into the shell on every click.
+#[derive(Default)]
+struct MouseCapture {
+    on: bool,
+}
+
+impl MouseCapture {
+    fn set(&mut self, on: bool) -> io::Result<()> {
+        if on == self.on {
+            return Ok(());
+        }
+        if on {
+            execute!(io::stdout(), EnableMouseCapture)?;
+        } else {
+            execute!(io::stdout(), DisableMouseCapture)?;
+        }
+        self.on = on;
+        Ok(())
+    }
+}
+
+impl Drop for MouseCapture {
+    fn drop(&mut self) {
+        if self.on {
+            let _ = execute!(io::stdout(), DisableMouseCapture);
         }
     }
 }

@@ -3,6 +3,7 @@
 //! `crate::ui` are stateless renderers over `&mut App`.
 
 mod feeds;
+mod mouse;
 mod runtime;
 mod settings;
 mod ticker_search;
@@ -319,6 +320,11 @@ pub struct App {
     /// the first data a symbol ever gets sets no flash (nothing changed).
     pub price_flash: HashMap<String, (Instant, bool)>,
     pub animations: bool,
+    /// Whether the app takes the mouse (`[ui] mouse`, `M`). The runtime
+    /// loop enables and disables the terminal's capture to match.
+    pub mouse: bool,
+    /// Where the last frame put the things the mouse can act on.
+    pub hits: ui::hits::Hits,
     pub synchronized_output: bool,
     price_refreshing: bool,
     animation_epoch: Instant,
@@ -524,6 +530,8 @@ impl App {
             error_window: HashMap::new(),
             price_flash: HashMap::new(),
             animations: init.ui.animations,
+            mouse: init.ui.mouse,
+            hits: ui::hits::Hits::default(),
             synchronized_output: init.ui.synchronized_output,
             price_refreshing: false,
             animation_epoch: Instant::now(),
@@ -1078,6 +1086,7 @@ impl App {
             Action::NextPreset => self.cycle_range(1),
             Action::PrevPreset => self.cycle_range(-1),
             Action::ToggleBare => self.bare = !self.bare,
+            Action::ToggleMouse => self.toggle_mouse(),
             Action::ToggleExtended => self.toggle_sessions(),
             Action::NextTheme => self.cycle_theme(1),
             Action::PrevTheme => self.cycle_theme(-1),
@@ -1516,8 +1525,15 @@ impl App {
             return;
         };
         let next = current.saturating_add_signed(delta).min(rows.len() - 1);
-        self.calendar_selection.choose(&rows, next);
-        if let ui::calendar::Kind::Report { symbol } = &rows[next].kind
+        self.choose_calendar_row(&rows, next);
+    }
+
+    /// Puts the calendar cursor on an agenda row, and the watchlist cursor
+    /// on its company when it is a report date: the rail above the view
+    /// would otherwise quote a different ticker than the row.
+    pub(crate) fn choose_calendar_row(&mut self, rows: &[ui::calendar::AgendaRow], next: usize) {
+        self.calendar_selection.choose(rows, next);
+        if let Some(ui::calendar::Kind::Report { symbol }) = rows.get(next).map(|r| &r.kind)
             && let Some(idx) = self.symbols.iter().position(|s| s == symbol)
         {
             self.select_symbol(idx);

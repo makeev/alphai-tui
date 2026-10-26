@@ -10,6 +10,7 @@ use crate::source::registry::{self, SourceInfo};
 use crate::source::{alpaca_keys, extended_provider};
 use crate::theme::Panels;
 use crate::ui::centered;
+use crate::ui::hits::Modal;
 
 const WIDTH: u16 = 76;
 
@@ -25,7 +26,7 @@ const DESCRIPTION: usize = 3;
 /// under the cursor: what it does, what each choice means, what it costs.
 /// Hints and the description read the choices on screen (the config Save
 /// would write), not the running source, so they answer before Save.
-pub fn render(f: &mut Frame, app: &App) {
+pub fn render(f: &mut Frame, app: &mut App) {
     let draft = app.settings_merged_config();
     let width = WIDTH.min(f.area().width.saturating_sub(2));
     let inner = usize::from(width.saturating_sub(2));
@@ -60,6 +61,7 @@ pub fn render(f: &mut Frame, app: &App) {
             .scroll((scroll as u16, 0)),
         area,
     );
+    app.hits.modal = Some((area, Modal::Settings));
 }
 
 /// How much a short terminal leaves out, least to most.
@@ -282,6 +284,11 @@ fn row_text(
             format!("‹ {} ›", if s.animations_choice { "on" } else { "off" }),
             Hint::Plain("price pulses and refresh activity".to_string()),
         ),
+        SettingsRow::Mouse => (
+            "Mouse",
+            format!("‹ {} ›", if s.mouse_choice { "on" } else { "off" }),
+            Hint::Plain("click and scroll; off lets the terminal select text".to_string()),
+        ),
         SettingsRow::Save => unreachable!("drawn as a button"),
     }
 }
@@ -376,6 +383,10 @@ fn describe(s: &SettingsState, info: &SourceInfo, row: SettingsRow) -> String {
             .to_string(),
         SettingsRow::Animations => "Price color fades and a refresh spinner. \
              Off keeps a steady * while requests run. Applies live; Save remembers it."
+            .to_string(),
+        SettingsRow::Mouse => "On, clicks pick views, tickers and rows and the wheel scrolls \
+             lists and cards. Off hands the mouse back to the terminal, which then selects \
+             text as usual. M toggles it anywhere; Save remembers it."
             .to_string(),
         SettingsRow::Save => "Writes everything above, and the watchlist on screen, to the \
              config file and applies it. Esc closes without writing."

@@ -1,6 +1,7 @@
 mod calendar;
 mod design;
 mod motion;
+mod mouse;
 mod news_collapse;
 mod ticker_search;
 

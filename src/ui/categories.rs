@@ -15,13 +15,14 @@ use ratatui::widgets::{Clear, Paragraph};
 
 use crate::app::{App, NewsScope};
 use crate::category;
+use crate::ui::hits::{ListKind, Modal};
 use crate::ui::{centered, pad_right};
 
 /// Room for the longest row: marker, box, full name, gap, column label.
 const WIDTH: u16 = 48;
 const NAME_W: usize = 28;
 
-pub fn render(f: &mut Frame, app: &App) {
+pub fn render(f: &mut Frame, app: &mut App) {
     let theme = &app.theme;
     let picker = &app.category_picker;
     // Every row, the summary and the key line, plus the frame.
@@ -98,4 +99,6 @@ pub fn render(f: &mut Frame, app: &App) {
         ),
         keys,
     );
+    app.hits.modal = Some((area, Modal::Categories));
+    app.hits.list(list, skip, ListKind::Categories);
 }

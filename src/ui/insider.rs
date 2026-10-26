@@ -9,6 +9,7 @@ use crate::alphai::{Article, InsiderTrades, fmt_usd, insider_key};
 use crate::app::{App, FeedKind};
 use crate::keymap::Action;
 use crate::theme::Theme;
+use crate::ui::hits::{Hits, ListKind, Scroll};
 use crate::ui::insider_chart;
 use crate::ui::news::{feed_bottom_hint, is_fresh, render_gate, title_cell, title_width};
 use crate::ui::{Hint, View, ViewId};
@@ -157,6 +158,7 @@ impl View for InsiderView {
             .iter()
             .map(|a| filing_row(a, now, &theme, app.is_unseen(&key, a), title_w))
             .collect();
+        let rows_area = Hits::rows_area(block.inner(list_area), 1);
         let table = Table::new(rows, widths)
             .block(block)
             .header(Row::new(["Date", "Side", "Value", "Insider", "Plan"]).style(theme.subtle()))
@@ -165,6 +167,8 @@ impl View for InsiderView {
         app.news_selected = app.news_selected.min(bundle.articles.len() - 1);
         app.news_table_state.select(Some(app.news_selected));
         f.render_stateful_widget(table, list_area, &mut app.news_table_state);
+        app.hits
+            .list(rows_area, app.news_table_state.offset(), ListKind::Feed);
 
         // The chart bundle knows more about the selected filing than the
         // feed row does (stake moved, tranches, late flag): join by uid and
@@ -189,6 +193,7 @@ impl View for InsiderView {
                 &theme,
             );
             app.card_scroll = scroll;
+            app.hits.scrolls.push((card_area, Scroll::Card));
         } else if detail.height > 0 {
             crate::ui::article::render_pane_with(
                 f,

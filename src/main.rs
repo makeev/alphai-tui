@@ -193,6 +193,14 @@ fn main() -> Result<()> {
     let source_fallback = cfg.source_fallback.unwrap_or(true);
 
     let mut terminal = ratatui::init();
+    // ratatui's hook restores the screen and raw mode; the mouse reporting
+    // the loop may have turned on is ours to turn off, before the message
+    // prints into a shell that would otherwise see every click as text.
+    let restore = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let _ = crossterm::execute!(std::io::stdout(), crossterm::event::DisableMouseCapture);
+        restore(info);
+    }));
     let mut app = App::new(AppInit {
         symbols,
         positions: resolved.positions,

@@ -20,6 +20,7 @@ use crate::alphai::{
 use crate::app::App;
 use crate::keymap::Action;
 use crate::theme::Theme;
+use crate::ui::hits::Scroll;
 use crate::ui::{Hint, View, ViewId, ellipsize, news};
 
 /// Room the verdict needs in the top border, right of the title.
@@ -124,6 +125,7 @@ impl View for EarningsView {
         let max_scroll = lines.len().saturating_sub(body.height as usize);
         app.earnings_scroll = app.earnings_scroll.min(max_scroll as u16);
         f.render_widget(Paragraph::new(lines).scroll((app.earnings_scroll, 0)), body);
+        app.hits.scrolls.push((body, Scroll::Earnings));
         if let Some(text) = ahead {
             let room = strip.width.saturating_sub(6) as usize;
             f.render_widget(

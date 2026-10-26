@@ -380,6 +380,19 @@ writes all of it, plus the watchlist on screen, to the config file. `}` and `{` 
 and the footer for a tmux pane that carries its own status bar, and `r`
 refreshes prices and the visible data.
 
+The mouse works in every view. A click on a header pill switches the
+view; a click on a ticker in the rail, in the watchlist, on a Summary card
+or on a Portfolio row selects it; a click on a feed row selects the
+article, and a second click on the same row opens its card; a click on a
+row of the Split news strip opens the News view on that article. The wheel
+moves the cursor in lists and scrolls the article card, the earnings read,
+the help and the settings. It never loads another page of a feed and
+never changes the chart preset, so a trackpad flick costs no requests.
+While the app has the mouse the terminal cannot select text with it: `M`
+hands the mouse back and takes it again (most terminals also select with
+Shift held), the Mouse row in settings does the same and Save remembers
+it as `[ui] mouse = false`.
+
 Price changes fade back over 900 ms without changing the text's weight or
 decoration. The ASCII spinner beside the source runs only while
 requests are in progress. The Animations row in settings switches these
@@ -681,6 +694,7 @@ defaults. API keys can also come from env vars, which win over the config:
 | `t` / `T` | everywhere | cycle candle interval presets forward / back (each interval with a matching history window; the list is configurable as `[chart] presets`) |
 | `r` | everywhere | refresh prices and visible data; Calendar refetches macro and retries missing, stale or failed dates |
 | `z` | everywhere | bare mode: hide the header and footer, giving both rows to the view |
+| `M` | everywhere | mouse on or off: off hands the mouse back to the terminal, which then selects text as usual |
 | `}` / `{` | everywhere | next / previous color preset (session-only until Save) |
 | `s` | everywhere | settings |
 | `?` | everywhere | help overlay: every action with its current keys |
@@ -992,6 +1006,7 @@ default_view = "split"    # split | news | table | chart | insider | earnings | 
 quote_rail = true         # the price line under the tabs
 bare = false              # start with no header and no footer (--bare, z)
 animations = true         # price color fades and refresh spinner; also in settings
+mouse = true              # clicks and the wheel; false leaves the mouse to the terminal (M toggles)
 synchronized_output = true # use synchronized frames only when terminfo advertises support
 news_layout = "chart"     # chart | stacked | side (also a row in the settings screen)
 news_scope = "ticker"     # ticker | market | trending
@@ -1168,7 +1183,7 @@ The actions: `quit`, `next_view`, `prev_view`, `settings`, `help`,
 `insider_chart`, `chart_style`, `toggle_sma`, `toggle_rsi`,
 `toggle_volume`, `news_markers`, `ma_type`, `next_preset`, `prev_preset`,
 `next_theme`, `prev_theme`, `toggle_bare`, `add_ticker`, `remove_ticker`,
-`position`, `extended_hours`, `categories`, `find_ticker`.
+`position`, `extended_hours`, `categories`, `find_ticker`, `toggle_mouse`.
 The `?` help overlay shows this list with the current keys next to it.
 
 Reserved and never remappable: `ctrl-c` (force quit), `esc`, the digits

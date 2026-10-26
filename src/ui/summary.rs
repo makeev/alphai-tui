@@ -111,7 +111,9 @@ fn render_summary(f: &mut Frame, area: Rect, app: &mut App) {
             let Some(symbol) = shown.get(r * cols + c) else {
                 continue;
             };
-            card(f, *cell, app, symbol, start + r * cols + c == app.selected);
+            let idx = start + r * cols + c;
+            app.hits.cards.push((*cell, idx));
+            card(f, *cell, app, symbol, idx == app.selected);
         }
     }
 }

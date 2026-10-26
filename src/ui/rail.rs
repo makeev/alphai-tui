@@ -40,14 +40,30 @@ pub(crate) fn visible(app: &App, height: u16) -> bool {
     app.show_rail && height >= MIN_HEIGHT
 }
 
-pub fn render(f: &mut Frame, area: Rect, app: &App) {
-    f.render_widget(Paragraph::new(line(app, area.width, Utc::now())), area);
+pub fn render(f: &mut Frame, area: Rect, app: &mut App) {
+    let (line, peers) = line_with_peers(app, area.width, Utc::now());
+    f.render_widget(Paragraph::new(line), area);
+    app.hits.peers = peers
+        .into_iter()
+        .map(|(x, w, idx)| (Rect::new(area.x.saturating_add(x), area.y, w, 1), idx))
+        .collect();
 }
 
 /// The rail as one line, fitted to `width`. Split out of `render`, with the
 /// clock passed in, so the degradation ladder is testable at a fixed
 /// moment (the session countdown changes the line's width).
+#[cfg(test)]
 pub(crate) fn line(app: &App, width: u16, now: DateTime<Utc>) -> Line<'static> {
+    line_with_peers(app, width, now).0
+}
+
+/// The line plus, for the mouse, where each peer ticker starts, how wide
+/// it is and which watchlist entry it is.
+fn line_with_peers(
+    app: &App,
+    width: u16,
+    now: DateTime<Utc>,
+) -> (Line<'static>, Vec<(u16, u16, usize)>) {
     let symbol = app.selected_symbol().to_string();
     let budget = width as usize;
     let mut spans = head(app, &symbol, width);
@@ -69,12 +85,19 @@ pub(crate) fn line(app: &App, width: u16, now: DateTime<Utc>) -> Line<'static> {
     // What is left goes to the peers, right-aligned: the rail then answers
     // "where does ← → take me" as well as "what is this one doing".
     let peers = peers(app, &symbol, budget.saturating_sub(used), width >= 80);
-    let peers_w = total_width(&peers);
+    let peers_w = peers.iter().map(|(_, g)| total_width(g)).sum::<usize>();
+    let mut zones = Vec::new();
     if peers_w > 0 {
         spans.push(Span::raw(" ".repeat(budget - used - peers_w)));
-        spans.extend(peers);
+        let mut x = budget - peers_w;
+        for (idx, group) in peers {
+            let w = total_width(&group);
+            zones.push((x as u16, w as u16, idx));
+            x += w;
+            spans.extend(group);
+        }
     }
-    Line::from(spans)
+    (Line::from(spans), zones)
 }
 
 /// Symbol, price and freshness: the part that is never dropped.
@@ -515,13 +538,20 @@ fn day_range(candles: &[Candle]) -> Option<(f64, f64)> {
 }
 
 /// The rest of the watchlist as percentages, in watchlist order, as many
-/// as `room` fits. A ticker with no data yet reads as a dash rather than
-/// vanishing: the row it is missing from is the answer to "is it loading".
-fn peers(app: &App, selected: &str, room: usize, stable: bool) -> Vec<Span<'static>> {
+/// as `room` fits, each with its watchlist index. A ticker with no data
+/// yet reads as a dash rather than vanishing: the row it is missing from
+/// is the answer to "is it loading".
+#[allow(clippy::type_complexity)]
+fn peers(app: &App, selected: &str, room: usize, stable: bool) -> Vec<(usize, Vec<Span<'static>>)> {
     let theme = &app.theme;
-    let mut out: Vec<Span<'static>> = Vec::new();
+    let mut out = Vec::new();
     let mut used = 0;
-    for symbol in app.symbols.iter().filter(|s| s.as_str() != selected) {
+    for (idx, symbol) in app
+        .symbols
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| s.as_str() != selected)
+    {
         let (text, style) = match app.data.get(symbol).and_then(|d| d.quote.change_pct()) {
             Some(pct) => (
                 format!("{pct:+.2}%"),
@@ -538,7 +568,7 @@ fn peers(app: &App, selected: &str, room: usize, stable: bool) -> Vec<Span<'stat
             break;
         }
         used += w;
-        out.extend(group);
+        out.push((idx, group));
     }
     out
 }

@@ -11,6 +11,7 @@ use crate::app::App;
 use crate::keymap::{Action, action_name};
 use crate::theme::Theme;
 use crate::ui::centered;
+use crate::ui::hits::Modal;
 
 /// One line of the table. The coverage test walks `ACTIONS` against this
 /// table, so a new action cannot ship without a help row.
@@ -26,6 +27,10 @@ static ROWS: &[Row] = &[
     Row::Act(Action::Settings, "open settings"),
     Row::Act(Action::Refresh, "refresh prices and visible data"),
     Row::Act(Action::ToggleBare, "bare mode: hide the header and footer"),
+    Row::Act(
+        Action::ToggleMouse,
+        "mouse on or off (off: terminal selects)",
+    ),
     Row::Act(Action::NextTheme, "next color preset (Save keeps it)"),
     Row::Act(Action::PrevTheme, "previous color preset"),
     Row::Act(Action::NextView, "next view"),
@@ -118,6 +123,7 @@ pub fn render(f: &mut Frame, app: &mut App) {
             .block(block),
         area,
     );
+    app.hits.modal = Some((area, Modal::Help));
 }
 
 /// " keys        description                          config_name" with the

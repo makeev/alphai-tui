@@ -4,6 +4,7 @@ pub mod categories;
 pub mod chart;
 pub mod earnings;
 pub mod help;
+pub mod hits;
 pub mod insider;
 pub mod insider_chart;
 pub mod news;
@@ -158,6 +159,8 @@ pub fn view_index(id: ViewId) -> usize {
 }
 
 pub fn draw(f: &mut Frame, app: &mut App) {
+    // The mouse reads what this frame draws, nothing older.
+    app.hits = hits::Hits::default();
     // Before rows are built, so the hovered row renders without its unseen
     // marker on this very frame.
     app.mark_selected_seen();
@@ -179,7 +182,9 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     .areas(f.area());
 
     if chrome_h > 0 {
-        f.render_widget(header_line(app, header.width), header);
+        let (line, pills) = header_line(app, header);
+        f.render_widget(line, header);
+        app.hits.pills = pills;
     }
     if rail_h > 0 {
         rail::render(f, rail_area, app);
@@ -246,11 +251,14 @@ pub(crate) fn centered(r: Rect, width: u16, height: u16) -> Rect {
     }
 }
 
-fn header_line(app: &App, width: u16) -> Paragraph<'static> {
+/// The header, plus where each view pill landed for the mouse.
+fn header_line(app: &App, area: Rect) -> (Paragraph<'static>, Vec<(Rect, usize)>) {
+    let width = area.width;
     let mut spans = vec![Span::styled(
         " alphai-tui ",
         Style::new().bold().fg(app.theme.accent),
     )];
+    let mut pills = Vec::new();
     let source = format!(" · {} {}", app.source_name, app.refresh_marker());
     let key_state = if app.alphai_enabled {
         " · alphai ✓"
@@ -280,6 +288,9 @@ fn header_line(app: &App, width: u16) -> Paragraph<'static> {
         } else {
             format!(" {}:{} ", i + 1, view.title())
         };
+        let x = spans.iter().map(Span::width).sum::<usize>() as u16;
+        let w = Span::raw(&label).width() as u16;
+        pills.push((Rect::new(area.x.saturating_add(x), area.y, w, 1), i));
         spans.push(Span::styled(label, style));
     }
     let used = spans.iter().map(Span::width).sum::<usize>();
@@ -293,7 +304,7 @@ fn header_line(app: &App, width: u16) -> Paragraph<'static> {
         spans.push(Span::raw(" ".repeat(width as usize - used - status_w)));
         spans.push(Span::styled(status, app.theme.subtle()));
     }
-    Paragraph::new(Line::from(spans))
+    (Paragraph::new(Line::from(spans)), pills)
 }
 
 #[cfg(test)]

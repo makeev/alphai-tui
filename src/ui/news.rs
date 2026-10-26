@@ -11,6 +11,7 @@ use crate::app::{App, FeedKind, NewsLayout, NewsScope};
 use crate::category::{self, Categories};
 use crate::keymap::Action;
 use crate::theme::Theme;
+use crate::ui::hits::{ListKind, Modal, Scroll};
 use crate::ui::{Hint, View, ViewId};
 
 /// Below this width the Side layout drops the card pane so the list keeps
@@ -129,6 +130,9 @@ impl View for NewsView {
             );
             app.article_overlay.scroll = scroll;
             app.article_overlay.inline = true;
+            // The in-place read is the overlay for the mouse too: the
+            // wheel scrolls it and a click above it (on the chart) closes.
+            app.hits.modal = Some((card, Modal::Article));
             return;
         }
         let (list_area, card_area, full) = match panes {
@@ -172,6 +176,7 @@ impl View for NewsView {
             .map(|a| article_row(a, &ctx, app.is_unseen(&key, a)))
             .collect();
 
+        let rows_area = block.inner(list_area);
         let table = Table::new(rows, widths)
             .block(block)
             .row_highlight_style(theme.selected())
@@ -179,6 +184,8 @@ impl View for NewsView {
         app.news_selected = app.news_selected.min(bundle.articles.len() - 1);
         app.news_table_state.select(Some(app.news_selected));
         f.render_stateful_widget(table, list_area, &mut app.news_table_state);
+        app.hits
+            .list(rows_area, app.news_table_state.offset(), ListKind::Feed);
 
         if let Some(card_area) = card_area {
             // The read comes from the cache the Earnings view fills; the
@@ -196,6 +203,7 @@ impl View for NewsView {
                 &theme,
             );
             app.card_scroll = scroll;
+            app.hits.scrolls.push((card_area, Scroll::Card));
         }
     }
 }
@@ -381,7 +389,9 @@ pub fn render_panel(f: &mut Frame, area: Rect, app: &mut App) {
         .iter()
         .map(|a| article_row(a, &ctx, app.is_unseen(&key, a)))
         .collect();
+    let rows_area = block.inner(area);
     f.render_widget(Table::new(rows, widths).block(block), area);
+    app.hits.list(rows_area, 0, ListKind::NewsStrip);
 }
 
 /// What a feed row needs beyond the article itself: the same for every row
