@@ -3,6 +3,7 @@
 [![CI](https://github.com/makeev/alphai-tui/actions/workflows/ci.yml/badge.svg)](https://github.com/makeev/alphai-tui/actions/workflows/ci.yml)
 [![crates.io](https://img.shields.io/crates/v/alphai-tui.svg)](https://crates.io/crates/alphai-tui)
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/makeev/alphai-tui/blob/main/LICENSE)
+[![alphai-tui on The Terminal Index](https://cli.masoko.net/badge/alphai-tui.svg)](https://cli.masoko.net/tools/alphai-tui/)
 
 An open-source, Bloomberg-style stock dashboard for the terminal that also
 answers why the price moved. Live quotes and candlestick charts on one side;
