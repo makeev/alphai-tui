@@ -53,11 +53,12 @@ pub enum Action {
     Categories,
     FindTicker,
     ToggleMouse,
+    PriceAlert,
 }
 
 /// Every action with its snake_case config name, the single source of truth
 /// for `[keybindings]` parsing and for the coverage test.
-pub const ACTIONS: [(Action, &str); 37] = [
+pub const ACTIONS: [(Action, &str); 38] = [
     (Action::Quit, "quit"),
     (Action::NextView, "next_view"),
     (Action::PrevView, "prev_view"),
@@ -95,6 +96,7 @@ pub const ACTIONS: [(Action, &str); 37] = [
     (Action::Categories, "categories"),
     (Action::FindTicker, "find_ticker"),
     (Action::ToggleMouse, "toggle_mouse"),
+    (Action::PriceAlert, "price_alert"),
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -186,6 +188,7 @@ fn default_keys(action: Action) -> Vec<KeyCombo> {
         Action::FindTicker => vec![ch('/')],
         // Shift-M for Mouse, like E and C: m is the average overlays.
         Action::ToggleMouse => vec![ch('M')],
+        Action::PriceAlert => vec![ch('A')],
     }
 }
 

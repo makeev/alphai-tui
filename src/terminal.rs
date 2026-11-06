@@ -2,6 +2,13 @@
 //! current terminal. No stdin probes, terminal-name guesses or passthrough.
 use std::io::{self, Write};
 
+/// A terminal-configured audible or visual bell. Kept separate from frame
+/// rendering so tests and redraws never play it accidentally.
+pub fn bell(writer: &mut impl Write) -> io::Result<()> {
+    writer.write_all(b"\x07")?;
+    writer.flush()
+}
+
 const BEGIN: &[u8] = b"\x1b[?2026h";
 const END: &[u8] = b"\x1b[?2026l";
 
@@ -76,6 +83,31 @@ impl<W: Write> Drop for FrameGuard<'_, W> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bell_is_flushed_after_the_synchronized_frame() {
+        #[derive(Default)]
+        struct Output {
+            bytes: Vec<u8>,
+            flushes: usize,
+        }
+        impl Write for Output {
+            fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+                self.bytes.extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                self.flushes += 1;
+                Ok(())
+            }
+        }
+        let mut output = Output::default();
+        draw_frame(&mut output, true, || Ok(())).unwrap();
+        let before = output.flushes;
+        bell(&mut output).unwrap();
+        assert_eq!(output.bytes, [BEGIN, END, b"\x07"].concat());
+        assert_eq!(output.flushes, before + 1);
+    }
 
     #[test]
     fn ordinary_frames_emit_no_extensions() {

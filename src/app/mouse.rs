@@ -26,6 +26,13 @@ impl App {
             return false;
         }
         let pos = Position::new(m.column, m.row);
+        if self
+            .hits
+            .alert_banner
+            .is_some_and(|area| area.contains(pos))
+        {
+            return false;
+        }
         match m.kind {
             MouseEventKind::ScrollUp => self.wheel(pos, -1),
             MouseEventKind::ScrollDown => self.wheel(pos, 1),

@@ -206,7 +206,7 @@ fn row(
     let price = portfolio::price_at(quote, now);
     let pnl = position.pnl(price);
     let pnl_color = move_color(Some(pnl), &app.theme);
-    let mut cells = vec![Cell::from(position.symbol.clone()).bold()];
+    let mut cells = vec![Cell::from(super::alerts::symbol(app, &position.symbol))];
     if cols.qty {
         cells.push(Cell::from(right(format!("{}", position.qty))));
     }
@@ -260,7 +260,10 @@ fn pending_row(app: &App, position: &Position) -> Row<'static> {
         Some(_) => Cell::from("error").style(Style::new().fg(app.theme.error)),
         None => Cell::from("…").style(app.theme.subtle()),
     };
-    Row::new(vec![Cell::from(position.symbol.clone()).bold(), status])
+    Row::new(vec![
+        Cell::from(super::alerts::symbol(app, &position.symbol)),
+        status,
+    ])
 }
 
 fn totals_row(app: &App, totals: &portfolio::Totals, cols: Columns) -> Row<'static> {

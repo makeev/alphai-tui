@@ -75,6 +75,7 @@ pub struct Hits {
     pub calendar_rows: Vec<Option<usize>>,
     /// The open overlay's box: a click outside a reading overlay closes it.
     pub modal: Option<(Rect, Modal)>,
+    pub alert_banner: Option<Rect>,
 }
 
 impl Hits {

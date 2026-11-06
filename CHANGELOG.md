@@ -5,7 +5,23 @@ the crates.io releases; from 0.7.0 on each one is also a git tag and a
 GitHub release with prebuilt binaries. The Homebrew tap, the AUR and the
 apt repository joined later, and carry every version since.
 
-## Unreleased
+## 0.37.0 - 2026-11-06
+
+- `A` sets a session-only price alert for the selected ticker or Portfolio
+  holding: `>= 150` for an upward crossing, `<= 140` for a downward one.
+  `Enter` arms or rearms it, an empty line clears it, and `Esc` cancels.
+  One level per ticker uses the existing quote updates, including available
+  pre/post-market prices, without extra requests. It fires once until
+  explicitly rearmed; cached prices and older prints cannot trigger it.
+- A fired alert shows its ticker, level, observed price and feed in a
+  bottom-row banner, including in bare mode, and sends one terminal bell.
+  Multiple events queue without moving the views, and close arrivals
+  share a bell. The alert dialog retains the provider and detection times.
+- Levels appear as dotted lines within the chart's existing scale and
+  exact labels above it. The quote rail shows alert status; watchlist and
+  Portfolio symbols mark armed, waiting and fired rules. Source changes
+  keep the baseline so an after-hours gap or outage can cross the level;
+  a change between known currencies pauses the rule.
 
 ## 0.36.0 - 2026-10-27
 

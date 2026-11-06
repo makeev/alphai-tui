@@ -365,10 +365,17 @@ fn bar_line(data: &TickerData, app: &App, width: u16) -> Line<'static> {
     let Some(bar) = data.candles.last() else {
         return Line::default();
     };
-    let mut spans = vec![
+    let mut spans = Vec::new();
+    if let Some(rule) = app.alerts.get(&data.quote.symbol) {
+        spans.push(Span::styled(
+            format!("alert {} {} · ", rule.level.label, rule.marker()),
+            super::alerts::style(app, rule),
+        ));
+    }
+    spans.extend([
         Span::styled("Last bar ", app.theme.subtle()),
         Span::raw(fmt_price(bar.close)),
-    ];
+    ]);
     let us = market::is_us_equity(&data.quote.symbol);
     let time = format!(
         "{} {}",
@@ -577,6 +584,21 @@ fn render_price_candles(
         for x in (plot.x..plot.x + plot.width).step_by(2) {
             if let Some(cell) = buf.cell_mut((x, plot.y + row)) {
                 cell.set_char('╌').set_fg(app.theme.ref_line);
+            }
+        }
+    }
+
+    // A level is context, not part of the scale: out-of-range rules keep
+    // their exact label above the plot without flattening the candles.
+    if let Some(rule) = app.alerts.get(symbol)
+        && (y_lo..=y_hi).contains(&rule.level.price)
+    {
+        let row =
+            plot.y + (scale(rule.level.price, y_lo, y_hi, plot.height as usize * 2) / 2) as u16;
+        for x in (plot.x..plot.right()).step_by(2) {
+            if let Some(cell) = buf.cell_mut((x, row)) {
+                cell.set_char('╌')
+                    .set_style(super::alerts::style(app, rule));
             }
         }
     }

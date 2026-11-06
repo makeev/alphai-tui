@@ -1,3 +1,4 @@
+mod alerts;
 mod alphai;
 mod app;
 mod cache;

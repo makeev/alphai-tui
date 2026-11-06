@@ -221,6 +221,7 @@ fn optional_zones(
         theme,
         stable,
     ));
+    zones.push(super::alerts::rail_zone(app, symbol));
     zones.push(session_zone(app, symbol, now, stable));
     zones.push(range_zone(quote, &data.candles, color, theme, stable));
     let closes: Vec<f64> = data.candles.iter().map(|c| c.close).collect();

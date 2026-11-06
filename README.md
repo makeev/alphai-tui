@@ -367,6 +367,44 @@ watchlist refresh. To recheck one fresh company date, open its Earnings
 view and press `r` there. An access or rate-limit error pauses the date
 sweep until a manual retry, rather than repeating it for every company.
 
+### Price alerts
+
+`A` sets a one-shot price alert for the selected ticker, or the selected
+holding in Portfolio. Enter `>= 150` to catch a move up to 150, or
+`<= 140` for a move down to 140; `>` and `<` work too. `Enter` arms the
+rule, `Esc` cancels, and an empty line followed by `Enter` removes it
+(`Ctrl-U` clears the input). There is one level per ticker, for this
+running session only. Enter on an existing rule arms it again.
+
+The chart marks the level with a dotted line when it is in range, and
+keeps the exact level above the chart without changing the scale. The
+watchlist and Portfolio mark armed rules with `↑` or `↓`, waiting or
+paused rules with `?`, and fired rules with `!`. The quote rail carries
+the rule's status. A crossing shows a banner over the bottom row in any
+view, including bare mode, and sends one terminal bell. Several events
+queue for 12 seconds each; close arrivals share a bell. Sound or a visual
+flash is controlled by your terminal and tmux's `bell-action` and
+`visual-bell` settings. Opening `A` shows the fired price, feed, provider
+time and detection time after the banner has gone.
+
+Alerts use the newest valid timestamped regular or pre/post-market price
+already arriving from your provider, even with `E` off. They add no
+requests. Cached prices cannot arm a rule; the first valid answer becomes
+its starting price. If the condition is already met when you arm it, the
+price must move back across the level and reach it again before it fires.
+The rule stays armed through an outage or a source change. Older prints
+are ignored; a change between two known currencies pauses the rule until
+the original currency returns or you arm it again. Missing currency is
+compatible with a known one, as on Finnhub.
+
+A crossing and return between polls can be missed, and a delayed feed
+delivers a delayed alert. Provider timestamps can name the start of a
+bar used for an extended price. Tiingo's daytime reference price is
+calculated, and its timestamp here is the poll time. These are observed
+price updates, not a record of every trade. Removing a ticker clears its
+rule unless a holding keeps that ticker polled. Exiting the app clears
+all rules.
+
 ### Everywhere: help, settings, themes
 
 ![alphai-tui help overlay: the full key table with the config name of every action next to it, drawn over the summary grid](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/help.png)
@@ -668,6 +706,7 @@ defaults. API keys can also come from env vars, which win over the config:
 | `/` | everywhere | find a watchlist ticker by symbol or loaded company name; `↑`/`↓` choose, `Enter` selects, `Esc` cancels |
 | `d` | everywhere | remove the selected ticker (the last one stays) |
 | `p` | everywhere | set what you hold of the ticker: `qty avg`, `Enter` saves it to the config, an empty line clears it |
+| `A` | everywhere | set or rearm a session price alert: `>= 150` or `<= 140`; empty clears, `Esc` cancels |
 | `↑` `↓` / `j` `k` | news, insider | scroll articles |
 | `↑` `↓` / `j` `k` | earnings | scroll the read |
 | `↑` `↓` / `j` `k` | calendar | select event |
@@ -1184,7 +1223,7 @@ The actions: `quit`, `next_view`, `prev_view`, `settings`, `help`,
 `insider_chart`, `chart_style`, `toggle_sma`, `toggle_rsi`,
 `toggle_volume`, `news_markers`, `ma_type`, `next_preset`, `prev_preset`,
 `next_theme`, `prev_theme`, `toggle_bare`, `add_ticker`, `remove_ticker`,
-`position`, `extended_hours`, `categories`, `find_ticker`, `toggle_mouse`.
+`position`, `extended_hours`, `categories`, `find_ticker`, `toggle_mouse`, `price_alert`.
 The `?` help overlay shows this list with the current keys next to it.
 
 Reserved and never remappable: `ctrl-c` (force quit), `esc`, the digits

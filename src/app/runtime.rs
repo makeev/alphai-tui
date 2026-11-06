@@ -30,9 +30,15 @@ impl App {
             self.fallback_if_stuck();
             self.ensure_alphai_data();
             if frames.ready(now) {
+                let bell = self.alerts.tick(now);
                 terminal::draw_frame(&mut std::io::stdout(), synchronized, || {
                     terminal.draw(|f| ui::draw(f, self)).map(|_| ())
                 })?;
+                // BEL stays outside the synchronized frame, and a failed
+                // write is consumed rather than retried on every redraw.
+                if bell {
+                    let _ = terminal::bell(&mut std::io::stdout());
+                }
                 // Slow terminals skip missed frames instead of catching up.
                 frames.painted(Instant::now());
             }

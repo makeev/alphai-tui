@@ -1,3 +1,4 @@
+pub mod alerts;
 pub mod article;
 pub mod calendar;
 pub mod categories;
@@ -212,6 +213,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     if app.ticker_search.open {
         ticker_search::render(f, app);
     }
+    alerts::render_banner(f, app);
 }
 
 /// Cut to display cells, preserving grapheme clusters (wide characters,
@@ -333,6 +335,9 @@ fn footer_line(app: &App) -> Paragraph<'static> {
     let hints = if app.prompt.open {
         match app.prompt.kind {
             PromptKind::Ticker => " type a ticker · enter add · esc cancel".to_string(),
+            PromptKind::Alert => {
+                " >= 150 / <= 140 · enter arm · empty clears · esc cancel".to_string()
+            }
             PromptKind::Position => {
                 " qty and average price · enter save · empty clears · esc cancel".to_string()
             }

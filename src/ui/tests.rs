@@ -1,3 +1,4 @@
+mod alerts;
 mod calendar;
 mod design;
 mod motion;

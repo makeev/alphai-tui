@@ -1,6 +1,6 @@
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Rect};
-use ratatui::style::{Style, Stylize};
+use ratatui::style::Style;
 use ratatui::text::Text;
 use ratatui::widgets::{Cell, Row, Table};
 
@@ -152,7 +152,7 @@ pub fn render_table(f: &mut Frame, area: Rect, app: &mut App) {
                 } else {
                     Cell::from("…").style(app.theme.subtle())
                 };
-                return Row::new(vec![Cell::from(symbol.clone()).bold(), status]);
+                return Row::new(vec![Cell::from(super::alerts::symbol(app, symbol)), status]);
             };
 
             let q = &data.quote;
@@ -188,7 +188,7 @@ pub fn render_table(f: &mut Frame, area: Rect, app: &mut App) {
             // Numbers right-align so the decimal points line up down the
             // column; the symbol and the sparkline stay left.
             let mut cells = vec![
-                Cell::from(symbol.clone()).bold(),
+                Cell::from(super::alerts::symbol(app, symbol)),
                 Cell::from(right(fmt_price(q.price))).style(price_style),
             ];
             if cols.change {

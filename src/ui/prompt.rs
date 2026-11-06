@@ -1,5 +1,4 @@
-//! The one-line prompt over the view: a ticker to watch (a) or a holding
-//! to record (p).
+//! The prompt over the view: a ticker (a), holding (p) or price alert (A).
 //!
 //! Deliberately not a form. The watchlist used to be reachable only
 //! through CLI arguments or by hand-editing the config, which meant
@@ -22,6 +21,22 @@ const WIDTH: u16 = 56;
 pub fn render(f: &mut Frame, app: &mut App) {
     let theme = &app.theme;
     let prompt = &app.prompt;
+    let (title, hint) = match prompt.kind {
+        PromptKind::Alert => {
+            super::alerts::render_prompt(f, app);
+            return;
+        }
+        PromptKind::Ticker => (
+            " Add ticker ".to_string(),
+            " enter add · esc cancel · Save in settings keeps it",
+        ),
+        // The position line is saved to the config the moment it is
+        // entered, so the hint says so rather than pointing at Save.
+        PromptKind::Position => (
+            format!(" Position · {} ", prompt.target),
+            " qty avg · enter save · empty clears · esc cancel",
+        ),
+    };
     // Three lines of content plus the frame: input, message, hint.
     let area = centered(f.area(), WIDTH, 5);
     f.render_widget(Clear, area);
@@ -40,18 +55,6 @@ pub fn render(f: &mut Frame, app: &mut App) {
             Style::new().fg(theme.error),
         )),
         None => Line::from(Span::raw(" ").style(app.theme.subtle())),
-    };
-    let (title, hint) = match prompt.kind {
-        PromptKind::Ticker => (
-            " Add ticker ".to_string(),
-            " enter add · esc cancel · Save in settings keeps it",
-        ),
-        // The position line is saved to the config the moment it is
-        // entered, so the hint says so rather than pointing at Save.
-        PromptKind::Position => (
-            format!(" Position · {} ", prompt.target),
-            " qty avg · enter save · empty clears · esc cancel",
-        ),
     };
     let hint = Line::from(Span::raw(hint).style(app.theme.subtle()));
 

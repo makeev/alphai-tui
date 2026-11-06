@@ -40,6 +40,7 @@ static ROWS: &[Row] = &[
     Row::Act(Action::FindTicker, "find a ticker in the watchlist"),
     Row::Act(Action::RemoveTicker, "remove the selected ticker"),
     Row::Act(Action::Position, "set what you hold of the ticker"),
+    Row::Act(Action::PriceAlert, "price alert: set, rearm or clear"),
     Row::Act(Action::Quit, "quit"),
     Row::Fixed("esc", "quit, close an overlay"),
     Row::Fixed("ctrl-c", "force quit"),

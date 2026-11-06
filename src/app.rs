@@ -2,6 +2,7 @@
 //! guards lives in `feeds`, the settings overlay in `settings`; views under
 //! `crate::ui` are stateless renderers over `&mut App`.
 
+mod alerts;
 mod feeds;
 mod mouse;
 mod runtime;
@@ -106,16 +107,18 @@ pub enum PromptKind {
     Ticker,
     /// A holding: quantity and average price, for `Prompt::target` (p).
     Position,
+    /// A one-shot price crossing for the focused ticker (A).
+    Alert,
 }
 
-/// State of the prompt overlay (a and p anywhere). Ticker syntax is checked
+/// State of the prompt overlay (a, p and A anywhere). Ticker syntax is checked
 /// before adding it; whether it exists is still the source's answer.
 #[derive(Default)]
 pub struct Prompt {
     pub open: bool,
     pub kind: PromptKind,
     pub input: String,
-    /// The ticker a position line applies to when the line names none.
+    /// The fixed ticker a position or alert applies to.
     pub target: String,
     /// Set for the cases the prompt itself can rule on, such as a symbol
     /// already on the list or a quantity that is not a number.
@@ -309,6 +312,7 @@ pub struct App {
     /// polled too (`polled_symbols`), so every row can be valued.
     pub positions: Vec<Position>,
     pub data: HashMap<String, TickerData>,
+    pub alerts: crate::alerts::Alerts,
     pub errors: HashMap<String, String>,
     /// The window each entry of `errors` was asked for, so a failure of the
     /// old window is not read as the new one's until it is actually tried
@@ -529,6 +533,7 @@ impl App {
             errors: HashMap::new(),
             error_window: HashMap::new(),
             price_flash: HashMap::new(),
+            alerts: Default::default(),
             animations: init.ui.animations,
             mouse: init.ui.mouse,
             hits: ui::hits::Hits::default(),
@@ -742,9 +747,13 @@ impl App {
                 symbol,
                 mut data,
             } => {
-                if !self.accepts_price_event(&source, &symbol)
-                    || params.is_some_and(|p| p != (self.range, self.interval, self.sessions))
-                {
+                if !self.accepts_price_event(&source, &symbol) {
+                    return;
+                }
+                // Quotes do not depend on the requested candle window.
+                // Check the incoming print before retaining old extended data.
+                self.check_alert(&symbol, &data.quote);
+                if params.is_some_and(|p| p != (self.range, self.interval, self.sessions)) {
                     return;
                 }
                 self.errors.remove(&symbol);
@@ -961,6 +970,7 @@ impl App {
             }
             Action::RemoveTicker => self.remove_selected_symbol(),
             Action::Position => self.open_position_prompt(),
+            Action::PriceAlert => self.open_alert_prompt(),
             Action::FindTicker => self.open_ticker_search(),
             Action::NextView => self.switch_view((self.view_idx + 1) % ui::VIEWS.len()),
             Action::PrevView => {
@@ -1146,7 +1156,7 @@ impl App {
         // box.
         let cap = match self.prompt.kind {
             PromptKind::Ticker => 16,
-            PromptKind::Position => 32,
+            PromptKind::Position | PromptKind::Alert => 32,
         };
         match key.code {
             KeyCode::Esc => self.prompt = Prompt::default(),
@@ -1185,6 +1195,7 @@ impl App {
         let typed = self.prompt.input.clone();
         match self.prompt.kind {
             PromptKind::Ticker => self.add_symbol(&typed),
+            PromptKind::Alert => self.commit_alert(&typed),
             PromptKind::Position => {
                 let target = self.prompt.target.clone();
                 let entry = portfolio::parse_entry(&typed, &target)?;
@@ -1198,7 +1209,7 @@ impl App {
     /// anywhere else. Prefilled with what is held already, so correcting a
     /// number is not a retype, and an emptied line clears the holding.
     fn open_position_prompt(&mut self) {
-        let target = self.position_target();
+        let target = self.focused_symbol();
         let input = self
             .position(&target)
             .map(|p| format!("{} {}", p.qty, p.avg_price))
@@ -1212,7 +1223,7 @@ impl App {
         };
     }
 
-    fn position_target(&self) -> String {
+    fn focused_symbol(&self) -> String {
         if self.view_id() == ui::ViewId::Portfolio
             && let Some(p) = self.positions.get(self.portfolio_selected)
         {
@@ -1398,8 +1409,10 @@ impl App {
         portfolio::polled_symbols(&self.symbols, &self.positions)
     }
 
-    fn sync_shared_symbols(&self) {
-        *self.shared_symbols.write().unwrap() = self.polled_symbols();
+    fn sync_shared_symbols(&mut self) {
+        let symbols = self.polled_symbols();
+        self.alerts.retain_symbols(&symbols);
+        *self.shared_symbols.write().unwrap() = symbols;
     }
 
     fn handle_help_key(&mut self, key: KeyEvent) -> bool {
