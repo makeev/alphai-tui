@@ -69,6 +69,7 @@ impl View for EarningsView {
             Hint::fixed("1-9", "view"),
             Hint::act(&[Action::Up, Action::Down], "scroll"),
             Hint::act(&[Action::Left, Action::Right], "ticker"),
+            Hint::act(&[Action::PriceAlert], "alert"),
             Hint::act(&[Action::PageUp, Action::PageDown], "page"),
             Hint::act(&[Action::Open], "open"),
             Hint::act(&[Action::Refresh], "refresh"),

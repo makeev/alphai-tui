@@ -35,6 +35,7 @@ impl View for ChartView {
             Hint::act(&[Action::Quit], "quit"),
             Hint::fixed("tab/1-9", "view"),
             Hint::act(&[Action::Up, Action::Down], "select"),
+            Hint::act(&[Action::PriceAlert], "alert"),
             // One grouped hint, like the split view: five separate ones no
             // longer fit 110 columns, and the help overlay spells them out.
             Hint::act(
@@ -48,7 +49,7 @@ impl View for ChartView {
                 ],
                 "chart",
             ),
-            Hint::act(&[Action::NextPreset], "interval"),
+            Hint::act(&[Action::NextPreset], "preset"),
             Hint::act(&[Action::Refresh], "refresh"),
             Hint::act(&[Action::Settings], "settings"),
             Hint::act(&[Action::Help], "help"),

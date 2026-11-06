@@ -5,6 +5,13 @@ the crates.io releases; from 0.7.0 on each one is also a git tag and a
 GitHub release with prebuilt binaries. The Homebrew tap, the AUR and the
 apt repository joined later, and carry every version since.
 
+## 0.38.0 - 2026-11-06
+
+- Every view now shows `A alert` beside the selection keys in its footer,
+  making price alerts easier to discover. The hint follows custom
+  keybindings and is visible at 80 columns with the default keys.
+- Shorter navigation labels keep all footer actions within 110 columns.
+
 ## 0.37.0 - 2026-11-06
 
 - `A` sets a session-only price alert for the selected ticker or Portfolio

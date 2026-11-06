@@ -42,8 +42,9 @@ impl View for NewsView {
     fn hints(&self) -> &'static [Hint] {
         const HINTS: &[Hint] = &[
             Hint::act(&[Action::Quit], "quit"),
-            Hint::act(&[Action::Up, Action::Down], "article"),
+            Hint::act(&[Action::Up, Action::Down], "row"),
             Hint::act(&[Action::Left, Action::Right], "ticker"),
+            Hint::act(&[Action::PriceAlert], "alert"),
             Hint::act(&[Action::Open], "open"),
             Hint::act(&[Action::Card], "card"),
             Hint::act(&[Action::CycleLayout], "layout"),

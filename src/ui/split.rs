@@ -26,6 +26,7 @@ impl View for SplitView {
             Hint::act(&[Action::Quit], "quit"),
             Hint::fixed("tab/1-9", "view"),
             Hint::act(&[Action::Up, Action::Down], "select"),
+            Hint::act(&[Action::PriceAlert], "alert"),
             Hint::act(&[Action::CycleScope], "scope"),
             Hint::act(
                 &[
@@ -38,7 +39,7 @@ impl View for SplitView {
                 ],
                 "chart",
             ),
-            Hint::act(&[Action::NextPreset], "interval"),
+            Hint::act(&[Action::NextPreset], "preset"),
             Hint::act(&[Action::FindTicker], "find"),
             // No settings hint: with the news marks key this line is the
             // widest in the app after the News one, it has to fit 110

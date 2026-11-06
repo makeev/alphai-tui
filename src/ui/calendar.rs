@@ -26,6 +26,7 @@ static HINTS: &[Hint] = &[
     Hint::act(&[Action::Quit], "quit"),
     Hint::fixed("tab/1-9", "view"),
     Hint::act(&[Action::Up, Action::Down], "select"),
+    Hint::act(&[Action::PriceAlert], "alert"),
     Hint::act(&[Action::Open], "open"),
     Hint::act(&[Action::Refresh], "refresh"),
     Hint::act(&[Action::Help], "help"),

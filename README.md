@@ -370,7 +370,9 @@ sweep until a manual retry, rather than repeating it for every company.
 ### Price alerts
 
 `A` sets a one-shot price alert for the selected ticker, or the selected
-holding in Portfolio. Enter `>= 150` to catch a move up to 150, or
+holding in Portfolio. Every view's footer shows `A alert` beside the
+selection keys; it follows your keybindings if you remap the action.
+Enter `>= 150` to catch a move up to 150, or
 `<= 140` for a move down to 140; `>` and `<` work too. `Enter` arms the
 rule, `Esc` cancels, and an empty line followed by `Enter` removes it
 (`Ctrl-U` clears the input). There is one level per ticker, for this
