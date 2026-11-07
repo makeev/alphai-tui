@@ -79,6 +79,10 @@ impl App {
             self.article_overlay.scroll = text(self.article_overlay.scroll);
             return true;
         }
+        if let Some(card) = &mut self.calendar_overlay {
+            card.scroll = text(card.scroll);
+            return true;
+        }
         if self.help.open {
             self.help.scroll = text(self.help.scroll);
             return true;
@@ -128,11 +132,11 @@ impl App {
     }
 
     fn wheel_watchlist(&mut self, dir: i16) -> bool {
-        let next = step(self.selected, dir, self.symbols.len() - 1);
+        let next = step(self.selected, dir, self.symbols.len().saturating_sub(1));
         if next == self.selected {
             return false;
         }
-        self.selected = next;
+        self.select_symbol(next);
         true
     }
 
@@ -155,6 +159,13 @@ impl App {
         }
         // The reading overlays close on a click outside their box, like
         // Esc; a click inside is a reader steadying the page.
+        if self.calendar_overlay.is_some() {
+            if self.hits.outside_modal(pos) {
+                self.calendar_overlay = None;
+                return true;
+            }
+            return false;
+        }
         if self.article_overlay.open {
             if self.hits.outside_modal(pos) {
                 self.article_overlay = ArticleOverlay::default();
@@ -189,7 +200,7 @@ impl App {
             .or_else(|| self.hits.card_at(pos))
             .filter(|&idx| idx < self.symbols.len())
         {
-            if idx != self.selected {
+            if idx != self.selected || self.earnings_target.is_some() {
                 self.select_symbol(idx);
             }
             return true;

@@ -5,6 +5,19 @@ the crates.io releases; from 0.7.0 on each one is also a git tag and a
 GitHub release with prebuilt binaries. The Homebrew tap, the AUR and the
 apt repository joined later, and carry every version since.
 
+## 0.40.0 - 2026-11-07
+
+- Calendar now combines macro releases with AlphAI's batched earnings calendar
+  for watchlist and portfolio tickers. Scheduled, reported with a read pending,
+  and read available states show sessions, filing times and earnings verdicts.
+- `f` filters All / Reports / Macro; `v` opens full event details. Enter opens
+  the exact linked read, preserving the selected share class and portfolio
+  context. Pending reads keep the displayed document until an explicit refresh.
+- A shared near window replaces the per-company full-history sweep. Default
+  continuous Calendar polling for up to 50 names uses about 32 calendar requests
+  per day including macro, before other activity. Corporate polling has one-hour
+  and six-hour floors; errors wait for manual retry.
+
 ## 0.39.0 - 2026-11-07
 
 - Named color presets now paint their own background and body text across

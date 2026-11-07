@@ -23,6 +23,9 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use crate::category::Categories;
 use crate::poller::SourceEvent;
 
+pub mod earnings_calendar;
+pub use earnings_calendar::{ReportEvent, ReportRequest, ReportStatus};
+
 pub const DEFAULT_BASE_URL: &str = "https://api.alphai.io";
 
 /// The public site, for article page links (distinct from the API base).
@@ -116,6 +119,7 @@ impl Client {
             .user_agent(concat!("alphai-tui/", env!("CARGO_PKG_VERSION")))
             .timeout(Duration::from_secs(15))
             .build()?;
+        let base = base.trim().trim_end_matches('/').to_string();
         Ok(Self { http, base, key })
     }
 
@@ -305,6 +309,36 @@ impl Client {
             .await?;
         Ok(page.events)
     }
+
+    pub async fn earnings_calendar(&self, request: &ReportRequest) -> Result<Vec<ReportEvent>> {
+        anyhow::ensure!(
+            !request.tickers.is_empty() && request.tickers.len() <= 50,
+            "earnings calendar needs 1 to 50 tickers"
+        );
+        anyhow::ensure!(
+            request
+                .tickers
+                .iter()
+                .all(|s| earnings_calendar::valid_ticker(s)),
+            "invalid earnings calendar ticker"
+        );
+        anyhow::ensure!(
+            (1..=45).contains(&(request.to - request.from).num_days()),
+            "invalid earnings calendar window"
+        );
+        let page: earnings_calendar::ReportPage = self
+            .get_json(
+                "/api/calendar/earnings/",
+                &[
+                    ("from_date", &request.from.to_string()),
+                    ("to_date", &request.to.to_string()),
+                    ("ticker", &request.tickers.join(",")),
+                    ("detail", "full"),
+                ],
+            )
+            .await?;
+        page.validate(request)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -399,9 +433,16 @@ pub enum Cmd {
         sort: Sort,
     },
     /// Fetch one ticker's earnings reads and its next report date.
-    FetchEarnings { symbol: String },
+    FetchEarnings {
+        symbol: String,
+        cache_symbol: String,
+    },
+    FetchReportCalendar(ReportRequest),
     /// Fetch the macro calendar window `[from, to)`, dates as `YYYY-MM-DD`.
-    FetchCalendar { from: String, to: String },
+    FetchCalendar {
+        from: String,
+        to: String,
+    },
 }
 
 pub enum Event {
@@ -458,6 +499,11 @@ pub enum Event {
     },
     /// Stop the watchlist date sweep after an account-wide access/limit error.
     CalendarBlocked { key: String, error: String },
+    ReportCalendar {
+        request: ReportRequest,
+        result: Result<Vec<ReportEvent>, String>,
+        blocked: bool,
+    },
     /// `key` matches the cache key of the fetch that failed.
     Error { key: String, error: String },
 }
@@ -593,6 +639,7 @@ pub async fn run(
     let mut client = initial_key.and_then(|k| Client::new(k).ok());
     // Whether this key may request page_size=50 (Pro); learned per session.
     let mut page50: Option<bool> = None;
+    let mut last_report_start: Option<tokio::time::Instant> = None;
     while let Some(cmd) = cmds.recv().await {
         match cmd {
             Cmd::SetKey(key) => {
@@ -746,8 +793,11 @@ pub async fn run(
                     return;
                 }
             }
-            Cmd::FetchEarnings { symbol } => {
-                let key = earnings_key(&symbol);
+            Cmd::FetchEarnings {
+                symbol,
+                cache_symbol,
+            } => {
+                let key = earnings_key(&cache_symbol);
                 let Some(client) = &client else {
                     send_error(&tx, key, "no AlphAI API key configured");
                     continue;
@@ -783,6 +833,29 @@ pub async fn run(
                 let event = match client.calendar(&from, &to).await {
                     Ok(events) => Event::Calendar { events, from, to },
                     Err(e) => calendar_error(key, e),
+                };
+                if tx.send(SourceEvent::Alphai(event)).is_err() {
+                    return;
+                }
+            }
+            Cmd::FetchReportCalendar(request) => {
+                if let Some(at) = last_report_start {
+                    tokio::time::sleep_until(at + Duration::from_secs(4)).await;
+                }
+                last_report_start = Some(tokio::time::Instant::now());
+                let result = match &client {
+                    Some(client) => client.earnings_calendar(&request).await,
+                    None => Err(anyhow::anyhow!("no AlphAI API key configured")),
+                };
+                let blocked = result
+                    .as_ref()
+                    .err()
+                    .and_then(|e| e.downcast_ref::<ApiError>())
+                    .is_some_and(|e| matches!(e.status.as_u16(), 401 | 403 | 429));
+                let event = Event::ReportCalendar {
+                    request,
+                    result: result.map_err(|e| format!("{e:#}")),
+                    blocked,
                 };
                 if tx.send(SourceEvent::Alphai(event)).is_err() {
                     return;
@@ -1249,9 +1322,8 @@ pub struct TickerEarnings {
     /// answer, not an error: no read has been published for this ticker.
     #[serde(default)]
     pub reports: Vec<EarningsRead>,
-    /// The company-confirmed date of its next report (America/New_York), or
-    /// None when none is confirmed. Never an estimate, so None means "not
-    /// confirmed yet", not "does not report".
+    /// Next report date marked confirmed by the source (America/New_York).
+    /// Missing means no date is available, not that the company will not report.
     #[serde(default)]
     pub next_report_date: Option<String>,
     /// Set by the fetcher when the API owns no such symbol (404), never on

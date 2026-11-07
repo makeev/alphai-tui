@@ -5,6 +5,7 @@
 mod alerts;
 mod feeds;
 mod mouse;
+pub(crate) mod report_calendar;
 mod runtime;
 mod settings;
 mod ticker_search;
@@ -458,9 +459,10 @@ pub struct App {
     pub calendar_selection: ui::calendar::Selection,
     pub calendar_state: TableState,
     pub(crate) calendar_refresh_requested: bool,
-    pub(crate) report_date_asked: Option<Instant>,
-    pub(crate) report_date_retry: HashSet<String>,
-    pub(crate) report_dates_paused: Option<String>,
+    pub(crate) report_calendar: report_calendar::ReportCalendar,
+    pub(crate) earnings_target: Option<report_calendar::EarningsTarget>,
+    pub(crate) calendar_filter: ui::calendar::Filter,
+    pub(crate) calendar_overlay: Option<ui::calendar::CalendarOverlay>,
     /// SetKey acknowledgements form a barrier against old-key responses.
     pub(crate) alphai_key_pending: usize,
     /// Scroll of the Earnings view's body; reset when the ticker changes.
@@ -589,9 +591,10 @@ impl App {
             calendar_selection: ui::calendar::Selection::default(),
             calendar_state: TableState::default(),
             calendar_refresh_requested: false,
-            report_date_asked: None,
-            report_date_retry: HashSet::new(),
-            report_dates_paused: None,
+            report_calendar: report_calendar::ReportCalendar::default(),
+            earnings_target: None,
+            calendar_filter: ui::calendar::Filter::default(),
+            calendar_overlay: None,
             alphai_key_pending: 0,
             earnings_scroll: 0,
             alphai_ttl: init.ui.alphai_ttl,
@@ -637,7 +640,7 @@ impl App {
     }
 
     pub fn selected_symbol(&self) -> &str {
-        &self.symbols[self.selected]
+        self.symbols.get(self.selected).map_or("", String::as_str)
     }
 
     /// Puts one ticker's last-good rows on screen before the first poll
@@ -933,6 +936,9 @@ impl App {
         if self.article_overlay.open {
             return self.handle_overlay_key(key);
         }
+        if self.calendar_overlay.is_some() {
+            return self.handle_calendar_card_key(key);
+        }
         if self.help.open {
             return self.handle_help_key(key);
         }
@@ -989,6 +995,19 @@ impl App {
             Action::PageUp if calendar_view => self.move_calendar(-10),
             Action::PageDown if calendar_view => self.move_calendar(10),
             Action::Open if calendar_view => self.open_calendar_row(),
+            Action::Card if calendar_view => {
+                let rows = ui::calendar::agenda(self, self.now());
+                self.calendar_overlay =
+                    self.calendar_selection
+                        .resolve(&rows)
+                        .map(|i| ui::calendar::CalendarOverlay {
+                            row: rows[i].clone(),
+                            scroll: 0,
+                        });
+            }
+            Action::CycleScope if calendar_view => {
+                self.calendar_filter = self.calendar_filter.next()
+            }
             // News/Insider: up/down scroll articles, left/right switch ticker.
             Action::Up if news_view => {
                 self.news_selected = self.news_selected.saturating_sub(1);
@@ -1005,7 +1024,7 @@ impl App {
                 }
             }
             Action::Left if lr_ticker => self.select_symbol(self.selected.saturating_sub(1)),
-            Action::Right if lr_ticker => {
+            Action::Right if lr_ticker && !self.symbols.is_empty() => {
                 self.select_symbol((self.selected + 1).min(self.symbols.len() - 1))
             }
             // The earnings body is a document: up/down scroll it, and these
@@ -1103,7 +1122,9 @@ impl App {
             Action::Up if self.view_id() == ui::ViewId::Portfolio => self.move_portfolio(-1),
             Action::Down if self.view_id() == ui::ViewId::Portfolio => self.move_portfolio(1),
             Action::Up => self.selected = self.selected.saturating_sub(1),
-            Action::Down => self.selected = (self.selected + 1).min(self.symbols.len() - 1),
+            Action::Down => {
+                self.selected = (self.selected + 1).min(self.symbols.len().saturating_sub(1))
+            }
             _ => {}
         }
         false
@@ -1223,7 +1244,20 @@ impl App {
         };
     }
 
-    fn focused_symbol(&self) -> String {
+    pub(crate) fn focused_symbol(&self) -> String {
+        if self.view_id() == ui::ViewId::Earnings {
+            return self.earnings_symbol().to_string();
+        }
+        if self.view_id() == ui::ViewId::Calendar {
+            let rows = ui::calendar::agenda(self, self.now());
+            if let Some(ui::calendar::Kind::Report { symbol }) = self
+                .calendar_selection
+                .resolve(&rows)
+                .map(|i| &rows[i].kind)
+            {
+                return symbol.clone();
+            }
+        }
         if self.view_id() == ui::ViewId::Portfolio
             && let Some(p) = self.positions.get(self.portfolio_selected)
         {
@@ -1372,7 +1406,6 @@ impl App {
             return;
         }
         let gone = self.symbols.remove(self.selected);
-        self.report_date_retry.remove(&gone);
         self.sync_shared_symbols();
         self.persist_watchlist(config::Edit::Unwatch(gone.clone()));
         // Prices are cheap to fetch again; the AlphAI feeds are not, so
@@ -1395,6 +1428,7 @@ impl App {
     /// ticker starts over, or the new ticker's feed would open at the old
     /// one's scroll position.
     fn select_symbol(&mut self, idx: usize) {
+        self.earnings_target = None;
         self.selected = idx;
         self.news_selected = 0;
         self.card_scroll = 0;
@@ -1520,6 +1554,7 @@ impl App {
     }
 
     fn switch_view(&mut self, idx: usize) {
+        self.earnings_target = None;
         if idx != self.view_idx {
             self.view_idx = idx;
             self.news_selected = 0;
@@ -1554,19 +1589,67 @@ impl App {
     }
 
     fn open_calendar_row(&mut self) {
-        match ui::calendar::open_target(self, self.now()) {
-            Some(ui::calendar::OpenTarget::Url(url)) => open_url(&url),
-            Some(ui::calendar::OpenTarget::Earnings(symbol)) => {
+        let rows = ui::calendar::agenda(self, self.now());
+        if let Some(row) = self
+            .calendar_selection
+            .resolve(&rows)
+            .map(|i| rows[i].clone())
+        {
+            self.open_calendar_event(&row);
+        }
+    }
+
+    fn open_calendar_event(&mut self, row: &ui::calendar::AgendaRow) {
+        match ui::calendar::row_target(row) {
+            ui::calendar::OpenTarget::Url(url) => open_url(&url),
+            ui::calendar::OpenTarget::Earnings(symbol) => {
                 if let Some(idx) = self.symbols.iter().position(|s| s == &symbol) {
                     self.select_symbol(idx);
-                    self.switch_view(ui::view_index(ui::ViewId::Earnings));
                 }
+                self.switch_view(ui::view_index(ui::ViewId::Earnings));
+                self.earnings_scroll = 0;
+                self.earnings_target =
+                    row.report
+                        .clone()
+                        .map(|event| report_calendar::EarningsTarget {
+                            pending_read: self
+                                .earnings
+                                .get(&symbol)
+                                .and_then(|s| s.data.latest())
+                                .cloned()
+                                .map(Box::new),
+                            symbol,
+                            event,
+                            phase: report_calendar::TargetPhase::Owner,
+                            refresh_pending: false,
+                            no_longer_listed: false,
+                        });
             }
-            Some(ui::calendar::OpenTarget::Unavailable) => {
+            ui::calendar::OpenTarget::Unavailable => {
                 self.notice = Some(("No source link for this event".into(), Instant::now()));
             }
-            None => {}
         }
+    }
+
+    fn handle_calendar_card_key(&mut self, key: KeyEvent) -> bool {
+        let action = self.keymap.resolve(&key);
+        if key.code == KeyCode::Esc || action == Some(Action::Card) {
+            self.calendar_overlay = None;
+        } else if action == Some(Action::Quit) {
+            return true;
+        } else if action == Some(Action::Open) {
+            let card = self.calendar_overlay.take().unwrap();
+            self.open_calendar_event(&card.row);
+        } else if let Some(card) = &mut self.calendar_overlay {
+            match action {
+                Some(Action::Up) => card.scroll = card.scroll.saturating_sub(1),
+                Some(Action::Down) => card.scroll = card.scroll.saturating_add(1),
+                Some(Action::PageUp) => card.scroll = card.scroll.saturating_sub(10),
+                Some(Action::PageDown) => card.scroll = card.scroll.saturating_add(10),
+                _ => {}
+            }
+        }
+        false
     }
 
     /// t / T: jump to the next/previous range/interval preset and wake the

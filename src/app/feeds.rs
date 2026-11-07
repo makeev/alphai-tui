@@ -46,7 +46,6 @@ const EARNINGS_TTL_FACTOR: u32 = 12;
 /// Agency schedules move about once a month, and the window reaches 45 days
 /// ahead, so one fetch covers a working day.
 const CALENDAR_TTL_FACTOR: u32 = 72;
-pub(crate) const REPORT_DATE_PACE: Duration = Duration::from_secs(4);
 
 /// Ticker and market feeds use plain symbols or `*`; the other surfaces
 /// have reserved keys. A provider's ticker may itself contain a colon.
@@ -477,12 +476,28 @@ impl App {
                 // not always the one on screen (GOOGL carries GOOG's reads).
                 let symbol = key.strip_prefix("earn:").unwrap_or(&key).to_string();
                 self.earnings.insert(
-                    symbol,
+                    symbol.clone(),
                     EarningsSlot {
                         data: *data,
                         fetched: Instant::now(),
                     },
                 );
+                self.earnings_arrived(&symbol);
+            }
+            alphai::Event::ReportCalendar {
+                request,
+                result,
+                blocked,
+            } => {
+                let success = result.is_ok();
+                let identity = request.clone();
+                if self
+                    .report_calendar
+                    .apply(request, result, blocked, Instant::now())
+                    && success
+                {
+                    self.reports_arrived(&identity);
+                }
             }
             alphai::Event::Calendar { events, from, to } => {
                 self.inflight.remove(alphai::CALENDAR_KEY);
@@ -498,7 +513,7 @@ impl App {
             }
             alphai::Event::CalendarBlocked { key, error } => {
                 self.inflight.remove(&key);
-                self.report_dates_paused = Some(error.clone());
+                self.report_calendar.paused = Some(error.clone());
                 self.alphai_errors.insert(key, error);
             }
             alphai::Event::Error { key, error } => {
@@ -513,7 +528,7 @@ impl App {
     /// the same key is in flight, and never on top of an error (manual `r`
     /// clears the error and retries) — the free tier is 100 requests/day.
     pub(crate) fn ensure_alphai_data(&mut self) {
-        self.ensure_alphai_data_at(Utc::now(), Instant::now());
+        self.ensure_alphai_data_at(self.now(), Instant::now());
     }
 
     pub(crate) fn ensure_alphai_data_at(&mut self, now: DateTime<Utc>, clock: Instant) {
@@ -525,17 +540,20 @@ impl App {
             || self.alphai_key_pending > 0
             || self.settings.open
             || self.article_overlay.open
+            || self.calendar_overlay.is_some()
             || self.help.open
             || self.prompt.open
             || self.category_picker.open
-            || self.symbols.is_empty()
+            || self.ticker_search.open
         {
             return;
         }
-        self.ensure_feed_data();
+        if !self.symbols.is_empty() {
+            self.ensure_feed_data();
+        }
         self.ensure_earnings_data();
         self.ensure_calendar(now, clock);
-        self.ensure_report_dates(clock);
+        self.ensure_reports(now, clock);
     }
 
     /// The feed behind the visible view: head fetch, delta poll, or nothing.
@@ -599,57 +617,68 @@ impl App {
         }
     }
 
-    /// Earnings shares its slots with Calendar, but refreshes the read on
-    /// screen more often. An unsupported symbol stays terminal for this key.
+    /// Fetch full history only for the Earnings view. A calendar UID gets one
+    /// owner lookup and, after a successful miss, at most one canonical lookup.
     fn ensure_earnings_data(&mut self) {
+        use super::report_calendar::TargetPhase;
         if !ui::VIEWS[self.view_idx].shows_earnings() {
             return;
         }
-        let ttl = self.alphai_ttl;
-        let symbol = self.selected_symbol().to_string();
+        let symbol = self.earnings_symbol().to_string();
+        if symbol.is_empty() {
+            return;
+        }
         let key = alphai::earnings_key(&symbol);
-        // One earnings request at a time, whichever ticker: walking the
-        // watchlist with the arrow keys would otherwise spend a request per
-        // frame instead of one per round trip.
-        let busy = self.inflight.iter().any(|k| k.starts_with("earn:"));
-        let stale = match self.earnings.get(&symbol) {
-            None => true,
-            Some(slot) => !slot.data.unknown && slot.fetched.elapsed() > ttl * EARNINGS_TTL_FACTOR,
+        if self.inflight.iter().any(|k| k.starts_with("earn:"))
+            || self.alphai_errors.contains_key(&key)
+        {
+            return;
+        }
+        let mut request_symbol = symbol.clone();
+        let stale = if let Some(target) = &mut self.earnings_target {
+            if let Some(pointer) = &target.event.report_read {
+                if self
+                    .earnings
+                    .get(&symbol)
+                    .is_some_and(|s| s.data.reports.iter().any(|r| r.uid == pointer.uid))
+                {
+                    target.phase = TargetPhase::Done;
+                    false
+                } else {
+                    match target.phase {
+                        TargetPhase::Owner => {
+                            target.phase = TargetPhase::OwnerLoading;
+                            true
+                        }
+                        TargetPhase::Fallback => {
+                            request_symbol = pointer.ticker.clone();
+                            target.phase = TargetPhase::FallbackLoading;
+                            true
+                        }
+                        _ => false,
+                    }
+                }
+            } else {
+                self.earnings.get(&symbol).is_none_or(|s| {
+                    !s.data.unknown && s.fetched.elapsed() > self.alphai_ttl * EARNINGS_TTL_FACTOR
+                })
+            }
+        } else {
+            self.earnings.get(&symbol).is_none_or(|s| {
+                !s.data.unknown && s.fetched.elapsed() > self.alphai_ttl * EARNINGS_TTL_FACTOR
+            })
         };
-        if stale && !busy && !self.alphai_errors.contains_key(&key) {
+        if stale {
             self.inflight.insert(key);
-            self.report_date_asked = Some(Instant::now());
-            let _ = self.alphai_tx.send(alphai::Cmd::FetchEarnings { symbol });
+            let _ = self.alphai_tx.send(alphai::Cmd::FetchEarnings {
+                symbol: request_symbol,
+                cache_symbol: symbol,
+            });
         }
     }
 
     pub(crate) fn calendar_ttl(&self) -> Duration {
         self.alphai_ttl * CALENDAR_TTL_FACTOR
-    }
-
-    /// Crypto, FX and indices cannot have company report dates. Foreign
-    /// listings remain candidates; a 404 from the API is terminal.
-    pub(crate) fn calendar_symbols(&self) -> impl Iterator<Item = &String> {
-        self.symbols
-            .iter()
-            .filter(|s| !crate::market::is_crypto(s) && !s.contains(['^', '=']))
-    }
-
-    pub(crate) fn report_date_due(&self, symbol: &str, clock: Instant) -> bool {
-        if self
-            .alphai_errors
-            .contains_key(&alphai::earnings_key(symbol))
-        {
-            return false;
-        }
-        match self.earnings.get(symbol) {
-            None => true,
-            Some(slot) => {
-                !slot.data.unknown
-                    && (self.report_date_retry.contains(symbol)
-                        || clock.saturating_duration_since(slot.fetched) >= self.calendar_ttl())
-            }
-        }
     }
 
     fn ensure_calendar(&mut self, now: DateTime<Utc>, clock: Instant) {
@@ -673,29 +702,6 @@ impl App {
         }
     }
 
-    fn ensure_report_dates(&mut self, clock: Instant) {
-        if !ui::VIEWS[self.view_idx].shows_calendar()
-            || self.report_dates_paused.is_some()
-            || self.inflight.contains(alphai::CALENDAR_KEY)
-            || self.inflight.iter().any(|k| k.starts_with("earn:"))
-            || self
-                .report_date_asked
-                .is_some_and(|at| clock.saturating_duration_since(at) < REPORT_DATE_PACE)
-        {
-            return;
-        }
-        let candidate = self
-            .calendar_symbols()
-            .find(|s| self.report_date_due(s, clock))
-            .cloned();
-        if let Some(symbol) = candidate {
-            self.inflight.insert(alphai::earnings_key(&symbol));
-            self.report_date_retry.remove(&symbol);
-            self.report_date_asked = Some(clock);
-            let _ = self.alphai_tx.send(alphai::Cmd::FetchEarnings { symbol });
-        }
-    }
-
     pub(crate) fn change_alphai_key(&mut self, key: Option<String>) {
         self.alphai_enabled = key.is_some();
         self.alphai_key_pending += 1;
@@ -705,9 +711,9 @@ impl App {
         self.earnings.clear();
         self.calendar = None;
         self.calendar_refresh_requested = false;
-        self.report_date_retry.clear();
-        self.report_date_asked = None;
-        self.report_dates_paused = None;
+        self.report_calendar = Default::default();
+        self.earnings_target = None;
+        self.calendar_overlay = None;
         self.alphai_errors.clear();
         self.inflight.clear();
         self.discarded_news_requests.clear();
@@ -807,7 +813,22 @@ impl App {
             self.feeds.remove(&key);
             self.alphai_errors.remove(&key);
         } else if ui::VIEWS[self.view_idx].shows_earnings() {
-            let symbol = self.selected_symbol().to_string();
+            let symbol = self.earnings_symbol().to_string();
+            let key = alphai::earnings_key(&symbol);
+            if self.inflight.contains(&key) {
+                return;
+            }
+            self.alphai_errors.remove(&key);
+            if let Some(target) = &mut self.earnings_target {
+                if target.event.status == alphai::ReportStatus::Reported
+                    && target.event.report_read.is_none()
+                {
+                    target.refresh_pending = true;
+                    self.report_calendar.refresh(Some(&symbol));
+                    return;
+                }
+                target.phase = super::report_calendar::TargetPhase::Owner;
+            }
             if !self
                 .earnings
                 .get(&symbol)
@@ -815,22 +836,15 @@ impl App {
             {
                 self.earnings.remove(&symbol);
             }
-            self.alphai_errors.remove(&alphai::earnings_key(&symbol));
-        } else if ui::VIEWS[self.view_idx].shows_calendar()
-            && !self.inflight.contains(alphai::CALENDAR_KEY)
-        {
+        } else if ui::VIEWS[self.view_idx].shows_calendar() {
+            if self.calendar_refresh_requested
+                || self.inflight.contains(alphai::CALENDAR_KEY)
+                || !self.report_calendar.refresh(None)
+            {
+                return;
+            }
             self.calendar_refresh_requested = true;
             self.alphai_errors.remove(alphai::CALENDAR_KEY);
-            self.report_dates_paused = None;
-            for symbol in &self.symbols {
-                if self
-                    .alphai_errors
-                    .remove(&alphai::earnings_key(symbol))
-                    .is_some()
-                {
-                    self.report_date_retry.insert(symbol.clone());
-                }
-            }
         }
     }
 

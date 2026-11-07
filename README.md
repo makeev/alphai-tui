@@ -51,10 +51,10 @@ supplies a trade timestamp and feed, those appear beside the quote before
 optional holdings and session details. This is the time of the trade, not
 the last refresh. The header keeps navigation and connection status.
 
-A flag shows the next high-importance macro event within seven days, or a
-confirmed report date for the selected ticker within seven ET calendar
-days. The ticker's report takes priority. It uses fresh cached dates only;
-the flag never fetches a company's report dates itself. Estimated macro
+The flag prioritizes a filing that landed today, then the focused ticker's
+next report within today and the following six ET dates, then the next
+high-importance macro event. Portfolio, Calendar and Earnings use the ticker
+in focus. The flag reads the shared fresh calendar cache. Estimated macro
 dates keep an `est.` label, and postponed or cancelled events do not flag.
 
 So the News, Insider and Earnings views are never a ticker name with no
@@ -273,8 +273,8 @@ issuer's 6-K with its half years and its own currency).
 
 `←` `→` walk the watchlist, older quarters continue below the newest read.
 When a company has not reported since AlphAI began reading filings, the
-view says so and gives the date of its next report if the company has
-confirmed one. The bottom line carries the next couple of US macro releases
+view says so and gives the next date available from the calendar, based on
+the source's confirmation marker. The bottom line carries the next couple of US macro releases
 (CPI, the jobs report, an FOMC decision), which is the other half of what
 moves a price you are about to read about.
 
@@ -316,56 +316,58 @@ There is no currency conversion here and there is not going to be one: if
 the holdings quote in more than one currency, the total says `mixed
 currencies` rather than pretending the sum means something.
 
-### 9 Calendar: what is scheduled
+### 9 Calendar: reports and macro releases
 
-![alphai-tui calendar: US macro releases and confirmed watchlist report dates in one agenda, with importance, countdowns, source details and report-date coverage](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/calendar.png)
+![alphai-tui calendar: scheduled reports, filings with reads pending, published earnings reads and US macro releases](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/calendar.png)
 
-US macro releases and confirmed report dates from your watchlist in one
-agenda: the past seven days and the next 45 days. The cursor starts at the
-first upcoming event, a `now` line separates it from the past, and new
-arrivals keep the event you selected in place. High-importance releases
-and company reports stand out; `estimated`, `postponed` and `cancelled`
-remain explicit even when the terminal is too narrow for the Details column.
-Event names use up to 48 columns when needed, while shorter names leave
-more space for Details. Color highlights the event and its importance;
-dates and source details keep a quieter style.
+Calendar data from November 7, 2026, with an example watchlist and holdings.
 
-At the top, `Today (ET)` and `Next 7d (ET)` count the remaining scheduled
-macro events, the high-importance ones and confirmed watchlist reports.
-The seven-day window includes today and the following six ET dates.
-Estimated schedules count too; cancelled, postponed and undated events
-do not. A report with no time stays in today's count for the whole day.
-`known` marks counts based on incomplete checks or cached data; an unloaded
-macro schedule shows loading or unavailable instead of a zero.
+The past seven days and next 45 days of US macro releases and company
+reports from your watchlist and portfolio. AlphAI includes dates the source
+marks as confirmed, with partial coverage; a missing company may still report.
+Past company rows come from published earnings reads. A passed date alone
+never becomes a reported event, and an old schedule without a read disappears.
 
-When there is room below the list, the selected event shows its full name,
-schedule status, reference period, press-conference time, source and data
-freshness. Macro timestamps use your chosen timezone; the overview always
-uses ET. Short panes give that space back to the agenda, and narrow panes
-show just the high-importance macro count in the overview.
+`○` is scheduled, `◐` is reported with a read pending, and `●` has a linked
+read. The Time column shows `BMO` (before open), `AMC` (after close), or `—`
+for schedules; reported rows show the filing time in ET. Company dates and
+filings always use ET; macro timestamps use `[chart] timezone`. Pending means
+no linked read is available yet, without a processing or publication promise.
 
-`↑` / `↓` select an event, `PgUp` / `PgDn` move ten events, and `Enter`
-opens a macro event's source or the company's Earnings view. That view
-contains published reads, so it may show the previous quarter until a new
-read is available. Calendar is an agenda, not confirmation that a release
-has been published; it has no actual, forecast or previous macro figures.
+`Today (ET)` and `Next 7d (ET)` count upcoming events over today and the next
+six ET dates. Wide panes also count filings that landed today. Cancelled,
+postponed, undated and unknown-status events do not count as upcoming.
+`known` qualifies partial or cached counts; unloaded or failed windows show
+loading or unavailable. Dates stay on every row. Within a day, scheduled
+reports appear BMO first, then unknown sessions, timed macro events and AMC.
 
-Macro times follow `[chart] timezone` (ET by default). Company report dates
-stay in ET in every timezone and show `—` for time: the API confirms the
-day, not the hour. A company without a confirmed date simply has no report
-row; this does not mean it will not report. Coverage is partial. Historical
-company dates are limited to the next-report dates still in the cache.
+`↑` / `↓` select, `PgUp` / `PgDn` move ten events, and `f` cycles All,
+Reports and Macro locally. The selected event's compact panel includes the
+previous period, verdict, guidance and first watch item. `v` opens its full,
+scrollable snapshot without a request; `v` or `Esc` closes it.
 
-Dates are checked one company at a time while Calendar is open, at least
-four seconds apart. The progress line distinguishes unconfirmed dates,
-unchecked names and failed checks. A failed macro update keeps the last
-successful rows, marked as cached, alongside any available company dates.
+`Enter` opens a macro source or Earnings. A linked read opens its exact UID,
+even if newer reads exist. A scheduled or pending event shows available
+history with a banner identifying the context and displayed period. If a
+pending event gains a read in the background, the banner offers `r` to open
+it; the document stays in place until then. Portfolio-only tickers open
+without changing the watchlist. Shared issuer listings appear once and flag
+every matching watched or held symbol. The API can group common shares,
+preferred shares, warrants and notes under one issuer; other securities are
+never added to your watchlist or portfolio. Ordinary entry to `6 Earnings`
+returns to the latest read.
 
-`r` refreshes the macro window and resumes missing, stale or failed report
-date checks. It keeps fresh successful company dates, so it is not a full
-watchlist refresh. To recheck one fresh company date, open its Earnings
-view and press `r` there. An access or rate-limit error pauses the date
-sweep until a manual retry, rather than repeating it for every company.
+Company events use two batched windows, the past seven through next seven ET
+days and days 7 through 44 ahead, with up to 50 tickers per request. The near
+window refreshes in every view, at most every six hours by default, and every
+hour while Calendar or a pending Earnings event is visible. Far dates refresh
+only in Calendar, every six hours. Requests start at least four seconds apart.
+The status line shows coverage and age separately for near and far groups.
+
+`r` refreshes macro and both report windows once per group, preserving cached
+rows while requests run. Failed groups wait for a manual retry; 401, 403 and
+429 pause all corporate groups. A bad group is never split into extra requests.
+The calendar does not fetch each company's full earnings history.
 
 ### Price alerts
 
@@ -715,7 +717,9 @@ defaults. API keys can also come from env vars, which win over the config:
 | `←` `→` / `h` `l` | news, insider, earnings | switch ticker |
 | `Enter` / `o` | news, insider | open article in browser |
 | `Enter` / `o` | earnings | open the read on alphai.io |
-| `Enter` / `o` | calendar | open macro source or the company's Earnings view |
+| `Enter` / `o` | calendar | open macro source or the exact linked earnings read |
+| `v` | calendar | full event details; `Esc` / `v` closes |
+| `f` | calendar | filter All / Reports / Macro |
 | `v` | news, insider | fullscreen article card; scroll with `↑` `↓`, `Esc` closes |
 | `E` | everywhere | draw pre and post market candles too (Yahoo, Alpaca and Tiingo); says why when there are none |
 | `x` | news | cycle the layout: chart over the list, stacked, or side-by-side |
@@ -734,7 +738,7 @@ defaults. API keys can also come from env vars, which win over the config:
 | `b` | chart, split | toggle the volume panel |
 | `n` | chart, split | mark the ticker's cached news on the candles |
 | `t` / `T` | everywhere | cycle candle interval presets forward / back (each interval with a matching history window; the list is configurable as `[chart] presets`) |
-| `r` | everywhere | refresh prices and visible data; Calendar refetches macro and retries missing, stale or failed dates |
+| `r` | everywhere | refresh prices and visible data; Calendar refreshes macro and both corporate windows |
 | `z` | everywhere | bare mode: hide the header and footer, giving both rows to the view |
 | `M` | everywhere | mouse on or off: off hands the mouse back to the terminal, which then selects text as usual |
 | `}` / `{` | everywhere | next / previous color preset (session-only until Save) |
@@ -977,26 +981,26 @@ Three things happen here instead:
   The Insider view's rollup and trades chart arrive as one bundle
   alongside the feed's first page and live in the same cache, so the
   chart costs no extra requests and the `g` window switch is free.
-  The Earnings view costs one request per ticker, made only while that
-  view is on screen and cached for an hour, because a read is published
-  once a quarter and never changes afterwards. That single response
-  carries the whole history of reads for the ticker and its next
-  confirmed report date, which is also what fills the read shown in the
-  News card, so opening the card still costs nothing. The macro calendar
-  is shared by all views, including the quote-rail flag, and costs one
-  request per six hours by default. Calendar checks company dates using
-  the same earnings response, one company at a time, and keeps them for
-  six hours. These intervals are `alphai_ttl_secs * 72`; the Earnings
-  view uses `* 12`. At the minimum setting of 30 seconds, Calendar's
-  interval is 36 minutes, not six hours.
-  Ten companies with Calendar continuously open for 24 hours cost roughly
-  44 requests at the default TTL, including the macro window. Twenty-five
-  cost roughly 104, before other activity, so a larger list needs a longer
-  TTL. There is no daily quota limiter, and restarting loses these caches.
-  The four-second date-check pace limits this sweep, not other requests or
-  other processes using the key. Manual refresh adds a macro request and
-  any missing, stale or failed company checks. Errors wait for a manual
-  retry; successful cached rows remain visible in Calendar.
+  The Earnings view fetches full history only for the ticker on screen,
+  ordinarily cached for `alphai_ttl_secs * 12` (one hour by default).
+  Opening a calendar UID absent from that cache makes one owner request;
+  a successful response missing it permits one canonical-listing fallback.
+  Errors do not trigger that fallback. The News card uses already loaded
+  full reads, so opening the card still costs nothing.
+  Macro is shared by every view and refreshes at `alphai_ttl_secs * 72`.
+  The corporate near window uses `max(6h, ttl * 72)` in the background and
+  `max(1h, ttl * 12)` while Calendar or a pending Earnings target is visible;
+  far dates use `max(6h, ttl * 72)` only in Calendar. These are separate
+  schedule caches, with no per-company history sweep.
+  With B groups of at most 50 watchlist/portfolio tickers, a cold Calendar
+  needs `2B + 1` calendar requests, including macro. Over 24 hours continuously
+  in Calendar, the default budget is about `28B + 4`: 32 requests for up to
+  50 names, 60 for 51–100, before other activity. Background calendar polling
+  costs `4B + 4`. At the minimum TTL of 30 seconds, corporate floors hold but
+  macro runs every 36 minutes: `28B + 40`, or 68/96 for those group sizes.
+  Manual refresh adds a macro request and both corporate windows per group.
+  Errors wait for a manual retry; successful cached rows remain visible.
+  There is no daily quota limiter, and restarting loses these caches.
   Feeds page 20 articles at a time, the most every plan allows (50 on Pro
   keys, detected automatically). Paging back past your plan's
   archive horizon (30 days on Free, 90 on Basic) shows an upgrade hint
@@ -1282,7 +1286,7 @@ src/
     insider.rs   Form 4 rollup + filing list
     insider_chart.rs  log-scale trades scatter + weekly dollar bars
     earnings.rs  structured earnings read + the schedule line
-    calendar.rs  watchlist agenda, report-date progress and event flags
+    calendar.rs  watchlist/portfolio agenda, report states, details and flags
     article.rs   modal full-article card (AI analysis, context)
     settings.rs  modal settings overlay
 ```

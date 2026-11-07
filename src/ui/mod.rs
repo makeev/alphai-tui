@@ -203,6 +203,9 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     if app.article_overlay.open && !app.article_overlay.inline {
         article::render(f, app);
     }
+    if app.calendar_overlay.is_some() {
+        calendar::render_overlay(f, app);
+    }
     if app.help.open {
         help::render(f, app);
     }
@@ -354,6 +357,8 @@ fn footer_line(app: &App) -> Paragraph<'static> {
         " ↑↓ move · ←→ change · enter edit/save · esc close".to_string()
     } else if app.article_overlay.open {
         " ↑↓/jk scroll · pgup/pgdn page · ⏎ open in browser · esc/v close".to_string()
+    } else if app.calendar_overlay.is_some() {
+        " ↑↓/jk scroll · pgup/pgdn page · ⏎ open event · esc/v close".to_string()
     } else if app.help.open {
         " ↑↓/jk scroll · pgup/pgdn page · esc/? close".to_string()
     } else if app.category_picker.open {

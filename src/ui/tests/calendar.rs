@@ -1,11 +1,27 @@
 use super::*;
-use crate::app::CalendarSlot;
+use crate::alphai::{ReportEvent, ReportRequest};
+use crate::app::report_calendar::ReportCalendar;
 use crate::ui::calendar::{self as agenda, Kind, OpenTarget};
 use chrono::{DateTime, Utc};
 use std::time::Duration;
 
 fn now() -> DateTime<Utc> {
-    "2026-09-17T13:45:00Z".parse().unwrap()
+    "2026-11-07T15:45:00Z".parse().unwrap()
+}
+fn event(
+    symbol: &str,
+    day: &str,
+    status: &str,
+    session: Option<&str>,
+    uid: Option<&str>,
+) -> ReportEvent {
+    serde_json::from_value(serde_json::json!({
+        "ticker": symbol, "listings": [symbol], "company": "EXAMPLE TECHNOLOGIES INC", "sector": "Technology",
+        "report_date": day, "session": session, "status": status,
+        "reported_at": (status == "reported").then_some("2026-11-07T11:50:00Z"),
+        "report_read": uid.map(|uid| serde_json::json!({"uid": uid, "ticker": symbol, "fiscal_period": "Q3 2026", "published_at": "2026-11-07T11:50:00Z", "verdict": "strong"})),
+        "previous_read": {"fiscal_period":"Half year 2026", "published_at":"2026-08-01T12:00:00Z", "verdict":"solid", "guidance":{"period":"FY 2026", "revenue":"$1 billion"}, "what_to_watch":["Capacity growth", "Margins", "Customer concentration"]}
+    })).unwrap()
 }
 fn macro_event(name: &str, at: &str) -> alphai::CalendarEvent {
     alphai::CalendarEvent {
@@ -19,734 +35,778 @@ fn macro_event(name: &str, at: &str) -> alphai::CalendarEvent {
         ..Default::default()
     }
 }
-fn window(app: &mut App, events: Vec<alphai::CalendarEvent>) {
-    app.apply_alphai(alphai::Event::Calendar {
-        events,
-        from: "2026-09-10".into(),
-        to: "2026-11-02".into(),
-    });
-}
-fn report(app: &mut App, symbol: &str, date: Option<&str>) {
-    earnings_fetch(
-        app,
-        symbol,
-        alphai::TickerEarnings {
-            next_report_date: date.map(str::to_string),
-            ..Default::default()
-        },
-    );
-}
-fn fixture() -> (App, tokio::sync::mpsc::UnboundedReceiver<alphai::Cmd>) {
-    let (mut app, cmds) = empty_app_with_cmds(vec!["NVDA".into(), "AVGO".into(), "BTC-USD".into()]);
-    app.view_idx = ui::view_index(ui::ViewId::Calendar);
-    // Keys and the view read the app's clock; the agenda below is built
-    // around this date, and today's would not contain it.
+fn setup(symbols: Vec<String>) -> (App, tokio::sync::mpsc::UnboundedReceiver<alphai::Cmd>) {
+    let (mut app, cmds) = empty_app_with_cmds(symbols);
     app.frozen_now = Some(now());
-    let mut fomc = macro_event("FOMC rate decision", "2026-09-23T18:00:00Z");
-    fomc.event_key = "fomc_decision".into();
-    fomc.press_conference_at = Some("2026-09-23T18:30:00Z".into());
-    fomc.has_sep = true;
-    let mut cancelled = macro_event("PPI", "2026-09-20T12:30:00Z");
-    cancelled.schedule_status = "cancelled".into();
-    let mut claims = macro_event("Initial jobless claims", "2026-09-24T12:30:00Z");
-    claims.schedule_basis = "inferred".into();
-    claims.importance = "low".into();
-    window(
-        &mut app,
-        vec![
-            macro_event("GDP (third estimate)", "2026-09-16T12:30:00Z"),
-            macro_event("CPI", "2026-09-18T12:30:00Z"),
-            cancelled,
-            fomc,
-            claims,
-        ],
-    );
-    report(&mut app, "NVDA", Some("2026-09-22"));
-    report(&mut app, "AVGO", None);
+    app.view_idx = ui::view_index(ui::ViewId::Calendar);
+    app.calendar = Some(crate::app::CalendarSlot {
+        events: vec![],
+        fetched: Instant::now(),
+        from: "2026-10-31".parse().unwrap(),
+        to: "2026-12-23".parse().unwrap(),
+    });
+    app.report_calendar
+        .sync(app.polled_symbols(), crate::market::et_time(now()).date());
     (app, cmds)
 }
-fn screen(app: &mut App, width: u16, height: u16) -> String {
-    let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-    terminal
-        .draw(|f| agenda::render_calendar_at(f, f.area(), app, now()))
-        .unwrap();
-    let buffer = terminal.backend().buffer();
-    (0..height)
-        .map(|y| {
-            (0..width)
-                .map(|x| buffer.cell((x, y)).unwrap().symbol())
-                .collect::<String>()
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
+fn load(app: &mut App, items: Vec<ReportEvent>) {
+    app.report_calendar
+        .sync(app.polled_symbols(), crate::market::et_time(now()).date());
+    for slot in &mut app.report_calendar.slots {
+        slot.items = items
+            .iter()
+            .filter(|e| {
+                e.report_date >= slot.request.from
+                    && e.report_date < slot.request.to
+                    && slot.request.tickers.iter().any(|s| e.contains(s))
+            })
+            .cloned()
+            .collect();
+        slot.covered = true;
+        slot.fetched = Some(Instant::now());
+        slot.error = None;
+        app.report_calendar
+            .ever_covered
+            .extend(slot.request.tickers.clone());
+        app.report_calendar
+            .ever_covered
+            .extend(slot.items.iter().flat_map(|e| e.listings.clone()));
+    }
 }
 fn drain(cmds: &mut tokio::sync::mpsc::UnboundedReceiver<alphai::Cmd>) -> Vec<alphai::Cmd> {
     std::iter::from_fn(|| cmds.try_recv().ok()).collect()
 }
-
-#[test]
-fn global_calendar_fetch_is_shared_across_views_and_uses_covering_utc_bounds() {
-    let (mut app, mut cmds) = empty_app_with_cmds(vec!["NVDA".into()]);
-    app.view_idx = ui::view_index(ui::ViewId::Table);
-    let clock = Instant::now();
+fn next_request(
+    app: &mut App,
+    cmds: &mut tokio::sync::mpsc::UnboundedReceiver<alphai::Cmd>,
+    clock: Instant,
+) -> ReportRequest {
     app.ensure_alphai_data_at(now(), clock);
-    let commands = drain(&mut cmds);
-    assert_eq!(commands.len(), 1);
+    let commands = drain(cmds);
     assert!(
-        matches!(&commands[0], alphai::Cmd::FetchCalendar { from, to } if from == "2026-09-10" && to == "2026-11-02")
-    );
-    for index in 0..ui::VIEWS.len() {
-        app.view_idx = index;
-        app.ensure_alphai_data_at(now(), clock);
-        assert!(
-            !drain(&mut cmds)
-                .iter()
-                .any(|c| matches!(c, alphai::Cmd::FetchCalendar { .. }))
-        );
-    }
-    window(&mut app, vec![]);
-    app.ensure_alphai_data_at(now(), clock + Duration::from_secs(60));
-    assert!(
-        !drain(&mut cmds)
+        !commands
             .iter()
-            .any(|c| matches!(c, alphai::Cmd::FetchCalendar { .. }))
+            .any(|c| matches!(c, alphai::Cmd::FetchEarnings { .. }))
     );
-    app.view_idx = ui::view_index(ui::ViewId::Table);
-    app.ensure_alphai_data_at(now(), clock + app.calendar_ttl() + Duration::from_secs(2));
-    assert!(matches!(
-        cmds.try_recv(),
-        Ok(alphai::Cmd::FetchCalendar { .. })
-    ));
+    commands
+        .into_iter()
+        .find_map(|c| {
+            if let alphai::Cmd::FetchReportCalendar(r) = c {
+                Some(r)
+            } else {
+                None
+            }
+        })
+        .expect("one corporate request")
+}
+fn reply(app: &mut App, request: ReportRequest, items: Vec<ReportEvent>) {
+    app.apply_alphai(alphai::Event::ReportCalendar {
+        request,
+        result: Ok(items),
+        blocked: false,
+    });
+}
+fn pick(app: &mut App, symbol: &str) {
+    let rows = agenda::agenda(app, now());
+    let i = rows
+        .iter()
+        .position(|r| matches!(&r.kind, Kind::Report {symbol: s} if s == symbol))
+        .unwrap();
+    app.calendar_selection.choose(&rows, i);
+}
+fn key(app: &mut App, code: KeyCode) {
+    app.handle_key(KeyEvent::from(code));
+}
+fn fixture() -> (App, tokio::sync::mpsc::UnboundedReceiver<alphai::Cmd>) {
+    let (mut app, cmds) = setup(vec!["NVDA".into(), "AVGO".into(), "HUM".into()]);
+    load(
+        &mut app,
+        vec![
+            event("NVDA", "2026-11-10", "scheduled", Some("after_close"), None),
+            event("AVGO", "2026-11-07", "reported", None, None),
+            event("HUM", "2026-11-07", "reported", None, Some("hum-q3")),
+        ],
+    );
+    app.calendar.as_mut().unwrap().events = vec![macro_event("CPI", "2026-11-10T13:30:00Z")];
+    (app, cmds)
 }
 
 #[test]
-fn report_dates_wait_for_window_then_follow_pace_only_in_calendar() {
-    let (mut app, mut cmds) = empty_app_with_cmds(vec![
-        "NVDA".into(),
-        "AVGO".into(),
+fn calendar_uses_two_exact_et_windows_sorted_groups_and_the_union_with_holdings() {
+    let mut symbols: Vec<_> = (0..51).map(|i| format!("T{i:02}")).collect();
+    symbols.extend([
+        "goog ".into(),
+        "GOOG".into(),
         "BTC-USD".into(),
         "^GSPC".into(),
         "EURUSD=X".into(),
+        "BAD;".into(),
+        "ÉÉ".into(),
     ]);
-    app.view_idx = ui::view_index(ui::ViewId::Calendar);
+    let (mut app, mut cmds) = setup(symbols);
+    app.positions.push(crate::portfolio::Position {
+        symbol: "VOD.L".into(),
+        qty: 1.,
+        avg_price: 1.,
+    });
     let clock = Instant::now();
-    app.ensure_alphai_data_at(now(), clock);
-    assert!(matches!(
-        cmds.try_recv(),
-        Ok(alphai::Cmd::FetchCalendar { .. })
-    ));
-    app.ensure_alphai_data_at(now(), clock + Duration::from_secs(10));
-    assert!(cmds.try_recv().is_err());
-    window(&mut app, vec![]);
-    app.ensure_alphai_data_at(now(), clock);
-    assert!(
-        matches!(cmds.try_recv(), Ok(alphai::Cmd::FetchEarnings { symbol }) if symbol == "NVDA")
+    let near = next_request(&mut app, &mut cmds, clock);
+    assert_eq!(near.tickers.len(), 50);
+    assert_eq!(near.tickers[0], "GOOG");
+    assert_eq!(
+        (near.from.to_string(), near.to.to_string()),
+        ("2026-10-31".into(), "2026-11-14".into())
     );
-    app.ensure_alphai_data_at(now(), clock + Duration::from_secs(8));
-    assert!(
-        cmds.try_recv().is_err(),
-        "earnings in flight must block the next symbol"
-    );
-    report(&mut app, "NVDA", None);
+    reply(&mut app, near, vec![]);
     app.ensure_alphai_data_at(now(), clock + Duration::from_secs(3));
-    assert!(cmds.try_recv().is_err());
+    assert!(drain(&mut cmds).is_empty());
+    let second = next_request(&mut app, &mut cmds, clock + Duration::from_secs(4));
+    assert_eq!(second.tickers.len(), 3);
+    assert!(second.tickers.contains(&"VOD.L".into()));
+    reply(&mut app, second, vec![]);
+    let far = next_request(&mut app, &mut cmds, clock + Duration::from_secs(8));
+    assert_eq!(
+        (far.from.to_string(), far.to.to_string()),
+        ("2026-11-14".into(), "2026-12-22".into())
+    );
+    assert_eq!((far.to - far.from).num_days(), 38);
+}
+
+#[test]
+fn near_is_shared_in_every_view_far_waits_for_calendar_and_floors_hold() {
+    assert_eq!(
+        ReportCalendar::interval(Duration::from_secs(30), true),
+        Duration::from_secs(3600)
+    );
+    assert_eq!(
+        ReportCalendar::interval(Duration::from_secs(30), false),
+        Duration::from_secs(21600)
+    );
+    let (mut app, mut cmds) = setup(vec!["NVDA".into()]);
     app.view_idx = ui::view_index(ui::ViewId::Table);
-    app.ensure_alphai_data_at(now(), clock + Duration::from_secs(4));
-    assert!(cmds.try_recv().is_err());
-    app.view_idx = ui::view_index(ui::ViewId::Calendar);
-    app.ensure_alphai_data_at(now(), clock + Duration::from_secs(4));
-    assert!(
-        matches!(cmds.try_recv(), Ok(alphai::Cmd::FetchEarnings { symbol }) if symbol == "AVGO")
-    );
-    earnings_fetch(
-        &mut app,
-        "AVGO",
-        alphai::TickerEarnings {
-            unknown: true,
-            ..Default::default()
-        },
-    );
-    app.ensure_alphai_data_at(now(), clock + Duration::from_secs(8));
-    assert!(cmds.try_recv().is_err());
-}
-
-#[test]
-fn calendar_errors_keep_rows_and_do_not_retry_or_block_healthy_report_dates() {
-    let (mut app, mut cmds) = fixture();
-    app.earnings.remove("AVGO");
-    app.apply_alphai(alphai::Event::Error {
-        key: alphai::CALENDAR_KEY.into(),
-        error: "network unavailable".into(),
-    });
-    let before = app.calendar.as_ref().unwrap().fetched;
-    app.ensure_alphai_data_at(now(), Instant::now());
-    assert!(
-        matches!(cmds.try_recv(), Ok(alphai::Cmd::FetchEarnings { symbol }) if symbol == "AVGO")
-    );
-    assert!(cmds.try_recv().is_err());
-    let rendered = screen(&mut app, 110, 24);
-    assert!(
-        rendered.contains("CPI") && rendered.contains("NVDA reports"),
-        "{rendered}"
-    );
-    assert!(
-        rendered.contains("update failed") && rendered.contains("cached"),
-        "{rendered}"
-    );
-    assert_eq!(app.calendar.as_ref().unwrap().fetched, before);
-    assert!(agenda::flag(&app, "AVGO", now()).is_none());
-}
-
-#[test]
-fn account_error_stops_sweep_and_refresh_retries_only_failed_dates() {
-    let (mut app, mut cmds) = fixture();
-    app.apply_alphai(alphai::Event::CalendarBlocked {
-        key: alphai::earnings_key("NVDA"),
-        error: "rate limit hit".into(),
-    });
-    app.ensure_alphai_data_at(now(), Instant::now());
-    assert!(cmds.try_recv().is_err());
-    assert!(screen(&mut app, 110, 24).contains("checks paused"));
-    press(&mut app, KeyCode::Char('r'));
-    assert!(
-        app.calendar.is_some(),
-        "refresh preserves the last successful window"
-    );
+    app.calendar = None;
     let clock = Instant::now();
     app.ensure_alphai_data_at(now(), clock);
-    assert!(matches!(
-        cmds.try_recv(),
-        Ok(alphai::Cmd::FetchCalendar { .. })
-    ));
-    press(&mut app, KeyCode::Char('r'));
-    app.ensure_alphai_data_at(now(), clock);
-    assert!(cmds.try_recv().is_err());
-    window(&mut app, vec![]);
-    app.ensure_alphai_data_at(now(), clock);
-    assert!(
-        matches!(cmds.try_recv(), Ok(alphai::Cmd::FetchEarnings { symbol }) if symbol == "NVDA")
-    );
-    report(&mut app, "NVDA", Some("2026-09-22"));
-    app.ensure_alphai_data_at(now(), clock + Duration::from_secs(5));
-    assert!(
-        cmds.try_recv().is_err(),
-        "fresh AVGO must not be fetched by r"
-    );
+    let commands = drain(&mut cmds);
+    assert_eq!(commands.len(), 2);
+    let request = commands
+        .into_iter()
+        .find_map(|c| {
+            if let alphai::Cmd::FetchReportCalendar(r) = c {
+                Some(r)
+            } else {
+                None
+            }
+        })
+        .unwrap();
+    reply(&mut app, request, vec![]);
+    app.ensure_alphai_data_at(now(), clock + Duration::from_secs(3601));
+    assert!(drain(&mut cmds).is_empty());
+    app.view_idx = ui::view_index(ui::ViewId::Calendar);
+    let r = next_request(&mut app, &mut cmds, clock + Duration::from_secs(4));
+    assert_eq!(r.from.to_string(), "2026-11-14");
 }
 
 #[test]
-fn refresh_retries_one_symbol_error_while_unknown_is_terminal() {
+fn failures_preserve_rows_block_only_the_group_and_never_fetch_full_histories() {
     let (mut app, mut cmds) = fixture();
-    app.earnings.remove("NVDA");
-    app.apply_alphai(alphai::Event::Error {
-        key: alphai::earnings_key("NVDA"),
-        error: "temporary failure".into(),
+    key(&mut app, KeyCode::Char('r'));
+    let clock = Instant::now();
+    let r = next_request(&mut app, &mut cmds, clock);
+    app.apply_alphai(alphai::Event::ReportCalendar {
+        request: r,
+        result: Err("API 400 invalid group".into()),
+        blocked: false,
     });
-    earnings_fetch(
+    assert_eq!(agenda::agenda(&app, now()).len(), 4);
+    let far = next_request(&mut app, &mut cmds, clock + Duration::from_secs(4));
+    assert_eq!(far.from.to_string(), "2026-11-14");
+    reply(&mut app, far, vec![]);
+    app.ensure_alphai_data_at(now(), clock + Duration::from_secs(8));
+    assert!(drain(&mut cmds).is_empty());
+    assert!(render_sized(&mut app, 110, 32).contains("failed"));
+    assert!(
+        !agenda::flag(&app, "NVDA", now())
+            .unwrap()
+            .full
+            .contains("reports")
+    );
+}
+
+#[test]
+fn rate_error_pauses_all_groups_until_manual_refresh_without_duplicate_sweeps() {
+    let (mut app, mut cmds) = setup(vec!["NVDA".into()]);
+    let clock = Instant::now();
+    let r = next_request(&mut app, &mut cmds, clock);
+    app.apply_alphai(alphai::Event::ReportCalendar {
+        request: r,
+        result: Err("API 429 limit".into()),
+        blocked: true,
+    });
+    app.ensure_alphai_data_at(now(), clock + Duration::from_secs(10));
+    assert!(drain(&mut cmds).is_empty());
+    key(&mut app, KeyCode::Char('r'));
+    key(&mut app, KeyCode::Char('r'));
+    let r = next_request(&mut app, &mut cmds, clock + Duration::from_secs(12));
+    assert!(app.report_calendar.paused.is_none());
+    key(&mut app, KeyCode::Char('r'));
+    reply(&mut app, r, vec![]);
+    let far = next_request(&mut app, &mut cmds, clock + Duration::from_secs(16));
+    reply(&mut app, far, vec![]);
+    app.ensure_alphai_data_at(now(), clock + Duration::from_secs(20));
+    assert!(drain(&mut cmds).is_empty());
+}
+
+#[test]
+fn changed_universe_or_et_day_discards_inflight_results() {
+    let (mut app, mut cmds) = setup(vec!["NVDA".into()]);
+    let clock = Instant::now();
+    let old = next_request(&mut app, &mut cmds, clock);
+    app.symbols = vec!["GOOG".into()];
+    app.ensure_alphai_data_at(now(), clock + Duration::from_secs(1));
+    reply(
         &mut app,
-        "AVGO",
-        alphai::TickerEarnings {
-            unknown: true,
-            ..Default::default()
-        },
+        old,
+        vec![event("NVDA", "2026-11-10", "scheduled", None, None)],
     );
-    app.earnings.get_mut("AVGO").unwrap().fetched = Instant::now() - Duration::from_secs(86400);
-    app.ensure_alphai_data();
-    assert!(cmds.try_recv().is_err());
-    app.view_idx = ui::view_index(ui::ViewId::Earnings);
-    app.selected = 1;
-    press(&mut app, KeyCode::Char('r'));
-    app.ensure_alphai_data();
-    assert!(
-        cmds.try_recv().is_err(),
-        "unknown earnings should not be retried by TTL or r"
+    assert!(agenda::agenda(&app, now()).is_empty());
+    let current = next_request(&mut app, &mut cmds, clock + Duration::from_secs(4));
+    assert_eq!(current.tickers, ["GOOG"]);
+    app.ensure_alphai_data_at(
+        now() + chrono::Duration::days(1),
+        clock + Duration::from_secs(5),
     );
+    reply(
+        &mut app,
+        current,
+        vec![event("GOOG", "2026-11-10", "scheduled", None, None)],
+    );
+    assert!(app.report_calendar.slots.iter().all(|s| !s.covered));
 }
 
 #[test]
-fn calendar_ttl_scales_and_earnings_can_refresh_the_same_slot_sooner() {
+fn key_barrier_and_overlays_pause_all_requests() {
     let (mut app, mut cmds) = fixture();
-    for secs in [30, 300, 86400] {
-        app.alphai_ttl = Duration::from_secs(secs);
-        assert_eq!(app.calendar_ttl(), Duration::from_secs(secs * 72));
-    }
-    app.alphai_ttl = Duration::from_secs(300);
-    app.earnings.get_mut("NVDA").unwrap().fetched = Instant::now() - Duration::from_secs(7200);
-    app.ensure_alphai_data();
-    assert!(cmds.try_recv().is_err());
-    app.view_idx = ui::view_index(ui::ViewId::Earnings);
-    app.ensure_alphai_data();
-    assert!(
-        matches!(cmds.try_recv(), Ok(alphai::Cmd::FetchEarnings { symbol }) if symbol == "NVDA")
-    );
-}
-
-#[test]
-fn overlays_and_key_change_pause_fetches_and_old_responses_are_discarded() {
-    let (mut app, mut cmds) = fixture();
+    pick(&mut app, "NVDA");
+    key(&mut app, KeyCode::Char('v'));
     app.calendar = None;
-    app.prompt.open = true;
+    app.report_calendar = Default::default();
     app.ensure_alphai_data();
-    assert!(cmds.try_recv().is_err());
-    app.prompt.open = false;
-    app.help.open = true;
-    app.ensure_alphai_data();
-    assert!(cmds.try_recv().is_err());
-    app.help.open = false;
+    assert!(drain(&mut cmds).is_empty());
+    key(&mut app, KeyCode::Esc);
     app.change_alphai_key(Some("test-only-new-key".into()));
     assert!(matches!(cmds.try_recv(), Ok(alphai::Cmd::SetKey(_))));
-    window(
-        &mut app,
-        vec![macro_event("OLD KEY", "2026-09-18T12:30:00Z")],
-    );
-    report(&mut app, "NVDA", Some("2026-09-22"));
-    assert!(app.calendar.is_none() && app.earnings.is_empty());
+    earnings_fetch(&mut app, "NVDA", Default::default());
     app.ensure_alphai_data();
-    assert!(cmds.try_recv().is_err());
+    assert!(drain(&mut cmds).is_empty());
+    assert!(app.earnings.is_empty());
     app.apply_alphai(alphai::Event::KeyChanged);
-    app.ensure_alphai_data_at(now(), Instant::now());
-    assert!(matches!(
-        cmds.try_recv(),
-        Ok(alphai::Cmd::FetchCalendar { .. })
-    ));
-}
-
-#[test]
-fn no_key_causes_no_requests_and_shows_setup() {
-    let (mut app, mut cmds) = fixture();
-    app.alphai_enabled = false;
     app.ensure_alphai_data();
-    assert!(cmds.try_recv().is_err());
-    assert!(screen(&mut app, 110, 24).contains("Get a free API key"));
-    assert!(agenda::flag(&app, "NVDA", now()).is_none());
+    assert_eq!(drain(&mut cmds).len(), 2);
 }
 
 #[test]
-fn agenda_renders_full_and_narrow_without_hiding_status_or_shifting_date_only() {
-    let (mut app, _cmds) = fixture();
-    let full = screen(&mut app, 110, 32);
-    for expected in [
-        "Calendar",
-        "CPI",
-        "now",
-        "14:00",
-        "in 6d 4h",
-        "NVDA reports",
-        "in 5d",
-        "press conference",
-        "projections",
-        "2/2 checked",
-        "▶",
-    ] {
-        assert!(full.contains(expected), "missing {expected}:\n{full}");
-    }
-    let narrow = screen(&mut app, 60, 20);
-    assert!(!narrow.contains("Details"), "{narrow}");
-    assert!(narrow.contains("[cancelled]"), "{narrow}");
-    app.chart.timezone = crate::config::ChartTimezone::Utc;
-    let utc = screen(&mut app, 110, 32);
-    let report_line = utc.lines().find(|l| l.contains("NVDA reports")).unwrap();
-    assert!(
-        report_line.contains("Tue 22 Sep") && report_line.contains('—'),
-        "{report_line}"
+fn empty_universe_or_no_key_does_not_request_the_market_wide_corporate_calendar() {
+    let (mut app, mut cmds) = setup(vec!["BTC-USD".into(), "^GSPC".into()]);
+    app.ensure_alphai_data();
+    assert!(drain(&mut cmds).is_empty());
+    app.alphai_enabled = false;
+    assert!(render_sized(&mut app, 110, 24).contains("Get a free API key"));
+}
+
+#[test]
+fn successful_empty_retires_legacy_date_and_disappearing_past_schedule() {
+    let (mut app, mut cmds) = setup(vec!["NVDA".into()]);
+    earnings_fetch(
+        &mut app,
+        "NVDA",
+        alphai::TickerEarnings {
+            next_report_date: Some("2026-11-10".into()),
+            ..Default::default()
+        },
     );
-    assert!(!report_line.contains("00:00") && !report_line.contains("04:00"));
-    for (w, h) in [(80, 24), (30, 10), (1, 1), (0, 0)] {
-        let _ = screen(&mut app, w, h);
+    assert!(agenda::flag(&app, "NVDA", now()).is_some());
+    let r = next_request(&mut app, &mut cmds, Instant::now());
+    reply(&mut app, r, vec![]);
+    assert!(agenda::flag(&app, "NVDA", now()).is_none());
+    assert!(agenda::next_report_day(&app, "NVDA", now()).is_none());
+    load(
+        &mut app,
+        vec![event("NVDA", "2026-11-07", "scheduled", None, None)],
+    );
+    assert!(agenda::agenda(&app, now() + chrono::Duration::days(1)).is_empty());
+}
+
+#[test]
+fn alias_rows_across_batch_boundary_merge_but_different_filings_stay() {
+    let mut symbols: Vec<_> = (0..50).map(|i| format!("A{i:02}")).collect();
+    symbols.push("Z".into());
+    let (mut app, _) = setup(symbols);
+    let mut first = event("A00", "2026-11-07", "reported", None, Some("read-one"));
+    first.listings.push("Z".into());
+    let mut second = first.clone();
+    second.ticker = "Z".into();
+    load(&mut app, vec![first.clone(), second]);
+    assert_eq!(agenda::agenda(&app, now()).len(), 1);
+    first.report_date = "2026-11-06".parse().unwrap();
+    first.report_read.as_mut().unwrap().uid = "read-two".into();
+    app.report_calendar.slots[0].items.push(first);
+    assert_eq!(agenda::agenda(&app, now()).len(), 2);
+    assert!(
+        agenda::flag(&app, "Z", now())
+            .unwrap()
+            .full
+            .contains("reported")
+    );
+}
+
+#[test]
+fn issuer_listings_do_not_add_unwatched_securities() {
+    for (common, sibling) in [("VNO", "VNO-PL"), ("VAL", "VAL-WT"), ("NMFC", "NMFCZ")] {
+        // A portfolio security can share the issuer's event with a watched common.
+        let (mut app, mut cmds) = setup(vec![common.into()]);
+        app.positions.push(crate::portfolio::Position {
+            symbol: sibling.into(),
+            qty: 1.,
+            avg_price: 100.,
+        });
+        let mut e = event(common, "2026-11-10", "scheduled", None, None);
+        e.listings = vec![common.into(), sibling.into(), "UNWATCHED".into()];
+        load(&mut app, vec![e.clone(), e]);
+
+        let rows = agenda::agenda(&app, now());
+        assert_eq!(rows.len(), 1);
+        assert!(matches!(&rows[0].kind, Kind::Report { symbol } if symbol == common));
+        assert!(agenda::flag(&app, common, now()).is_some());
+        assert!(agenda::flag(&app, sibling, now()).is_some());
+        assert_eq!(app.symbols, vec![common]);
+        assert_eq!(app.positions.len(), 1);
+        assert_eq!(app.positions[0].symbol, sibling);
+
+        app.report_calendar.refresh(None);
+        let request = next_request(&mut app, &mut cmds, Instant::now());
+        assert_eq!(request.tickers, vec![common, sibling]);
+
+        // If only the portfolio security remains, display that security.
+        app.symbols.clear();
+        let rows = agenda::agenda(&app, now());
+        assert_eq!(rows.len(), 1);
+        assert!(matches!(&rows[0].kind, Kind::Report { symbol } if symbol == sibling));
+    }
+}
+
+#[test]
+fn portfolio_only_target_works_with_empty_watchlist_without_mutating_config() {
+    let (mut app, mut cmds) = setup(vec![]);
+    app.positions.push(crate::portfolio::Position {
+        symbol: "NVDA".into(),
+        qty: 1.,
+        avg_price: 100.,
+    });
+    load(
+        &mut app,
+        vec![event(
+            "NVDA",
+            "2026-11-10",
+            "scheduled",
+            Some("after_close"),
+            None,
+        )],
+    );
+    app.view_idx = ui::view_index(ui::ViewId::Portfolio);
+    assert_eq!(app.focused_symbol(), "NVDA");
+    assert!(
+        ui::rail::line(&app, 110, now())
+            .to_string()
+            .contains("NVDA")
+    );
+    key(&mut app, KeyCode::Char('9'));
+    pick(&mut app, "NVDA");
+    key(&mut app, KeyCode::Enter);
+    assert_eq!(app.earnings_symbol(), "NVDA");
+    assert!(app.symbols.is_empty());
+    app.ensure_alphai_data();
+    assert!(drain(&mut cmds).iter().any(|c| matches!(c, alphai::Cmd::FetchEarnings {symbol, cache_symbol} if symbol == "NVDA" && cache_symbol == "NVDA")));
+    key(&mut app, KeyCode::Char('p'));
+    assert_eq!(app.prompt.target, "NVDA");
+}
+
+#[test]
+fn uid_open_fetches_owner_even_when_fresh_then_one_canonical_fallback() {
+    let (mut app, mut cmds) = setup(vec!["GOOGL".into()]);
+    let mut e = event("GOOGL", "2026-11-07", "reported", None, Some("wanted"));
+    e.listings = vec!["GOOG".into(), "GOOGL".into()];
+    e.report_read.as_mut().unwrap().ticker = "GOOG".into();
+    load(&mut app, vec![e]);
+    earnings_fetch(&mut app, "GOOGL", Default::default());
+    pick(&mut app, "GOOGL");
+    key(&mut app, KeyCode::Enter);
+    app.ensure_alphai_data();
+    assert!(
+        matches!(cmds.try_recv(), Ok(alphai::Cmd::FetchEarnings {symbol, cache_symbol}) if symbol == "GOOGL" && cache_symbol == "GOOGL")
+    );
+    earnings_fetch(&mut app, "GOOGL", Default::default());
+    app.ensure_alphai_data();
+    assert!(
+        matches!(cmds.try_recv(), Ok(alphai::Cmd::FetchEarnings {symbol, cache_symbol}) if symbol == "GOOG" && cache_symbol == "GOOGL")
+    );
+    earnings_fetch(&mut app, "GOOGL", Default::default());
+    for _ in 0..10 {
+        app.ensure_alphai_data();
+    }
+    assert!(drain(&mut cmds).is_empty());
+    assert!(ui::earnings::open_url(&app).is_none());
+    assert!(render_sized(&mut app, 110, 32).contains("Selected calendar read unavailable"));
+}
+
+#[test]
+fn uid_open_uses_cached_older_read_without_reordering_history_or_wrong_browser_link() {
+    let (mut app, mut cmds) = setup(vec!["NVDA".into()]);
+    let mut data = earnings_data("NVDA", "", FULL_METRICS);
+    let mut older = data.reports[0].clone();
+    older.uid = "older".into();
+    older.fiscal_period = "Q2 2026".into();
+    let newest = data.reports[0].uid.clone();
+    data.reports.push(older);
+    earnings_fetch(&mut app, "NVDA", data);
+    load(
+        &mut app,
+        vec![event("NVDA", "2026-11-07", "reported", None, Some("older"))],
+    );
+    pick(&mut app, "NVDA");
+    key(&mut app, KeyCode::Enter);
+    app.ensure_alphai_data();
+    assert!(drain(&mut cmds).is_empty());
+    assert_eq!(app.shown_earnings().unwrap().uid, "older");
+    assert_eq!(app.earnings["NVDA"].data.latest().unwrap().uid, newest);
+    assert!(ui::earnings::open_url(&app).unwrap().contains("older"));
+    key(&mut app, KeyCode::Char('6'));
+    assert!(app.earnings_target.is_none());
+    assert_eq!(app.shown_earnings().unwrap().uid, newest);
+}
+
+#[test]
+fn pending_read_announces_availability_without_replacing_the_document_until_r() {
+    let (mut app, mut cmds) = setup(vec!["NVDA".into()]);
+    let data = earnings_data("NVDA", "", FULL_METRICS);
+    let uid = data.reports[0].uid.clone();
+    earnings_fetch(&mut app, "NVDA", data.clone());
+    load(
+        &mut app,
+        vec![event("NVDA", "2026-11-07", "reported", None, None)],
+    );
+    pick(&mut app, "NVDA");
+    key(&mut app, KeyCode::Enter);
+    assert!(render_sized(&mut app, 110, 32).contains("read pending"));
+    load(
+        &mut app,
+        vec![event(
+            "NVDA",
+            "2026-11-07",
+            "reported",
+            None,
+            Some("new-read"),
+        )],
+    );
+    let mut newer = data.clone();
+    newer.reports[0].uid = "new-read".into();
+    earnings_fetch(&mut app, "NVDA", newer);
+    assert_eq!(app.shown_earnings().unwrap().uid, uid);
+    assert!(render_sized(&mut app, 110, 32).contains("Read available · r to open"));
+    key(&mut app, KeyCode::Char('r'));
+    app.ensure_alphai_data();
+    let request = drain(&mut cmds)
+        .into_iter()
+        .find_map(|c| {
+            if let alphai::Cmd::FetchReportCalendar(r) = c {
+                Some(r)
+            } else {
+                None
+            }
+        })
+        .unwrap();
+    reply(
+        &mut app,
+        request,
+        vec![event(
+            "NVDA",
+            "2026-11-07",
+            "reported",
+            None,
+            Some("new-read"),
+        )],
+    );
+    assert_eq!(app.shown_earnings().unwrap().uid, "new-read");
+}
+
+#[test]
+fn filter_card_snapshot_and_open_use_the_same_rows_without_requests() {
+    let (mut app, mut cmds) = fixture();
+    pick(&mut app, "NVDA");
+    key(&mut app, KeyCode::Char('f'));
+    assert!(
+        agenda::agenda(&app, now())
+            .iter()
+            .all(|r| matches!(r.kind, Kind::Report { .. }))
+    );
+    key(&mut app, KeyCode::Char('v'));
+    let frozen = app.calendar_overlay.as_ref().unwrap().row.title.clone();
+    load(&mut app, vec![]);
+    app.ensure_alphai_data();
+    assert!(drain(&mut cmds).is_empty());
+    assert_eq!(app.calendar_overlay.as_ref().unwrap().row.title, frozen);
+    let text = render_sized(&mut app, 110, 32);
+    assert!(text.contains("Customer concentration"));
+    assert!(text.contains("Half year 2026"));
+    key(&mut app, KeyCode::Enter);
+    assert_eq!(app.earnings_symbol(), "NVDA");
+    assert!(app.calendar_overlay.is_none());
+}
+
+#[test]
+fn rendering_covers_report_states_et_times_sizes_themes_and_local_filter_summaries() {
+    let (mut app, mut cmds) = fixture();
+    pick(&mut app, "NVDA");
+    let full = render_sized(&mut app, 110, 32);
+    for word in [
+        "AMC",
+        "◐",
+        "●",
+        "○",
+        "06:50",
+        "reported",
+        "read pending",
+        "strong quarter",
+        "solid half-year",
+        "near",
+        "far",
+        "3 tickers",
+        "BMO before open",
+    ] {
+        assert!(full.contains(word), "missing {word}:\n{full}");
+    }
+    app.chart.timezone = crate::config::ChartTimezone::Utc;
+    let utc = render_sized(&mut app, 110, 32);
+    assert!(utc.contains("13:30"));
+    assert!(utc.contains("06:50"));
+    for (w, h) in [(80, 24), (60, 20), (40, 16), (1, 1), (0, 0)] {
+        let _ = render_sized(&mut app, w, h);
     }
     app.bare = true;
     let _ = render_sized(&mut app, 60, 20);
+    assert!(drain(&mut cmds).is_empty());
 }
 
 #[test]
-fn wide_agenda_gives_long_event_names_room_without_losing_their_status() {
-    let (mut app, _cmds) = fixture();
-    let name = "Employment Situation (nonfarm payrolls)";
-    let mut event = macro_event(name, "2026-09-18T12:30:00Z");
-    event.schedule_basis = "inferred".into();
-    window(&mut app, vec![event]);
-    let full = screen(&mut app, 160, 24);
-    let row = full.lines().find(|l| l.contains(name)).expect(&full);
-    assert!(row.contains("estimated"), "{row}");
-    let narrow = screen(&mut app, 60, 24);
-    assert!(narrow.contains("[est.]"), "{narrow}");
+fn summary_loading_and_errors_are_not_zero_and_reported_uses_actual_filing_day() {
+    let (mut app, _) = setup(vec!["NVDA".into()]);
+    assert!(render_sized(&mut app, 110, 32).contains("reports loading"));
+    let mut e = event("NVDA", "2026-11-07", "reported", None, None);
+    e.reported_at = Some("2026-11-07T02:00:00Z".parse().unwrap());
+    load(&mut app, vec![e]);
+    assert!(render_sized(&mut app, 110, 32).contains("0 reported today"));
+    app.report_calendar.slots[0].error = Some("offline".into());
+    assert!(render_sized(&mut app, 110, 32).contains("known"));
 }
 
 #[test]
-fn open_routes_to_source_or_earnings_and_cursor_stays_on_the_same_event() {
-    let (mut app, _cmds) = fixture();
+fn intraday_order_and_exclusive_seven_day_boundary_keep_unknown_status_out() {
+    let (mut app, _) = setup(vec![
+        "A".into(),
+        "B".into(),
+        "C".into(),
+        "D".into(),
+        "E".into(),
+    ]);
+    load(
+        &mut app,
+        vec![
+            event("A", "2026-11-10", "scheduled", Some("after_close"), None),
+            event("B", "2026-11-10", "scheduled", None, None),
+            event("C", "2026-11-10", "scheduled", Some("before_open"), None),
+            event("D", "2026-11-14", "scheduled", None, None),
+            event("E", "2026-11-07", "unexpected", None, None),
+        ],
+    );
+    app.calendar.as_mut().unwrap().events = vec![macro_event("CPI", "2026-11-10T13:30:00Z")];
     let rows = agenda::agenda(&app, now());
-    assert!(matches!(
-        agenda::open_target(&app, now()),
-        Some(OpenTarget::Url(_))
-    ));
-    let index = rows
+    let ordered: Vec<_> = rows
         .iter()
-        .position(|r| matches!(r.kind, Kind::Report { .. }))
-        .unwrap();
-    app.calendar_selection.choose(&rows, index);
-    assert_eq!(
-        agenda::open_target(&app, now()),
-        Some(OpenTarget::Earnings("NVDA".into()))
-    );
-    app.calendar
-        .as_mut()
-        .unwrap()
-        .events
-        .push(macro_event("Inserted", "2026-09-18T15:00:00Z"));
-    screen(&mut app, 110, 32);
-    assert_eq!(
-        agenda::open_target(&app, now()),
-        Some(OpenTarget::Earnings("NVDA".into()))
-    );
-    press(&mut app, KeyCode::Enter);
-    assert_eq!(app.view_id(), ui::ViewId::Earnings);
-    assert_eq!(app.selected_symbol(), "NVDA");
-    press(&mut app, KeyCode::Char('9'));
-    assert_eq!(app.calendar_state.offset(), 0);
-    assert!(matches!(
-        agenda::open_target(&app, now()),
-        Some(OpenTarget::Url(_))
-    ));
-}
-
-#[test]
-fn rail_prefers_fresh_ticker_report_then_nearest_high_even_without_quotes() {
-    let (mut app, _cmds) = fixture();
-    assert_eq!(
-        agenda::flag(&app, "NVDA", now()).unwrap().compact,
-        "⚑ reports 5d"
-    );
-    let flag = agenda::flag(&app, "AVGO", now()).unwrap();
-    assert_eq!(flag.full, "⚑ CPI in 22h 45m");
-    assert!(flag.urgent);
-    let line = ui::rail::line(&app, 110, now()).to_string();
-    assert!(line.contains("NVDA reports"), "{line}");
-    app.earnings.get_mut("NVDA").unwrap().fetched = Instant::now() - app.calendar_ttl();
-    assert_eq!(
-        agenda::flag(&app, "NVDA", now()).unwrap().compact,
-        "⚑ CPI 22h"
-    );
-    let cpi = app
-        .calendar
-        .as_mut()
-        .unwrap()
-        .events
-        .iter_mut()
-        .find(|e| e.title == "CPI")
-        .unwrap();
-    cpi.schedule_basis = "inferred".into();
-    assert!(
-        agenda::flag(&app, "AVGO", now())
-            .unwrap()
-            .compact
-            .contains("est.")
-    );
-    app.calendar.as_mut().unwrap().fetched = Instant::now() - app.calendar_ttl();
-    assert!(agenda::flag(&app, "NVDA", now()).is_none());
-}
-
-#[test]
-fn successful_null_retires_an_old_date_and_watchlist_controls_rows() {
-    let (mut app, _cmds) = fixture();
-    report(&mut app, "NVDA", None);
-    assert!(
-        !agenda::agenda(&app, now())
-            .iter()
-            .any(|r| matches!(r.kind, Kind::Report { .. }))
-    );
-    report(&mut app, "AVGO", Some("2026-09-22"));
-    app.symbols.retain(|s| s != "AVGO");
-    assert!(
-        !agenda::agenda(&app, now())
-            .iter()
-            .any(|r| matches!(r.kind, Kind::Report { .. }))
-    );
-}
-
-#[test]
-fn macro_and_date_empty_success_is_not_rendered_as_failure() {
-    let (mut app, _cmds) = fixture();
-    app.calendar = Some(CalendarSlot {
-        events: vec![],
-        fetched: Instant::now(),
-        from: "2026-09-10".parse().unwrap(),
-        to: "2026-11-02".parse().unwrap(),
-    });
-    report(&mut app, "NVDA", None);
-    let text = screen(&mut app, 110, 24);
-    assert!(
-        text.contains("No macro events or confirmed report dates"),
-        "{text}"
-    );
-    assert!(!text.contains("failed"), "{text}");
-}
-
-#[test]
-fn paging_skips_the_now_separator_and_reentry_resets_table_offset() {
-    let (mut app, _cmds) = fixture();
-    app.earnings.clear();
-    // The fixture's clock: the loaded window ends on 2 November, so the
-    // wall clock would walk these events out of it.
-    let clock = now();
-    let events = (-5..30)
-        .map(|day| {
-            macro_event(
-                &format!("Event {day}"),
-                &(clock + chrono::Duration::days(day)).to_rfc3339(),
-            )
+        .filter(|r| r.title.contains("CPI") || r.title.contains("○"))
+        .map(|r| match &r.kind {
+            Kind::Report { symbol } => symbol.as_str(),
+            _ => "CPI",
         })
         .collect();
-    window(&mut app, events);
-    let rows = agenda::agenda(&app, clock);
-    let initial = app.calendar_selection.resolve(&rows).unwrap();
-    assert_eq!(initial, 5);
-    press(&mut app, KeyCode::PageDown);
-    assert_eq!(app.calendar_selection.resolve(&rows), Some(initial + 10));
-    let _ = render_sized(&mut app, 80, 12);
-    assert!(app.calendar_state.offset() > 0);
-    press(&mut app, KeyCode::PageUp);
-    assert_eq!(app.calendar_selection.resolve(&rows), Some(initial));
-    press(&mut app, KeyCode::Up);
-    assert_eq!(app.calendar_selection.resolve(&rows), Some(initial - 1));
-    press(&mut app, KeyCode::Down);
-    assert_eq!(app.calendar_selection.resolve(&rows), Some(initial));
-    press(&mut app, KeyCode::PageDown);
-    let _ = render_sized(&mut app, 80, 12);
-    press(&mut app, KeyCode::Char('1'));
-    press(&mut app, KeyCode::Char('9'));
-    assert_eq!(app.calendar_state.offset(), 0);
-    assert_eq!(app.calendar_selection.resolve(&rows), Some(initial));
+    assert_eq!(ordered, ["C", "B", "CPI", "A", "D"]);
+    assert!(agenda::flag(&app, "D", now()).unwrap().full.contains("CPI"));
+    assert!(render_sized(&mut app, 110, 32).contains("3 reports"));
 }
 
 #[test]
-fn overview_qualifies_missing_failed_and_stale_checks_without_requesting_data() {
-    let (mut app, mut cmds) = fixture();
-    let full = screen(&mut app, 110, 32);
-    assert!(
-        full.contains("Today (ET): 0 macro (0 high) · 0 reports"),
-        "{full}"
-    );
-    assert!(
-        full.contains("Next 7d (ET): 2 macro (2 high) · 1 report"),
-        "{full}"
-    );
-
-    app.earnings.remove("AVGO");
-    let partial = screen(&mut app, 110, 32);
-    assert!(
-        partial.contains("2 macro (2 high) · 1 known report"),
-        "{partial}"
-    );
-    report(&mut app, "AVGO", None);
-    app.earnings.get_mut("NVDA").unwrap().fetched = Instant::now() - app.calendar_ttl();
-    let stale = screen(&mut app, 110, 32);
-    assert!(stale.contains("1 known report"), "{stale}");
-
-    report(&mut app, "NVDA", Some("2026-09-22"));
-    app.alphai_errors
-        .insert(alphai::earnings_key("NVDA"), "offline".into());
-    let failed = screen(&mut app, 110, 32);
-    assert!(failed.contains("1 known report"), "{failed}");
-    app.calendar.as_mut().unwrap().fetched = Instant::now() - app.calendar_ttl();
-    let cached = screen(&mut app, 52, 20);
-    let week = cached
-        .lines()
-        .find(|line| line.contains("Next 7d (ET)"))
-        .unwrap();
-    assert!(
-        week.contains("2 known high") && week.contains("1 known report"),
-        "{week}"
-    );
-    assert!(!week.contains('…'), "{week}");
-    assert!(
-        cmds.try_recv().is_err(),
-        "rendering context must not enqueue fetches"
-    );
-}
-
-#[test]
-fn overview_distinguishes_unavailable_macro_data_and_partial_windows_from_zero() {
-    let (mut app, _cmds) = fixture();
-    app.calendar.as_mut().unwrap().to = "2026-09-19".parse().unwrap();
-    let partial = screen(&mut app, 110, 32);
-    assert!(
-        partial.contains("Today (ET): 0 macro (0 high)"),
-        "{partial}"
-    );
-    assert!(
-        partial.contains("Next 7d (ET): 2 known macro (2 high)"),
-        "{partial}"
-    );
-    app.calendar = None;
-    let loading = screen(&mut app, 110, 32);
-    assert!(loading.contains("Today (ET): macro loading"), "{loading}");
-    app.alphai_errors
-        .insert(alphai::CALENDAR_KEY.into(), "offline".into());
-    let failed = screen(&mut app, 110, 32);
-    assert!(failed.contains("Today (ET): macro unavailable"), "{failed}");
-    window(&mut app, vec![]);
-    let empty = screen(&mut app, 110, 32);
-    assert!(empty.contains("Today (ET): 0 macro (0 high)"), "{empty}");
-}
-
-#[test]
-fn selected_event_expands_title_period_conference_source_and_freshness() {
-    let (mut app, mut cmds) = fixture();
-    let name =
-        "Federal Open Market Committee rate decision with the quarterly economic projections";
-    let mut event = macro_event(name, "2026-09-23T18:00:00Z");
-    event.reference_period = "2026-Q3".into();
-    event.schedule_basis = "inferred".into();
-    event.press_conference_at = Some("2026-09-23T18:30:00Z".into());
-    event.has_sep = true;
-    event.source_url =
-        Some("https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm".into());
-    window(&mut app, vec![event]);
-    let rows = agenda::agenda(&app, now());
-    let index = rows
-        .iter()
-        .position(|r| matches!(r.kind, Kind::Macro { .. }))
-        .unwrap();
-    app.calendar_selection.choose(&rows, index);
-    let full = screen(&mut app, 110, 32);
-    let detail = full.split("Selected event").nth(1).unwrap();
-    for expected in [
-        name,
-        "estimated schedule",
-        "period: Q3 2026",
-        "press conference",
-        "14:30 ET",
-        "projections",
-        "source: www.federalreserve.gov",
-        "updated just now",
-    ] {
-        assert!(detail.contains(expected), "missing {expected}:\n{full}");
-    }
-    app.chart.timezone = crate::config::ChartTimezone::Utc;
-    let utc = screen(&mut app, 110, 32);
-    let detail = utc.split("Selected event").nth(1).unwrap();
-    assert!(detail.contains("18:30 UTC"), "{detail}");
-    assert!(utc.contains("Next 7d (ET)"), "{utc}");
-
-    app.alphai_errors
-        .insert(alphai::CALENDAR_KEY.into(), "offline".into());
-    let failed = screen(&mut app, 110, 32);
-    let detail = failed.split("Selected event").nth(1).unwrap();
-    assert!(detail.contains("cached just now"), "{detail}");
-    assert!(cmds.try_recv().is_err());
-}
-
-#[test]
-fn report_detail_keeps_its_et_date_and_follows_selection_after_arrivals_and_resize() {
-    let (mut app, mut cmds) = fixture();
-    app.chart.timezone = crate::config::ChartTimezone::Utc;
-    let rows = agenda::agenda(&app, now());
-    let index = rows
-        .iter()
-        .position(|r| matches!(r.kind, Kind::Report { .. }))
-        .unwrap();
-    app.calendar_selection.choose(&rows, index);
-    app.calendar
-        .as_mut()
-        .unwrap()
-        .events
-        .push(macro_event("New arrival", "2026-09-18T11:00:00Z"));
-    let full = screen(&mut app, 110, 32);
-    let detail = full.split("Selected event").nth(1).unwrap();
-    for expected in [
-        "NVDA reports",
-        "confirmed date",
-        "Tue 22 Sep 2026 ET",
-        "time not provided",
-        "source: AlphAI",
-    ] {
-        assert!(detail.contains(expected), "missing {expected}:\n{detail}");
-    }
-    assert!(
-        !detail.contains("00:00") && !detail.contains("04:00"),
-        "{detail}"
-    );
-    let short = screen(&mut app, 60, 12);
-    assert!(
-        !short.contains("Selected event") && short.contains("NVDA reports"),
-        "{short}"
-    );
-    assert!(short.contains("2/2 checked"), "{short}");
-    let narrow = screen(&mut app, 40, 32);
-    assert!(
-        !narrow.contains("Today (ET)") && !narrow.contains("Selected event"),
-        "{narrow}"
-    );
-    let restored = screen(&mut app, 110, 32);
-    assert!(
-        restored
-            .split("Selected event")
-            .nth(1)
-            .unwrap()
-            .contains("NVDA reports"),
-        "{restored}"
-    );
+fn cursor_survives_read_arrival_date_change_and_filter_mouse_indices() {
+    use crate::ui::hits::ListKind;
+    use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+    let (mut app, _) = fixture();
+    pick(&mut app, "NVDA");
+    let mut arrived = event("NVDA", "2026-11-09", "reported", None, Some("landed"));
+    arrived.reported_at = Some("2026-11-09T12:00:00Z".parse().unwrap());
+    load(&mut app, vec![arrived]);
     assert_eq!(
         agenda::open_target(&app, now()),
         Some(OpenTarget::Earnings("NVDA".into()))
     );
-    assert!(cmds.try_recv().is_err());
-}
-
-#[test]
-fn calendar_rows_select_on_click_and_separators_do_not() {
-    use crate::ui::hits::ListKind;
-    use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
-
-    let (mut app, _cmds) = fixture();
-    let mut terminal = Terminal::new(TestBackend::new(110, 30)).unwrap();
-    terminal.draw(|f| ui::draw(f, &mut app)).unwrap();
-    let rows = app
+    key(&mut app, KeyCode::Char('f'));
+    render_sized(&mut app, 110, 32);
+    let hit = app
         .hits
         .lists
         .iter()
         .find(|l| l.kind == ListKind::Calendar)
-        .cloned()
-        .expect("calendar rows recorded");
-    let agenda = agenda::agenda(&app, now());
-    let click = |app: &mut App, y: u16| {
-        app.handle_mouse(MouseEvent {
-            kind: MouseEventKind::Down(MouseButton::Left),
-            column: rows.area.x + 3,
-            row: y,
-            modifiers: KeyModifiers::NONE,
-        })
-    };
-    // The first table row is the earliest, elapsed event; the separator
-    // ("now") sits between it and the upcoming ones.
-    let separator = app
+        .unwrap()
+        .clone();
+    let y = app
         .hits
         .calendar_rows
         .iter()
-        .position(Option::is_none)
-        .expect("a separator row") as u16;
-    assert!(click(&mut app, rows.area.y));
-    assert_eq!(app.calendar_selection.resolve(&agenda), Some(0));
-    assert!(!click(&mut app, rows.area.y + separator));
-    assert_eq!(app.calendar_selection.resolve(&agenda), Some(0));
-    // The row after the separator is the first upcoming event; NVDA's
-    // report date is in the agenda too, and clicking it moves the ticker.
-    let nvda = app
-        .hits
-        .calendar_rows
-        .iter()
-        .position(|r| {
-            r.is_some_and(
-                |i| matches!(&agenda[i].kind, agenda::Kind::Report { symbol } if symbol == "NVDA"),
-            )
-        })
-        .expect("NVDA's report row") as u16;
-    assert!(click(&mut app, rows.area.y + nvda));
-    assert_eq!(app.selected_symbol(), "NVDA");
-    let selected = app.calendar_selection.resolve(&agenda).unwrap();
-    assert!(matches!(
-        &agenda[selected].kind,
-        agenda::Kind::Report { .. }
-    ));
+        .position(Option::is_some)
+        .unwrap() as u16;
+    assert!(app.handle_mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: hit.area.x + 2,
+        row: hit.area.y + y,
+        modifiers: KeyModifiers::NONE
+    }));
+    assert_eq!(app.focused_symbol(), "NVDA");
+}
+
+#[test]
+fn canonical_fallback_stores_under_owner_and_errors_never_trigger_it() {
+    let (mut app, mut cmds) = setup(vec!["GOOGL".into()]);
+    let mut e = event("GOOGL", "2026-11-07", "reported", None, Some("wanted"));
+    e.report_read.as_mut().unwrap().ticker = "GOOG".into();
+    load(&mut app, vec![e]);
+    pick(&mut app, "GOOGL");
+    key(&mut app, KeyCode::Enter);
+    app.ensure_alphai_data();
+    drain(&mut cmds);
+    app.apply_alphai(alphai::Event::Error {
+        key: alphai::earnings_key("GOOGL"),
+        error: "offline".into(),
+    });
+    app.ensure_alphai_data();
+    assert!(drain(&mut cmds).is_empty());
+    key(&mut app, KeyCode::Char('r'));
+    app.ensure_alphai_data();
+    drain(&mut cmds);
+    earnings_fetch(&mut app, "GOOGL", Default::default());
+    app.ensure_alphai_data();
+    assert!(
+        matches!(cmds.try_recv(), Ok(alphai::Cmd::FetchEarnings {symbol,cache_symbol}) if symbol=="GOOG" && cache_symbol=="GOOGL")
+    );
+    let mut data = earnings_data("GOOG", "", FULL_METRICS);
+    data.reports[0].uid = "wanted".into();
+    earnings_fetch(&mut app, "GOOGL", data);
+    assert!(!app.earnings.contains_key("GOOG"));
+    assert_eq!(app.shown_earnings().unwrap().ticker, "GOOG");
+    assert_eq!(app.earnings_symbol(), "GOOGL");
+    app.ensure_alphai_data();
+    assert!(drain(&mut cmds).is_empty());
+}
+
+#[test]
+fn schedule_and_pending_rows_do_not_survive_midnight_without_a_read() {
+    let (mut app, _) = setup(vec!["NVDA".into()]);
+    load(
+        &mut app,
+        vec![event("NVDA", "2026-11-07", "reported", None, None)],
+    );
+    assert!(agenda::agenda(&app, now() + chrono::Duration::days(1)).is_empty());
+}
+
+#[test]
+fn removing_a_watchlist_ticker_keeps_its_calendar_event_while_held() {
+    let (mut app, _) = setup(vec!["NVDA".into()]);
+    app.positions.push(crate::portfolio::Position {
+        symbol: "NVDA".into(),
+        qty: 1.,
+        avg_price: 1.,
+    });
+    load(
+        &mut app,
+        vec![event("NVDA", "2026-11-10", "scheduled", None, None)],
+    );
+    app.symbols.clear();
+    assert_eq!(agenda::agenda(&app, now()).len(), 1);
+    app.positions.clear();
+    assert!(agenda::agenda(&app, now()).is_empty());
+}
+
+#[test]
+fn a_paused_manual_sweep_can_resume_even_with_far_groups_still_queued() {
+    let (mut app, mut cmds) = fixture();
+    key(&mut app, KeyCode::Char('r'));
+    let clock = Instant::now();
+    let r = next_request(&mut app, &mut cmds, clock);
+    app.apply_alphai(alphai::Event::Calendar {
+        events: vec![],
+        from: "2026-10-31".into(),
+        to: "2026-12-23".into(),
+    });
+    app.apply_alphai(alphai::Event::ReportCalendar {
+        request: r,
+        result: Err("API 429".into()),
+        blocked: true,
+    });
+    key(&mut app, KeyCode::Char('r'));
+    assert!(app.report_calendar.paused.is_none());
+    let retry = next_request(&mut app, &mut cmds, clock + Duration::from_secs(4));
+    assert_eq!(retry.from.to_string(), "2026-10-31");
+}
+
+#[test]
+fn calendar_overlay_uses_each_named_theme_after_clear() {
+    for name in ["dracula", "catppuccin-latte", "gruvbox-light"] {
+        let (mut app, _) = fixture();
+        app.set_theme(name);
+        pick(&mut app, "NVDA");
+        key(&mut app, KeyCode::Char('v'));
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        terminal.draw(|f| ui::draw(f, &mut app)).unwrap();
+        let (area, _) = app.hits.modal.unwrap();
+        for y in area.top()..area.bottom() {
+            for x in area.left()..area.right() {
+                let cell = &terminal.backend().buffer()[(x, y)];
+                assert!(
+                    matches!(cell.bg, ratatui::style::Color::Rgb(..)),
+                    "{name} {x} {y}"
+                );
+                assert!(
+                    matches!(cell.fg, ratatui::style::Color::Rgb(..)),
+                    "{name} {x} {y}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn refreshing_groups_qualify_counts_even_when_the_previous_data_is_fresh() {
+    let (mut app, mut cmds) = fixture();
+    key(&mut app, KeyCode::Char('r'));
+    let request = next_request(&mut app, &mut cmds, Instant::now());
+    let text = render_sized(&mut app, 160, 32);
+    assert!(text.contains("known report"), "{text}");
+    assert!(text.contains("near updating"), "{text}");
+    reply(
+        &mut app,
+        request,
+        vec![event("NVDA", "2026-11-10", "scheduled", None, None)],
+    );
+    let text = render_sized(&mut app, 160, 32);
+    assert!(text.contains("far updating"), "{text}");
+    assert!(
+        !text.contains("known report"),
+        "the near summaries are complete: {text}"
+    );
 }

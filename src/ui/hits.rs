@@ -43,6 +43,7 @@ pub enum Scroll {
 /// The overlay on top of the view, when one is open.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Modal {
+    Calendar,
     Help,
     Article,
     Categories,

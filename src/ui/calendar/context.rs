@@ -52,16 +52,23 @@ pub(super) fn counts(rows: &[AgendaRow], now: DateTime<Utc>) -> [Counts; 2] {
 
 fn summaries(app: &App, rows: &[AgendaRow], now: DateTime<Utc>, width: u16) -> Vec<Line<'static>> {
     let today = market::et_time(now).date();
-    let reports_known = app.calendar_symbols().any(|symbol| {
-        app.earnings
-            .get(symbol)
-            .is_none_or(|slot| slot.data.unknown || slot.fetched.elapsed() >= app.calendar_ttl())
-            || app
-                .alphai_errors
-                .contains_key(&alphai::earnings_key(symbol))
-            || app.is_loading(&alphai::earnings_key(symbol))
-            || app.report_date_retry.contains(symbol)
-    });
+    let near: Vec<_> = app
+        .report_calendar
+        .slots
+        .iter()
+        .filter(|s| s.window == crate::app::report_calendar::Window::Near)
+        .collect();
+    let reports_loaded = near.iter().any(|s| s.fetched.is_some());
+    let reports_known = near.is_empty()
+        || app
+            .report_calendar
+            .updating(crate::app::report_calendar::Window::Near)
+        || near
+            .iter()
+            .any(|s| s.items.iter().any(|e| e.incomplete_listings))
+        || near
+            .iter()
+            .any(|s| !app.report_slot_fresh(s, std::time::Instant::now()));
     let mut lines = Vec::new();
     for ((label, days), count) in [("Today (ET)", 1), ("Next 7d (ET)", 7)]
         .into_iter()
@@ -75,7 +82,7 @@ fn summaries(app: &App, rows: &[AgendaRow], now: DateTime<Utc>, width: u16) -> V
                 || slot.from > today
                 || slot.to < today + Duration::days(days + 1)
         });
-        let reports = format!(
+        let mut reports = format!(
             "{} {}{}",
             count.reports,
             if reports_known { "known " } else { "" },
@@ -85,6 +92,30 @@ fn summaries(app: &App, rows: &[AgendaRow], now: DateTime<Utc>, width: u16) -> V
                 "reports"
             }
         );
+        if !reports_loaded && !app.report_calendar.universe.is_empty() {
+            reports =
+                if app.report_calendar.paused.is_some() || near.iter().any(|s| s.error.is_some()) {
+                    "reports unavailable".into()
+                } else {
+                    "reports loading".into()
+                };
+        }
+        if width >= 100 && days == 1 {
+            let reported = rows
+                .iter()
+                .filter(|r| {
+                    r.report.as_ref().is_some_and(|e| {
+                        e.status == alphai::ReportStatus::Reported
+                            && e.reported_at
+                                .is_some_and(|at| market::et_time(at).date() == today)
+                    })
+                })
+                .count();
+            reports.push_str(&format!(
+                " · {reported} {}reported today",
+                if reports_known { "known " } else { "" }
+            ));
+        }
         let macro_text = |compact| {
             if app.calendar.is_none() {
                 if app.alphai_errors.contains_key(alphai::CALENDAR_KEY) {
@@ -104,7 +135,11 @@ fn summaries(app: &App, rows: &[AgendaRow], now: DateTime<Utc>, width: u16) -> V
         let line = [false, true].into_iter().find_map(|compact| {
             let line = Line::from(vec![
                 Span::styled(format!("{label}: "), app.theme.subtle()),
-                Span::raw(format!("{} · {reports}", macro_text(compact))),
+                Span::raw(match app.calendar_filter {
+                    super::Filter::All => format!("{} · {reports}", macro_text(compact)),
+                    super::Filter::Reports => reports.clone(),
+                    super::Filter::Macro => macro_text(compact),
+                }),
             ]);
             (line.width() <= width as usize).then_some(line)
         });
@@ -121,7 +156,7 @@ fn summaries(app: &App, rows: &[AgendaRow], now: DateTime<Utc>, width: u16) -> V
 /// Prewrap by display cells so the whole detail can be measured before
 /// allocating space. A long title or URL cannot silently hide the source
 /// or freshness, and a grapheme is never split across lines.
-fn wrap(text: &str, width: u16, style: Style) -> Vec<Line<'static>> {
+pub(super) fn wrap(text: &str, width: u16, style: Style) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     let mut line = String::new();
     let mut used = 0;
@@ -152,6 +187,9 @@ fn wrap(text: &str, width: u16, style: Style) -> Vec<Line<'static>> {
 }
 
 fn details(row: &AgendaRow, app: &App, width: u16) -> Vec<Line<'static>> {
+    if row.report.is_some() {
+        return report_details(row, app, width, false);
+    }
     let zone = app.chart.timezone;
     let timed = |at: DateTime<Utc>| {
         format!(
@@ -161,12 +199,13 @@ fn details(row: &AgendaRow, app: &App, width: u16) -> Vec<Line<'static>> {
         )
     };
     let status = match row.status {
+        Status::Reported => "reported",
         Status::Postponed => "postponed",
         Status::Cancelled => "cancelled",
         Status::Unknown => "status unknown",
         Status::Scheduled if row.when == When::Unknown => "date unavailable",
         Status::Scheduled if row.estimated => "estimated schedule",
-        Status::Scheduled if matches!(row.kind, Kind::Report { .. }) => "confirmed date",
+        Status::Scheduled if matches!(row.kind, Kind::Report { .. }) => "scheduled",
         Status::Scheduled => "scheduled",
     };
     let mut facts = vec![status.into()];
@@ -265,7 +304,8 @@ pub(super) fn render(
     area.y += height;
     area.height -= height;
     if let Some(row) = selected.and_then(|i| rows.get(i)) {
-        let lines = details(row, app, area.width);
+        let mut lines = details(row, app, area.width);
+        lines.truncate(5);
         if lines.len() + 1 + 8 <= area.height as usize {
             let height = lines.len() as u16 + 1;
             area.height -= height;
@@ -284,4 +324,109 @@ pub(super) fn render(
         }
     }
     area
+}
+
+fn report_details(row: &AgendaRow, app: &App, width: u16, full: bool) -> Vec<Line<'static>> {
+    let event = row.report.as_ref().unwrap();
+    let mut facts = vec![format!(
+        "{}{}",
+        super::reports::company_name(&event.company),
+        event
+            .sector
+            .as_ref()
+            .map_or(String::new(), |s| format!(" · {s}"))
+    )];
+    let filing = event
+        .reported_at
+        .map(|at| format!("{} ET", market::et_time(at).format("%a %-d %b %Y %H:%M")));
+    let status = match event.status {
+        alphai::ReportStatus::Scheduled => format!(
+            "{} ET · {} · scheduled",
+            event.report_date,
+            event.session_label()
+        ),
+        alphai::ReportStatus::Reported => format!(
+            "{} · reported · {}",
+            filing.as_deref().unwrap_or("Filing time unavailable"),
+            super::reports::event_note(event)
+        ),
+        alphai::ReportStatus::Unknown => format!("{} ET · status unknown", event.report_date),
+    };
+    let freshness = row.fetched.map_or_else(|| "age unavailable".into(), age);
+    facts.push(format!(
+        "{status} · {}{freshness}",
+        if row.cached { "cached " } else { "" }
+    ));
+    if let Some(read) = &event.previous_read {
+        facts.push(format!(
+            "Previous {} · {}",
+            read.fiscal_period,
+            super::reports::verdict_label(read.verdict.as_deref(), &read.fiscal_period)
+        ));
+        if let Some(guidance) = &read.guidance {
+            facts.push(format!(
+                "Guidance {}: {}",
+                guidance.period.as_deref().unwrap_or(""),
+                guidance.revenue
+            ));
+        }
+        if full {
+            facts.push(format!(
+                "Previous filing: {} ET",
+                market::et_time(read.published_at).format("%Y-%m-%d %H:%M")
+            ));
+            facts.extend(read.what_to_watch.iter().map(|s| format!("Watch: {s}")));
+        } else if let Some(watch) = read.what_to_watch.first() {
+            facts.push(format!("Watch: {watch}"));
+        }
+    }
+    if full {
+        facts.push(format!("Report date: {} ET", event.report_date));
+        facts.push(format!("Listings: {}", event.listings.join(", ")));
+        if event.incomplete_listings {
+            facts.push("Listing aliases incomplete in this response.".into());
+        }
+        if let Some(read) = &event.report_read {
+            facts.push(format!(
+                "Read: {} · {} · {}",
+                read.fiscal_period, read.ticker, read.uid
+            ));
+            facts.push(format!(
+                "Read filing: {} ET",
+                market::et_time(read.published_at).format("%Y-%m-%d %H:%M")
+            ));
+        } else if event.status == alphai::ReportStatus::Reported {
+            facts.push("Read pending: no linked read is available yet. Processing and publication time are unknown.".into());
+        }
+        facts.push(
+            "Source: AlphAI · BMO before open · AMC after close · report dates and filings ET"
+                .into(),
+        );
+        facts
+            .into_iter()
+            .flat_map(|s| wrap(&s, width, app.theme.subtle()))
+            .collect()
+    } else {
+        facts.truncate(5);
+        let more = format!(" · {} more", app.keymap.action_labels(Action::Card));
+        if let Some(last) = facts.last_mut() {
+            *last = format!(
+                "{}{}",
+                super::fit(last, width.saturating_sub(Span::raw(&more).width() as u16)),
+                more
+            );
+        }
+        facts
+            .into_iter()
+            .map(|s| Line::from(super::fit(&s, width)).style(app.theme.subtle()))
+            .collect()
+    }
+}
+
+pub(super) fn full_details(row: &AgendaRow, app: &App, width: u16) -> Vec<Line<'static>> {
+    if row.report.is_some() {
+        report_details(row, app, width, true)
+    } else {
+        details(row, app, width)
+    }
 }

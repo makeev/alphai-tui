@@ -83,7 +83,7 @@ impl View for EarningsView {
     }
 
     fn render(&self, f: &mut Frame, area: Rect, app: &mut App) {
-        let symbol = app.selected_symbol().to_string();
+        let symbol = app.earnings_symbol().to_string();
         let key = alphai::earnings_key(&symbol);
         let theme = app.theme;
         let missing = !app.earnings.contains_key(&symbol);
@@ -93,7 +93,8 @@ impl View for EarningsView {
         }
 
         let data = &app.earnings[&symbol].data;
-        let latest = data.latest();
+        let next = next_report(super::calendar::next_report_day(app, &symbol, app.now()));
+        let latest = app.shown_earnings();
         let head = match latest {
             Some(read) => format!(" Earnings · {symbol} · {} ", period_of(read)),
             None => format!(" Earnings · {symbol} "),
@@ -107,7 +108,7 @@ impl View for EarningsView {
         }
         // With a read on screen the date belongs in the frame; without one
         // the body already answers with it, and twice reads as a glitch.
-        if let Some(next) = next_report(data).filter(|_| latest.is_some()) {
+        if let Some(next) = next.clone().filter(|_| latest.is_some()) {
             block = block.title_bottom(Line::styled(next, theme.subtle()).right_aligned());
         }
 
@@ -119,10 +120,42 @@ impl View for EarningsView {
             .filter(|line| !line.is_empty());
         let strip_h = u16::from(ahead.is_some() && inner.height >= AHEAD_MIN_HEIGHT);
         f.render_widget(block, area);
-        let [body, strip] =
-            Layout::vertical([Constraint::Min(3), Constraint::Length(strip_h)]).areas(inner);
-
-        let lines = body_lines(data, &symbol, body.width as usize, &theme);
+        let banner = calendar_banner(app);
+        let banner_h = u16::from(banner.is_some());
+        let [banner_area, body, strip] = Layout::vertical([
+            Constraint::Length(banner_h),
+            Constraint::Min(1),
+            Constraint::Length(strip_h),
+        ])
+        .areas(inner);
+        if let Some(banner) = banner {
+            f.render_widget(
+                Paragraph::new(ellipsize(&banner, banner_area.width as usize))
+                    .style(theme.subtle()),
+                banner_area,
+            );
+        }
+        let lines = if app
+            .earnings_target
+            .as_ref()
+            .is_some_and(|t| t.event.report_read.is_some())
+            && latest.is_none()
+        {
+            vec![
+                Line::from(if app.is_loading(&key) {
+                    "Loading the selected calendar read…"
+                } else {
+                    "Selected calendar read unavailable · r to retry"
+                })
+                .style(theme.subtle()),
+            ]
+        } else if app.earnings_target.is_some()
+            && let Some(read) = latest
+        {
+            read_lines(read, &symbol, body.width as usize, &theme)
+        } else {
+            body_lines(data, &symbol, body.width as usize, &theme, next.as_deref())
+        };
         let max_scroll = lines.len().saturating_sub(body.height as usize);
         app.earnings_scroll = app.earnings_scroll.min(max_scroll as u16);
         f.render_widget(Paragraph::new(lines).scroll((app.earnings_scroll, 0)), body);
@@ -143,7 +176,7 @@ impl View for EarningsView {
 /// The verdict word, colored the way the site colors it. Only this one span
 /// carries a judgement: the metric changes stay uncolored, because whether a
 /// rise is good depends on the metric and the client cannot know.
-fn verdict_span(verdict: &str, theme: &Theme) -> Span<'static> {
+pub(crate) fn verdict_span(verdict: &str, theme: &Theme) -> Span<'static> {
     let style = match verdict {
         "strong" | "solid" => Style::new().fg(theme.pos),
         "weak" => Style::new().fg(theme.neg),
@@ -153,16 +186,10 @@ fn verdict_span(verdict: &str, theme: &Theme) -> Span<'static> {
 }
 
 /// "next report Nov 17, 2026" for the bottom border, or None when the
-/// company has confirmed no date. Never an estimate: the API only serves
-/// dates the company itself confirmed, and guessing one here would be worse
-/// than saying nothing.
-fn next_report(data: &TickerEarnings) -> Option<String> {
-    let raw = data.next_report_date.as_deref()?.trim();
-    if raw.is_empty() {
-        return None;
-    }
-    let shown = NaiveDate::parse_from_str(raw, "%Y-%m-%d")
-        .map_or_else(|_| raw.to_string(), |d| d.format("%b %-d, %Y").to_string());
+/// no date is available. The calendar uses dates marked confirmed by the
+/// source; the client does not infer dates from the filing cadence.
+fn next_report(day: Option<NaiveDate>) -> Option<String> {
+    let shown = day?.format("%b %-d, %Y").to_string();
     Some(format!(" next report {shown} "))
 }
 
@@ -173,6 +200,7 @@ fn body_lines(
     symbol: &str,
     width: usize,
     theme: &Theme,
+    next: Option<&str>,
 ) -> Vec<Line<'static>> {
     if data.unknown {
         return vec![
@@ -193,15 +221,14 @@ fn body_lines(
                 .style(theme.subtle()),
             Line::from("  earnings filing, with every figure checked against the filing")
                 .style(theme.subtle()),
-            Line::from("  text. It lands minutes after the filing reaches SEC EDGAR.")
+            Line::from("  text. A read may not yet be available for a recent filing.")
                 .style(theme.subtle()),
             Line::from(""),
         ];
-        lines.push(match next_report(data) {
+        lines.push(match next {
             Some(next) => Line::from(format!("  {}", next.trim())).style(theme.subtle()),
-            None => {
-                Line::from("  The next report date is not confirmed yet.").style(theme.subtle())
-            }
+            None => Line::from("  No next report date is available in the current calendar.")
+                .style(theme.subtle()),
         });
         return lines;
     };
@@ -718,7 +745,64 @@ pub fn ahead_line(events: &[CalendarEvent], now: DateTime<Utc>) -> String {
 
 /// The article page of the read on screen, for the Open key.
 pub fn open_url(app: &App) -> Option<String> {
-    let symbol = app.selected_symbol();
-    let read = app.earnings.get(symbol)?.data.latest()?;
-    read.alphai_url()
+    app.shown_earnings()?.alphai_url()
+}
+
+fn calendar_banner(app: &App) -> Option<String> {
+    let target = app.earnings_target.as_ref()?;
+    if target.refresh_pending
+        && let Some(error) = app.report_calendar.paused.as_deref().or_else(|| {
+            app.report_calendar
+                .slots
+                .iter()
+                .find(|s| {
+                    s.window == crate::app::report_calendar::Window::Near
+                        && s.request.tickers.contains(&target.symbol)
+                })
+                .and_then(|s| s.error.as_deref())
+        })
+    {
+        return Some(format!(
+            "Calendar update failed · r to retry · read pending · {error}"
+        ));
+    }
+    if target.no_longer_listed {
+        return Some("Calendar event is no longer listed · showing the available read".into());
+    }
+    if let Some(pointer) = &target.event.report_read {
+        let newer = app
+            .earnings
+            .get(&target.symbol)
+            .and_then(|s| s.data.latest())
+            .filter(|r| r.uid != pointer.uid)
+            .map_or(String::new(), |r| {
+                format!(" · newer read: {}", period_of(r))
+            });
+        return Some(format!(
+            "Opened from Calendar · {}{newer}",
+            pointer.fiscal_period
+        ));
+    }
+    let showing = app
+        .shown_earnings()
+        .map_or(String::new(), |r| format!(" · showing {}", period_of(r)));
+    if target.event.status == alphai::ReportStatus::Reported {
+        if app
+            .current_target_event()
+            .is_some_and(|e| e.report_read.is_some())
+        {
+            return Some(format!("Read available · r to open{showing}"));
+        }
+        let at = target.event.reported_at.map_or_else(
+            || "time unavailable".into(),
+            |at| format!("{} ET", crate::market::et_time(at).format("%H:%M")),
+        );
+        Some(format!("Filing landed {at} · read pending{showing}"))
+    } else {
+        Some(format!(
+            "Opened from Calendar · reports {} {}{showing}",
+            target.event.report_date,
+            target.event.session_label()
+        ))
+    }
 }

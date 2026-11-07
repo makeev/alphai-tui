@@ -64,7 +64,7 @@ fn line_with_peers(
     width: u16,
     now: DateTime<Utc>,
 ) -> (Line<'static>, Vec<(u16, u16, usize)>) {
-    let symbol = app.selected_symbol().to_string();
+    let symbol = app.focused_symbol();
     let budget = width as usize;
     let mut spans = head(app, &symbol, width);
     let mut used = total_width(&spans);
@@ -210,6 +210,8 @@ fn optional_zones(
             )],
         ]);
     }
+    // Near-term events should remain visible before secondary quote context.
+    zones.push(event_zone(app, symbol, now));
     // Price provenance outranks holdings, session countdowns and charts:
     // a recently fetched response can still carry an old trade.
     zones.push(quote_context(app, quote));
@@ -231,7 +233,6 @@ fn optional_zones(
             Span::styled(spark_line(&closes, SPARK), Style::new().fg(color)),
         ]]);
     }
-    zones.push(event_zone(app, symbol, now));
     // Last, because they are context rather than news: they say where the
     // day sits in the year and how heavily it traded, and a narrow terminal
     // gives their width back to everything above.

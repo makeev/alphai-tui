@@ -2,6 +2,8 @@
 //! (table, cursor, open target and rail) uses the same normalized events.
 
 mod context;
+mod reports;
+pub(crate) use reports::next_report_day;
 
 use std::collections::HashSet;
 use std::time::Instant;
@@ -28,6 +30,8 @@ static HINTS: &[Hint] = &[
     Hint::act(&[Action::Up, Action::Down], "select"),
     Hint::act(&[Action::PriceAlert], "alert"),
     Hint::act(&[Action::Open], "open"),
+    Hint::act(&[Action::Card], "details"),
+    Hint::act(&[Action::CycleScope], "filter"),
     Hint::act(&[Action::Refresh], "refresh"),
     Hint::act(&[Action::Help], "help"),
 ];
@@ -57,6 +61,7 @@ impl View for CalendarView {
 pub(crate) enum AgendaId {
     Macro(String),
     Report(String, NaiveDate),
+    Read(String),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -79,6 +84,7 @@ impl When {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Status {
     Scheduled,
+    Reported,
     Postponed,
     Cancelled,
     Unknown,
@@ -104,6 +110,8 @@ pub(crate) struct AgendaRow {
     conference: Option<DateTime<Utc>>,
     projections: bool,
     cached: bool,
+    pub report: Option<alphai::ReportEvent>,
+    fetched: Option<Instant>,
 }
 
 impl AgendaRow {
@@ -123,6 +131,9 @@ impl AgendaRow {
     }
 
     fn until(&self, now: DateTime<Utc>) -> String {
+        if self.status == Status::Reported {
+            return "reported".into();
+        }
         if self.status != Status::Scheduled {
             return "—".into();
         }
@@ -158,8 +169,8 @@ impl AgendaRow {
         if self.projections {
             notes.push("projections".into());
         }
-        if matches!(self.kind, Kind::Report { .. }) {
-            notes.push("confirmed · time not provided".into());
+        if let Some(event) = &self.report {
+            notes.push(reports::event_note(event));
         }
         if !self.reference.is_empty() {
             notes.push(self.reference.clone());
@@ -172,6 +183,7 @@ impl AgendaRow {
 pub(crate) struct Selection {
     id: Option<AgendaId>,
     index: usize,
+    report: Option<alphai::ReportEvent>,
 }
 
 impl Selection {
@@ -183,6 +195,26 @@ impl Selection {
             return Some(
                 rows.iter()
                     .position(|r| &r.id == id)
+                    .or_else(|| {
+                        self.report.as_ref().and_then(|old| {
+                            rows.iter()
+                                .position(|r| r.report.as_ref().is_some_and(|e| e.same_report(old)))
+                        })
+                    })
+                    .or_else(|| {
+                        self.report.as_ref().and_then(|old| {
+                            let matches: Vec<_> = rows
+                                .iter()
+                                .enumerate()
+                                .filter(|(_, r)| {
+                                    r.report
+                                        .as_ref()
+                                        .is_some_and(|e| e.listings.iter().any(|s| old.contains(s)))
+                                })
+                                .collect();
+                            (matches.len() == 1).then(|| matches[0].0)
+                        })
+                    })
                     .unwrap_or(self.index.min(rows.len() - 1)),
             );
         }
@@ -195,6 +227,7 @@ impl Selection {
     pub fn choose(&mut self, rows: &[AgendaRow], index: usize) {
         if let Some(row) = rows.get(index) {
             self.id = Some(row.id.clone());
+            self.report = row.report.clone();
             self.index = index;
         }
     }
@@ -276,6 +309,8 @@ pub(crate) fn build_agenda(
                 .map(|t| t.with_timezone(&Utc)),
             projections: event.has_sep,
             cached: false,
+            report: None,
+            fetched: None,
         });
     }
     let mut seen_reports = HashSet::new();
@@ -298,6 +333,8 @@ pub(crate) fn build_agenda(
             conference: None,
             projections: false,
             cached: false,
+            report: None,
+            fetched: None,
         });
     }
     rows.sort_by_key(|r| {
@@ -323,40 +360,105 @@ pub(crate) fn build_agenda(
     rows
 }
 
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum Filter {
+    #[default]
+    All,
+    Reports,
+    Macro,
+}
+impl Filter {
+    pub fn next(self) -> Self {
+        match self {
+            Self::All => Self::Reports,
+            Self::Reports => Self::Macro,
+            Self::Macro => Self::All,
+        }
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::All => "All",
+            Self::Reports => "Reports",
+            Self::Macro => "Macro",
+        }
+    }
+}
+
+pub(crate) struct CalendarOverlay {
+    pub row: AgendaRow,
+    pub scroll: u16,
+}
+
+pub(crate) fn render_overlay(f: &mut Frame, app: &mut App) {
+    let Some(card) = &app.calendar_overlay else {
+        return;
+    };
+    let area = super::centered(
+        f.area(),
+        100.min(f.area().width.saturating_sub(2)),
+        28.min(f.area().height.saturating_sub(2)),
+    );
+    let block = app
+        .theme
+        .modal()
+        .title(app.theme.heading(" Calendar event "));
+    let inner = block.inner(area);
+    let lines = context::full_details(&card.row, app, inner.width);
+    let scroll = card
+        .scroll
+        .min(lines.len().saturating_sub(inner.height as usize) as u16);
+    f.render_widget(ratatui::widgets::Clear, area);
+    f.render_widget(block, area);
+    f.render_widget(Paragraph::new(lines).scroll((scroll, 0)), inner);
+    app.calendar_overlay.as_mut().unwrap().scroll = scroll;
+    app.hits.modal = Some((area, super::hits::Modal::Calendar));
+}
+
 pub(crate) fn agenda(app: &App, now: DateTime<Utc>) -> Vec<AgendaRow> {
-    let reports: Vec<_> = app
-        .calendar_symbols()
-        .filter_map(|symbol| {
-            let slot = app.earnings.get(symbol)?;
-            (!slot.data.unknown)
-                .then(|| slot.data.next_report_day())
-                .flatten()
-                .map(|day| (symbol.clone(), day))
-        })
-        .collect();
     let events = app
         .calendar
         .as_ref()
-        .map_or(&[][..], |slot| slot.events.as_slice());
-    let mut rows = build_agenda(events, &reports, now);
+        .map_or(&[][..], |s| s.events.as_slice());
+    let mut rows = build_agenda(events, &[], now);
     for row in &mut rows {
-        row.cached = match &row.kind {
-            Kind::Macro { .. } => {
-                app.calendar
-                    .as_ref()
-                    .is_some_and(|s| s.fetched.elapsed() >= app.calendar_ttl())
-                    || app.alphai_errors.contains_key(alphai::CALENDAR_KEY)
-            }
-            Kind::Report { symbol } => {
-                app.earnings
-                    .get(symbol)
-                    .is_some_and(|s| s.fetched.elapsed() >= app.calendar_ttl())
-                    || app
-                        .alphai_errors
-                        .contains_key(&alphai::earnings_key(symbol))
-            }
-        };
+        row.cached = app
+            .calendar
+            .as_ref()
+            .is_some_and(|s| s.fetched.elapsed() >= app.calendar_ttl())
+            || app.alphai_errors.contains_key(alphai::CALENDAR_KEY);
+        row.fetched = app.calendar.as_ref().map(|s| s.fetched);
     }
+    rows.extend(reports::rows(app, now));
+    rows.retain(|r| match app.calendar_filter {
+        Filter::All => true,
+        Filter::Reports => r.report.is_some() || matches!(r.kind, Kind::Report { .. }),
+        Filter::Macro => matches!(r.kind, Kind::Macro { .. }),
+    });
+    rows.sort_by_key(|r| {
+        let group = if r.when == When::Unknown {
+            2
+        } else if r.elapsed {
+            0
+        } else {
+            1
+        };
+        let order = if let Some(e) = &r.report {
+            match e.session.as_deref() {
+                Some("before_open") => 0,
+                Some("after_close") => 3,
+                _ => 1,
+            }
+        } else if matches!(r.when, When::Timed(_)) {
+            2
+        } else {
+            1
+        };
+        let seconds = match r.when {
+            When::Timed(at) => market::et_time(at).time().num_seconds_from_midnight(),
+            _ => 0,
+        };
+        (group, r.when.day(), order, seconds, r.id.clone())
+    });
     rows
 }
 
@@ -367,10 +469,15 @@ pub(crate) enum OpenTarget {
     Unavailable,
 }
 
+#[cfg(test)]
 pub(crate) fn open_target(app: &App, now: DateTime<Utc>) -> Option<OpenTarget> {
     let rows = agenda(app, now);
     let row = &rows[app.calendar_selection.resolve(&rows)?];
-    Some(match &row.kind {
+    Some(row_target(row))
+}
+
+pub(crate) fn row_target(row: &AgendaRow) -> OpenTarget {
+    match &row.kind {
         Kind::Report { symbol } => OpenTarget::Earnings(symbol.clone()),
         Kind::Macro { source_url } => match source_url.as_deref().map(str::trim) {
             Some(url) if url.starts_with("https://") || url.starts_with("http://") => {
@@ -378,7 +485,7 @@ pub(crate) fn open_target(app: &App, now: DateTime<Utc>) -> Option<OpenTarget> {
             }
             _ => OpenTarget::Unavailable,
         },
-    })
+    }
 }
 
 pub(crate) fn fmt_until(now: DateTime<Utc>, at: DateTime<Utc>) -> String {
@@ -450,7 +557,11 @@ pub(crate) fn flag(app: &App, symbol: &str, now: DateTime<Utc>) -> Option<Flag> 
         return None;
     }
     let today = market::et_time(now).date();
-    if let Some(slot) = app.earnings.get(symbol)
+    if let Some(flag) = reports::flag(app, symbol, now) {
+        return Some(flag);
+    }
+    if !app.report_calendar.ever_covered.contains(symbol)
+        && let Some(slot) = app.earnings.get(symbol)
         && !slot.data.unknown
         && slot.fetched.elapsed() < app.calendar_ttl()
         && !app
@@ -458,7 +569,7 @@ pub(crate) fn flag(app: &App, symbol: &str, now: DateTime<Utc>) -> Option<Flag> 
             .contains_key(&alphai::earnings_key(symbol))
         && let Some(day) = slot.data.next_report_day()
         && today <= day
-        && day <= today + Duration::days(7)
+        && day < today + Duration::days(7)
     {
         let days = (day - today).num_days();
         return Some(Flag {
@@ -615,6 +726,7 @@ fn event_row(row: &AgendaRow, cols: &[(Col, u16)], app: &App, now: DateTime<Utc>
                     When::DateOnly(day) => day.format("%a %-d %b").to_string(),
                     When::Unknown => "—".into(),
                 },
+                Col::Time if row.report.is_some() => reports::time(row.report.as_ref().unwrap()),
                 Col::Time => match row.when {
                     When::Timed(at) => time_axis::label(at.timestamp(), "%H:%M", zone, true),
                     _ => "—".into(),
@@ -639,6 +751,20 @@ fn event_row(row: &AgendaRow, cols: &[(Col, u16)], app: &App, now: DateTime<Utc>
                 Style::new().fg(theme.warn)
             } else {
                 theme.subtle()
+            };
+            if col == Col::Title && row.report.is_some() {
+                return reports::title_cell(row, width.saturating_sub(1), theme);
+            }
+            let cell_style = if col == Col::Notes {
+                row.report
+                    .as_ref()
+                    .and_then(|e| e.report_read.as_ref())
+                    .map_or(cell_style, |r| {
+                        super::earnings::verdict_span(r.verdict.as_deref().unwrap_or(""), theme)
+                            .style
+                    })
+            } else {
+                cell_style
             };
             Cell::from(fit(&value, width.saturating_sub(1))).style(cell_style)
         })
@@ -711,60 +837,29 @@ fn statuses(app: &App, rows: &[AgendaRow], now: DateTime<Utc>) -> [String; 2] {
     } else {
         "macro: waiting…".into()
     };
-    let symbols: Vec<_> = app.calendar_symbols().collect();
-    let checked = symbols
-        .iter()
-        .filter(|s| {
-            app.earnings.contains_key(s.as_str())
-                && !app.alphai_errors.contains_key(&alphai::earnings_key(s))
-        })
-        .count();
-    let failed = symbols
-        .iter()
-        .filter(|s| app.alphai_errors.contains_key(&alphai::earnings_key(s)))
-        .count();
-    let confirmed = rows
-        .iter()
-        .filter(|r| matches!(r.kind, Kind::Report { .. }))
-        .count();
-    let mut dates = format!(
-        "dates: {confirmed} in window · {checked}/{} checked",
-        symbols.len()
-    );
-    if let Some(reason) = &app.report_dates_paused {
-        dates.push_str(&format!(" · checks paused · {retry} · {reason}"));
-    } else if symbols
-        .iter()
-        .any(|s| app.is_loading(&alphai::earnings_key(s)) || app.report_date_due(s, Instant::now()))
-    {
-        dates.push_str(" · checking…");
-        if failed > 0 {
-            dates.push_str(&format!(" · {failed} failed"));
-        }
-    } else if failed > 0 {
-        dates.push_str(&format!(" · {failed} failed · {retry}"));
-    } else if confirmed == 0 {
-        dates.push_str(" · no confirmed dates in window");
-    }
-    if symbols.len() >= 25 {
-        dates.push_str(&format!(" · {} requests per sweep", symbols.len()));
-    }
-    [macro_line, dates]
+    [macro_line, reports::status(app, rows)]
 }
 
 pub(crate) fn render_calendar_at(f: &mut Frame, area: Rect, app: &mut App, now: DateTime<Utc>) {
     let zone = time_axis::zone_name(app.chart.timezone, true);
     let title = if area.width >= 58 {
-        format!(" Calendar · past 7d · next 45d · {zone} ")
+        format!(
+            " Calendar · {} · past 7d · next 45d ",
+            app.calendar_filter.label()
+        )
     } else {
-        format!(" Calendar · {zone} ")
+        format!(" Calendar · {} ", app.calendar_filter.label())
     };
     let mut block = app
         .theme
         .panel_titled(fit(&title, area.width.saturating_sub(2)));
     if area.width >= 38 {
         block = block.title_bottom(
-            Line::from(" report dates: ET · time not provided ").style(app.theme.subtle()),
+            Line::from(fit(
+                &format!(" BMO before open · AMC after close · reports ET · macro {zone} "),
+                area.width.saturating_sub(2),
+            ))
+            .style(app.theme.subtle()),
         );
     }
     if !app.alphai_enabled {
@@ -795,7 +890,7 @@ pub(crate) fn render_calendar_at(f: &mut Frame, area: Rect, app: &mut App, now: 
     {
         let status_area = Rect::new(inner.x, content_area.bottom() + i as u16, inner.width, 1);
         let style = if (i == 0 && app.alphai_errors.contains_key(alphai::CALENDAR_KEY))
-            || (i == 1 && app.report_dates_paused.is_some())
+            || (i == 1 && app.report_calendar.paused.is_some())
         {
             Style::new().fg(app.theme.warn)
         } else {
@@ -815,14 +910,15 @@ pub(crate) fn render_calendar_at(f: &mut Frame, area: Rect, app: &mut App, now: 
             "Loading macro schedule…"
         } else if app.alphai_errors.contains_key(alphai::CALENDAR_KEY) {
             "Macro schedule unavailable. Report date checks are shown below."
-        } else if app.report_dates_paused.is_none()
-            && app.calendar_symbols().any(|s| {
-                app.is_loading(&alphai::earnings_key(s)) || app.report_date_due(s, Instant::now())
-            })
+        } else if app
+            .report_calendar
+            .slots
+            .iter()
+            .any(|s| !s.covered && s.error.is_none())
         {
-            "No macro events in this window. Checking report dates…"
+            "Loading report schedule…"
         } else {
-            "No macro events or confirmed report dates in this window."
+            "No events in this window and filter. Coverage may be partial."
         };
         f.render_widget(
             Paragraph::new(fit(text, table_area.width)).style(app.theme.subtle()),

@@ -99,6 +99,11 @@ fn cache_empty_calendar(app: &mut App) {
         from: today - chrono::Duration::days(7),
         to: today + chrono::Duration::days(46),
     });
+    app.report_calendar.sync(app.polled_symbols(), today);
+    for slot in &mut app.report_calendar.slots {
+        slot.covered = true;
+        slot.fetched = Some(Instant::now());
+    }
 }
 
 fn current_source(app: &App) -> Arc<dyn crate::source::DataSource> {
@@ -4744,6 +4749,7 @@ fn earnings_view_renders_a_read() {
 #[test]
 fn earnings_empty_state_shows_the_next_report_date() {
     let (mut app, _cmds) = empty_app_with_cmds(vec!["AVGO".into()]);
+    app.frozen_now = Some("2026-09-01T12:00:00Z".parse().unwrap());
     app.view_idx = ui::view_index(ui::ViewId::Earnings);
     earnings_fetch(
         &mut app,
@@ -4773,7 +4779,10 @@ fn earnings_empty_state_shows_the_next_report_date() {
         serde_json::from_str(r#"{"ticker":"AVGO","reports":[],"next_report_date":null}"#).unwrap(),
     );
     let screen = render(&mut app);
-    assert!(screen.contains("not confirmed yet"), "screen:\n{screen}");
+    assert!(
+        screen.contains("No next report date is available"),
+        "screen:\n{screen}"
+    );
 }
 
 /// A 404 is a state, not a failure: offering a retry that can never work is
