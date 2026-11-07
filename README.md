@@ -201,7 +201,7 @@ one of those views has loaded that ticker's feed.
 
 The client fetches extra history for indicator warm-up. Pre-market has a
 quiet warm background, after-hours a cool one, and regular trading keeps
-the terminal background. Price, volume and RSI share the same session
+the panel background. Price, volume and RSI share the same session
 columns and vertical grid in both candle and line mode. Aggregation never
 combines different sessions or feeds into one candle. These session rules
 apply to US stocks on intraday intervals, including scheduled 13:00 closes
@@ -1113,8 +1113,8 @@ yourself (or letting `p` overwrite the line).
 preset = "catppuccin-mocha"
 ```
 
-Each preset on a terminal wearing the matching palette (`default` on a plain
-dark one, since it takes the terminal's own colors):
+Each preset supplies its own background and text colors. `default` takes
+the terminal's own colors and is shown here on a plain dark terminal:
 
 <table>
 <tr>
@@ -1147,14 +1147,22 @@ both: `←` `→` cycle it with a live preview, Save writes it here.
 Available: `default`, `catppuccin-mocha`, `catppuccin-macchiato`,
 `catppuccin-frappe`, `catppuccin-latte`, `dracula`, `gruvbox-dark`,
 `gruvbox-light`, `nord`. Presets are written in hex, so they want a
-terminal with 24-bit color. With `borders = "none"` they tint the panels
-one step off the palette's background, the regular session sits on that
-tint, and the pre-market and after-hours bands are drawn from it, so the
+terminal with 24-bit color. Their background and body text cover the whole
+app, including menus and empty space, independently of the terminal theme.
+For a light app, choose `catppuccin-latte` or `gruvbox-light`; changing only
+the terminal background does not switch the app's preset.
+
+With `borders = "none"` they tint the panels one step off the palette's
+background, the regular session sits on that tint, and the pre-market
+and after-hours bands are drawn from it, so the
 three stay apart. `default` uses ANSI foregrounds, no panel tint and
 subtle RGB session backgrounds;
-`session_shading = false` preserves a fully transparent chart background. The two
-light ones (`catppuccin-latte`, `gruvbox-light`) expect a light terminal
-background.
+`session_shading = false` preserves a fully transparent chart background
+with `default`.
+
+To keep the terminal's background with a named preset, set
+`background = "reset"` under `[theme]` and choose a preset suited to that
+background. `text = "reset"` also keeps the terminal's body text color.
 
 `pre_market_bg` and `post_market_bg` are the session background slots;
 each accepts the same color formats as the foreground slots. Setting either
@@ -1185,18 +1193,18 @@ sma_slow = "magenta"     # slow moving average overlay
 rsi_line = "cyan"        # RSI line
 ref_line = "darkgray"    # previous close and RSI 30/70 reference lines
 border = "reset"         # panel frames; reset keeps the terminal's foreground
-text = "reset"           # body text on tinted panels; reset keeps the terminal's foreground
+background = "reset"     # whole-app background; reset keeps the terminal's background
+text = "reset"           # body text throughout the app; reset keeps the terminal's foreground
 subtle = "reset"         # sources, ages, axis labels, key hints; reset means the terminal's dim
 faint = "reset"          # separators and inactive text; reset means the terminal's dim
 selection = "reset"      # background of the cursor row; reset means reverse video
 surface = "reset"        # panel background (borders = "none"); reset paints none
 ```
 
-The presets fill the last five from their own palettes: secondary text in
-the family's subtext shade, a cursor row that keeps each column's color,
-and a panel tint one step off the background. With `default` they follow
-the terminal, which is the only way to stay readable on both a dark and a
-light background.
+The presets fill these slots from their own palettes: matching background
+and body text, secondary text in the family's subtext shade, a cursor row
+that keeps each column's color, and a panel tint one step off the background.
+With `default`, these slots continue to use the terminal's colors.
 
 ### Custom keybindings
 

@@ -28,7 +28,7 @@ const fn tint(surface: Color, hue: Color) -> Color {
     mix(surface, hue, 14)
 }
 
-/// A step off the terminal background toward the text: enough to read as a
+/// A step off the palette background toward the text: enough to read as a
 /// panel, little enough to leave room for the session tints above it.
 const fn surface(p: &Palette) -> Color {
     mix(p.base, p.text, 7)
@@ -97,6 +97,7 @@ const fn theme_from(p: Palette) -> Theme {
         pre_market_bg: tint(surface(&p), p.yellow),
         post_market_bg: tint(surface(&p), p.violet),
         border: p.dim,
+        background: p.base,
         text: p.text,
         subtle: p.subtext,
         faint: p.faint,
@@ -331,6 +332,7 @@ mod tests {
             rsi_line,
             ref_line,
             border,
+            background,
             text,
             subtle,
             faint,
@@ -358,6 +360,7 @@ mod tests {
             ("pre_market_bg", pre_market_bg),
             ("post_market_bg", post_market_bg),
             ("border", border),
+            ("background", background),
             ("text", text),
             ("subtle", subtle),
             ("faint", faint),
@@ -425,8 +428,7 @@ mod tests {
     #[test]
     fn text_tiers_stay_readable() {
         for (name, t) in PRESETS.iter().skip(1) {
-            // accent_text is the palette's base background.
-            for (bg_name, bg) in [("base", t.accent_text), ("surface", t.surface)] {
+            for (bg_name, bg) in [("base", t.background), ("surface", t.surface)] {
                 let body = contrast(t.text, bg);
                 let subtle = contrast(t.subtle, bg);
                 let faint = contrast(t.faint, bg);
@@ -486,15 +488,15 @@ mod tests {
 
     /// The pre-market and after-hours bands must read apart from the
     /// regular session on either background it can have (the panel surface
-    /// or, with frames, the terminal's own) and from each other.
+    /// or, with frames, the palette's base) and from each other.
     #[test]
     fn session_tints_stand_apart() {
         for (name, t) in PRESETS.iter().skip(1) {
             let pairs = [
                 ("pre/surface", t.pre_market_bg, t.surface),
                 ("post/surface", t.post_market_bg, t.surface),
-                ("pre/base", t.pre_market_bg, t.accent_text),
-                ("post/base", t.post_market_bg, t.accent_text),
+                ("pre/base", t.pre_market_bg, t.background),
+                ("post/base", t.post_market_bg, t.background),
                 ("pre/post", t.pre_market_bg, t.post_market_bg),
             ];
             for (what, a, b) in pairs {

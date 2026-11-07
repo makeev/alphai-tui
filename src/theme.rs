@@ -21,7 +21,7 @@ use ratatui::widgets::{Block, BorderType};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Panels {
     Lines(BorderType),
-    /// No lines: the frame cells stay blank on the terminal's background,
+    /// No lines: the frame cells stay blank on the theme's background,
     /// the inside takes `surface`. The frame keeps its cell, so every
     /// "minus two for the borders" in the layouts still holds and titles
     /// still sit on the top and bottom edges.
@@ -62,8 +62,7 @@ impl Panels {
 }
 
 /// One slot per meaning, not per widget: the same red means "price down"
-/// everywhere it appears. Deliberately not themeable: bold text, which
-/// already tracks the terminal's own palette.
+/// everywhere it appears. Unstyled and bold text inherit the body color.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Theme {
     /// Brand accent: header title, active tab, overlay borders, headings.
@@ -92,8 +91,10 @@ pub struct Theme {
     /// Panel frames. `Reset` keeps the terminal's own foreground, which is
     /// what the app looked like before this slot existed; themes dim it.
     pub border: Color,
-    /// Body text where the app paints its own background (the surface
-    /// panels). `Reset` leaves the terminal's foreground.
+    /// App background, including framed panels and the gutters between
+    /// surfaces. `Reset` leaves the terminal's background.
+    pub background: Color,
+    /// Body text throughout the app. `Reset` leaves the terminal's foreground.
     pub text: Color,
     /// Secondary text that still has to be read: sources, ages, axis
     /// labels, key hints. `Reset` falls back to the terminal's DIM, the
@@ -136,6 +137,7 @@ impl Theme {
         pre_market_bg: Color::Rgb(38, 33, 24),
         post_market_bg: Color::Rgb(25, 28, 42),
         border: Color::Reset,
+        background: Color::Reset,
         text: Color::Reset,
         subtle: Color::Reset,
         faint: Color::Reset,
@@ -224,6 +226,7 @@ impl Theme {
                 "pre_market_bg" => &mut theme.pre_market_bg,
                 "post_market_bg" => &mut theme.post_market_bg,
                 "border" => &mut theme.border,
+                "background" => &mut theme.background,
                 "text" => &mut theme.text,
                 "subtle" => &mut theme.subtle,
                 "faint" => &mut theme.faint,
@@ -253,14 +256,15 @@ impl Theme {
         match self.panels {
             Panels::Lines(kind) => Block::bordered()
                 .border_type(kind)
+                .style(self.base())
                 .border_style(Style::new().fg(self.border)),
-            // The frame is still there, drawn in spaces on the terminal's
-            // own background: a one-cell gutter between two surfaces, and a
+            // The frame is still there, drawn in spaces on the theme's
+            // background: a one-cell gutter between two surfaces, and a
             // row for the titles above and below.
             Panels::Surface => Block::bordered()
                 .border_set(border::EMPTY)
-                .style(Style::new().fg(self.text).bg(self.surface))
-                .border_style(Style::new().bg(Color::Reset)),
+                .style(self.fill())
+                .border_style(self.base()),
         }
     }
 
@@ -272,13 +276,16 @@ impl Theme {
             Panels::Lines(kind) => kind,
             Panels::Surface => BorderType::Rounded,
         };
-        let block = Block::bordered()
+        Block::bordered()
             .border_type(kind)
-            .border_style(Style::new().fg(self.border));
-        match self.panels {
-            Panels::Lines(_) => block,
-            Panels::Surface => block.style(Style::new().fg(self.text).bg(self.surface)),
-        }
+            .style(self.fill())
+            .border_style(Style::new().fg(self.border))
+    }
+
+    /// The complete canvas palette. Named presets own both colors so a
+    /// light terminal cannot wash out a dark preset (or vice versa).
+    pub fn base(&self) -> Style {
+        Style::new().fg(self.text).bg(self.background)
     }
 
     /// The panel background for widgets that paint their own (ratatui's
@@ -286,8 +293,8 @@ impl Theme {
     /// punch a hole in a surface panel).
     pub fn fill(&self) -> Style {
         match self.panels {
-            Panels::Lines(_) => Style::new(),
-            Panels::Surface => Style::new().bg(self.surface),
+            Panels::Lines(_) => self.base(),
+            Panels::Surface => self.base().bg(self.surface),
         }
     }
 

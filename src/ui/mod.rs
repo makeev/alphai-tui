@@ -161,6 +161,10 @@ pub fn view_index(id: ViewId) -> usize {
 }
 
 pub fn draw(f: &mut Frame, app: &mut App) {
+    // Paint the whole canvas, including chrome and empty space. Presets
+    // must stay coherent when the terminal uses a different palette.
+    let area = f.area();
+    f.buffer_mut().set_style(area, app.theme.base());
     // The mouse reads what this frame draws, nothing older.
     app.hits = hits::Hits::default();
     // Before rows are built, so the hovered row renders without its unseen

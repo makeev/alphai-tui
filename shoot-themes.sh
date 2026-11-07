@@ -25,8 +25,8 @@ mkdir -p "$out"
 # news feed) on a ticker with a dense feed.
 symbols="AVGO NVDA AAPL BTC-USD"
 
-# Flavor -> the matching terminal theme built into vhs. The terminal has
-# to wear the same flavor as the app: the app never paints a background.
+# Flavor -> the matching terminal theme built into vhs, so the outer
+# screenshot padding matches the background painted by the app.
 shoot() {
   local flavor="$1" vhs_theme="$2"
   # vhs quirks worth keeping: a Screenshot that shares its stem with

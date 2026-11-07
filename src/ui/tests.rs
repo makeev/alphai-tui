@@ -4,6 +4,7 @@ mod design;
 mod motion;
 mod mouse;
 mod news_collapse;
+mod themes;
 mod ticker_search;
 
 use std::sync::{Arc, RwLock};
@@ -4189,7 +4190,7 @@ fn borders_are_themed() {
 
 /// `[ui] borders = "none"`: every view draws its panels as surfaces, with
 /// no frame line anywhere, and the gutter the frame leaves stays on the
-/// terminal's own background so two panels never merge into one.
+/// theme's background so two panels never merge into one.
 #[test]
 fn surface_panels_draw_no_lines() {
     use crate::theme::Panels;

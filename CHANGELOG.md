@@ -5,6 +5,17 @@ the crates.io releases; from 0.7.0 on each one is also a git tag and a
 GitHub release with prebuilt binaries. The Homebrew tap, the AUR and the
 apt repository joined later, and carry every version since.
 
+## 0.39.0 - 2026-11-07
+
+- Named color presets now paint their own background and body text across
+  every view, panel and dialog. Dark colors no longer wash out on a light
+  terminal, and light presets stay readable on a dark terminal. Choose
+  `catppuccin-latte` or `gruvbox-light` for a light app.
+- `[theme] background` overrides the app background. Set it to `"reset"`
+  to keep the terminal background with a matching preset; `text = "reset"`
+  also keeps the terminal foreground. The `default` preset continues to
+  use the terminal's colors.
+
 ## 0.38.0 - 2026-11-06
 
 - Every view now shows `A alert` beside the selection keys in its footer,

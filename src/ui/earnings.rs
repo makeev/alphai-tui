@@ -568,10 +568,8 @@ fn metric_lines(metrics: &[KeyMetric], width: usize, theme: &Theme) -> Vec<Line<
         }
         // Banded rows: thirty numeric lines need something for the eye to
         // follow from a name across to its figures, and a leader of dots
-        // carries it the rest of the way. The band is a muted row rather
-        // than a background color, because the palette is foreground-only
-        // and any background chosen here would fight whatever the terminal
-        // actually has behind it.
+        // carries it the rest of the way. Muted text also works with the
+        // default ANSI palette, whose background belongs to the terminal.
         let style = if n % 2 == 1 {
             theme.subtle()
         } else {

@@ -232,7 +232,7 @@ pub fn render_prompt(f: &mut Frame, app: &mut App) {
         lines.push(Line::styled(hint, app.theme.subtle()));
     }
     f.render_widget(Clear, area);
-    let paragraph = Paragraph::new(lines);
+    let paragraph = Paragraph::new(lines).style(app.theme.fill());
     if compact {
         f.render_widget(paragraph, area);
     } else {
