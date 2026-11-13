@@ -379,9 +379,11 @@ pub const DEFAULT_RIGHT_MARGIN_PCT: u16 = 20;
 /// would squeeze the candles more than it helps.
 pub const RIGHT_MARGIN_RANGE: RangeInclusive<i64> = 0..=50;
 
-/// Startup default of the news score filter: relevance 7 and up (the API
+/// Startup default of the news score filter: relevance 5 and up (the API
 /// itself defaults to 4; +/- adjust it live, `[ui] news_min_score` seeds it).
-pub const DEFAULT_NEWS_MIN_SCORE: u8 = 7;
+/// 7 until 0.41.0, which hid most 8-K filings: they score 5 or 6, and with
+/// their corporate events typed they are the rows worth seeing.
+pub const DEFAULT_NEWS_MIN_SCORE: u8 = 5;
 
 /// Startup default of the insider score filter. Insider rows are scored from
 /// the event's dollar value, so this is a trade-size filter; 4 matches the
@@ -729,10 +731,11 @@ fn resolve_ui(raw: Option<&UiConfig>, warnings: &mut Vec<String>) -> UiDefaults 
     if let Some(scope) = &raw.news_scope {
         match scope.to_lowercase().as_str() {
             "ticker" => out.news_scope = NewsScope::Ticker,
+            "events" => out.news_scope = NewsScope::Events,
             "market" => out.news_scope = NewsScope::Market,
             "trending" => out.news_scope = NewsScope::Trending,
             other => warnings.push(format!(
-                "[ui] news_scope: unknown \"{other}\" (ticker, market or trending), keeping ticker"
+                "[ui] news_scope: unknown \"{other}\" (ticker, events, market or trending), keeping ticker"
             )),
         }
     }

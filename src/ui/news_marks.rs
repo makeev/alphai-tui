@@ -13,7 +13,9 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
 use crate::alphai::Article;
+use crate::app::NewsScope;
 use crate::domain::{Candle, Interval};
+use crate::event;
 use crate::theme::Theme;
 use crate::ui::{ellipsize, news};
 
@@ -26,6 +28,11 @@ const HEADLINE_MIN_WIDTH: u16 = 46;
 /// age have taken theirs.
 const TITLE_MIN_WIDTH: usize = 18;
 
+/// Points a material event of the ticker gets over coverage when the two
+/// share a candle (see `place`): a score-6 offering beats a score-7 story
+/// about it, not a score-9 one.
+const MATERIAL_LEAD: i64 = 2;
+
 /// One placed mark: an article and the chart column it belongs to.
 pub(crate) struct Mark<'a> {
     /// Index into the candles the chart actually draws.
@@ -36,25 +43,32 @@ pub(crate) struct Mark<'a> {
 }
 
 /// At most one mark per column: the highest-scoring article published
-/// inside that candle's slot, the newer one on a tie. The article with uid
-/// `focus` (the one open in the News card) wins its column outright, since
-/// the point of showing it is to find it. Rows older than the
+/// inside that candle's slot, the newer one on a tie. A material corporate
+/// event the ticker itself reported (an offering, a deal, a dividend cut,
+/// see `event::is_material`) counts `MATERIAL_LEAD` points higher: a mark
+/// answers "why did it move", the filing is the first-hand answer, and the
+/// coverage of it tends to score above the 8-K itself. A lead, not a trump:
+/// an officer's appointment does not hide a score-9 story. The article with
+/// uid `focus` (the one open in the News card) wins its column outright,
+/// since the point of showing it is to find it. Rows older than the
 /// first candle on screen are dropped rather than clamped to the left edge,
 /// and rows without a parsable timestamp are never placed. A candle ends
 /// after its interval, so overnight gaps and missing recent bars cannot
 /// pin unrelated news onto the previous candle.
 pub(crate) fn place<'a>(
-    articles: &'a [Article],
+    articles: impl IntoIterator<Item = &'a Article>,
     candles: &[Candle],
     interval: Interval,
     focus: Option<&str>,
+    symbol: &str,
 ) -> Vec<Mark<'a>> {
     let Some(first) = candles.first() else {
         return Vec::new();
     };
-    // Column -> (focused, score, published, article); the tuple is the
+    // Column -> (focused, weight, published, article); the tuple is the
     // tie-break.
-    let mut best: Vec<Option<(bool, i64, i64, &Article)>> = vec![None; candles.len()];
+    type Slot<'a> = (bool, i64, i64, &'a Article);
+    let mut best: Vec<Option<Slot>> = vec![None; candles.len()];
     for a in articles {
         let Some(ts) = a.published().map(|t| t.timestamp()) else {
             continue;
@@ -67,8 +81,10 @@ pub(crate) fn place<'a>(
             continue;
         }
         let focused = focus.is_some_and(|uid| !uid.is_empty() && a.original.uid == uid);
-        let cand = (focused, a.score(), ts, a);
-        if best[col].is_none_or(|(f, score, at, _)| (f, score, at) < (cand.0, cand.1, cand.2)) {
+        let lead = event::reported_by(a, symbol) && event::shown(a).is_some_and(event::is_material);
+        let weight = a.score() + if lead { MATERIAL_LEAD } else { 0 };
+        let cand = (focused, weight, ts, a);
+        if best[col].is_none_or(|(f, w, at, _)| (f, w, at) < (cand.0, cand.1, cand.2)) {
             best[col] = Some(cand);
         }
     }
@@ -93,12 +109,22 @@ pub(crate) fn latest<'a, 'm>(marks: &'m [Mark<'a>]) -> Option<&'m Mark<'a>> {
 }
 
 /// Shape of a mark: the AI sentiment call for this ticker, in the same
-/// alphabet the news list's sentiment column uses.
+/// alphabet the news list's sentiment column uses, solid for coverage and
+/// in outline (`△ ▽ ◇`) for a primary document reporting a corporate event
+/// of the ticker. The outline says "the filing itself" without giving up
+/// the direction.
 fn shape(a: &Article, symbol: &str) -> char {
-    match news::display_impact(a, symbol).and_then(|i| i.sentiment.as_deref()) {
-        Some("positive") => '▲',
-        Some("negative") => '▼',
-        _ => '◆',
+    let filing = event::for_row(a, NewsScope::Ticker, symbol).is_some();
+    match (
+        news::display_impact(a, symbol).and_then(|i| i.sentiment.as_deref()),
+        filing,
+    ) {
+        (Some("positive"), false) => '▲',
+        (Some("negative"), false) => '▼',
+        (_, false) => '◆',
+        (Some("positive"), true) => '△',
+        (Some("negative"), true) => '▽',
+        (_, true) => '◇',
     }
 }
 
@@ -150,7 +176,10 @@ pub(crate) fn headline(
     Some(Line::from(vec![
         Span::styled(format!(" {ch}"), style),
         Span::styled(prefix, theme.subtle()),
-        Span::styled(ellipsize(&a.original.title, room), theme.subtle()),
+        Span::styled(
+            ellipsize(&event::chart_title(a, symbol), room),
+            theme.subtle(),
+        ),
         Span::raw(" "),
     ]))
 }
@@ -198,7 +227,7 @@ mod tests {
             row(2_300, 7, "negative"), // after the last candle's open: candle 4
             row(1_000, 7, "neutral"),  // exactly on the first candle
         ];
-        let marks = place(&articles, &candles, Interval::M5, None);
+        let marks = place(&articles, &candles, Interval::M5, None, "AAPL");
         let cols: Vec<usize> = marks.iter().map(|m| m.col).collect();
         assert_eq!(cols, vec![0, 1, 4]);
     }
@@ -207,7 +236,7 @@ mod tests {
     fn history_older_than_the_window_is_dropped_not_clamped() {
         let candles = candles(1_000, 300, 3);
         let old = [row(900, 9, "positive")];
-        let marks = place(&old, &candles, Interval::M5, None);
+        let marks = place(&old, &candles, Interval::M5, None, "AAPL");
         assert!(marks.is_empty(), "an older row must not stick to the edge");
     }
 
@@ -215,7 +244,7 @@ mod tests {
     fn news_after_the_last_candle_is_not_pinned_to_old_history() {
         let candles = candles(1_000, 300, 3);
         let articles = vec![row(1_899, 6, "positive"), row(1_900, 9, "negative")];
-        let marks = place(&articles, &candles, Interval::M5, None);
+        let marks = place(&articles, &candles, Interval::M5, None, "AAPL");
         assert_eq!(marks.len(), 1);
         assert_eq!(marks[0].article.score(), 6);
     }
@@ -225,7 +254,7 @@ mod tests {
         let mut candles = candles(1_000, 300, 2);
         candles.extend(self::candles(90_000, 300, 2));
         let articles = vec![row(2_000, 9, "positive")];
-        assert!(place(&articles, &candles, Interval::M5, None).is_empty());
+        assert!(place(&articles, &candles, Interval::M5, None, "AAPL").is_empty());
     }
 
     #[test]
@@ -236,7 +265,7 @@ mod tests {
             row(1_100, 9, "negative"), // the one that matters
             row(1_200, 6, "neutral"),
         ];
-        let marks = place(&articles, &candles, Interval::M5, None);
+        let marks = place(&articles, &candles, Interval::M5, None, "AAPL");
         assert_eq!(marks.len(), 1, "one mark per column");
         assert_eq!(marks[0].article.score(), 9);
     }
@@ -261,10 +290,83 @@ mod tests {
     fn the_headline_yields_on_a_narrow_chart() {
         let candles = candles(1_000, 300, 2);
         let articles = vec![row(1_050, 9, "positive")];
-        let marks = place(&articles, &candles, Interval::M5, None);
+        let marks = place(&articles, &candles, Interval::M5, None, "AAPL");
         let mark = latest(&marks).unwrap();
         let theme = Theme::default();
         assert!(headline(mark, "AAPL", 40, &theme).is_none());
         assert!(headline(mark, "AAPL", 80, &theme).is_some());
+    }
+
+    fn event_row(ts: i64, score: i64, kind: &str, facts: &[(&str, &str)]) -> Article {
+        let mut a = row(ts, score, "positive");
+        a.original.source_domain = "sec.gov".into();
+        a.event = Some(crate::alphai::CorporateEvent {
+            kind: kind.into(),
+            facts: facts
+                .iter()
+                .map(|(n, v)| crate::alphai::EventFact {
+                    name: (*n).into(),
+                    value: (*v).into(),
+                })
+                .collect(),
+            verified: true,
+            ..Default::default()
+        });
+        a
+    }
+
+    #[test]
+    fn a_material_event_leads_a_higher_scored_story_in_its_candle() {
+        let candles = candles(1_000, 300, 3);
+        let articles = vec![
+            row(1_350, 8, "positive"),
+            event_row(1_400, 6, "offering", &[("gross_proceeds", "$3 billion")]),
+        ];
+        let marks = place(&articles, &candles, Interval::M5, None, "AAPL");
+        assert_eq!(marks.len(), 1);
+        assert_eq!(marks[0].article.score(), 6);
+        assert_eq!(
+            shape(marks[0].article, "AAPL"),
+            '△',
+            "outline, sentiment kept"
+        );
+    }
+
+    #[test]
+    fn a_routine_event_competes_on_score() {
+        let candles = candles(1_000, 300, 3);
+        let articles = vec![
+            row(1_350, 9, "positive"),
+            event_row(1_400, 6, "dividend", &[("kind", "regular")]),
+        ];
+        let marks = place(&articles, &candles, Interval::M5, None, "AAPL");
+        assert_eq!(marks[0].article.score(), 9);
+        assert_eq!(shape(marks[0].article, "AAPL"), '▲');
+    }
+
+    #[test]
+    fn the_lead_does_not_hide_a_much_stronger_story() {
+        let candles = candles(1_000, 300, 3);
+        let articles = vec![
+            row(1_350, 9, "negative"),
+            event_row(1_400, 6, "exec_change", &[("person_name", "A B")]),
+        ];
+        let marks = place(&articles, &candles, Interval::M5, None, "AAPL");
+        assert_eq!(marks[0].article.score(), 9);
+    }
+
+    #[test]
+    fn another_companys_event_keeps_the_sentiment_shape() {
+        let mut a = event_row(1_400, 6, "dividend", &[("kind", "increase")]);
+        a.enrichment.tickers = vec!["MSFT".into(), "AAPL".into()];
+        assert_eq!(shape(&a, "AAPL"), '▲');
+        let candles = candles(1_000, 300, 3);
+        let articles = vec![row(1_350, 9, "negative"), a];
+        let marks = place(&articles, &candles, Interval::M5, None, "AAPL");
+        assert_eq!(
+            marks[0].article.score(),
+            9,
+            "MSFT's dividend is not material to AAPL"
+        );
     }
 }

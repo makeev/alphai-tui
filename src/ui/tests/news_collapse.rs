@@ -142,7 +142,7 @@ fn late_news_replies_cannot_restore_the_previous_grouping() {
                     side: None,
                     next_cursor: Some("old-cursor".into()),
                     mode,
-                    min_relevance: Some(7),
+                    min_relevance: Some(crate::config::DEFAULT_NEWS_MIN_SCORE),
                     categories: Categories::default(),
                 }
             };
@@ -177,7 +177,12 @@ fn grouping_choice_reaches_head_paging_and_delta_in_both_scopes() {
             assert!(matches!(cmds.try_recv(), Ok(alphai::Cmd::FetchNews {
                 collapse: actual, cursor: None, sort: alphai::Sort::Published, ..
             }) if actual == collapse));
-            head_fetch(&mut app, &key, vec![uid_article("one", "One")], Some(7));
+            head_fetch(
+                &mut app,
+                &key,
+                vec![uid_article("one", "One")],
+                Some(crate::config::DEFAULT_NEWS_MIN_SCORE),
+            );
             app.feeds.get_mut(&key).unwrap().next_cursor = Some("older".into());
             press(&mut app, KeyCode::Char('j'));
             assert!(matches!(cmds.try_recv(), Ok(alphai::Cmd::FetchNews {
@@ -189,7 +194,7 @@ fn grouping_choice_reaches_head_paging_and_delta_in_both_scopes() {
                 side: None,
                 next_cursor: None,
                 mode: alphai::FeedMode::Append,
-                min_relevance: Some(7),
+                min_relevance: Some(crate::config::DEFAULT_NEWS_MIN_SCORE),
                 categories: Categories::default(),
             });
             let bundle = app.feeds.get_mut(&key).unwrap();
@@ -231,7 +236,12 @@ fn changed_representative_is_one_story_across_pages_and_updates_only_when_groupe
             save_grouping(&mut app, collapse);
             let mut original = uid_article("first", "First representative");
             original.story_id = Some("stable-story".into());
-            head_fetch(&mut app, "AAPL", vec![original], Some(7));
+            head_fetch(
+                &mut app,
+                "AAPL",
+                vec![original],
+                Some(crate::config::DEFAULT_NEWS_MIN_SCORE),
+            );
             app.feeds.get_mut("AAPL").unwrap().delta_cursor = Some("delta1".into());
             let mut promoted = uid_article("promoted", "Stronger representative");
             promoted.story_id = Some("stable-story".into());
@@ -241,7 +251,7 @@ fn changed_representative_is_one_story_across_pages_and_updates_only_when_groupe
                 side: None,
                 next_cursor: Some("next".into()),
                 mode,
-                min_relevance: Some(7),
+                min_relevance: Some(crate::config::DEFAULT_NEWS_MIN_SCORE),
                 categories: Categories::default(),
             });
             let bundle = &app.feeds["AAPL"];

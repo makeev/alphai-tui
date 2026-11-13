@@ -1,0 +1,1144 @@
+{
+ "results": [
+  {
+   "_case": "crwv_offering",
+   "original": {
+    "uid": "2396b536dc1dd96c",
+    "title": "CoreWeave, Inc. (CRWV): Entry into a Material Definitive Agreement",
+    "time_published": "2026-09-22T20:17:14Z",
+    "source": "SEC EDGAR 8-K",
+    "source_domain": "sec.gov"
+   },
+   "enrichment": {
+    "category": "corporate_actions",
+    "tickers": [
+     "CRWV"
+    ],
+    "relevance_score": 6
+   },
+   "event": {
+    "type": "offering",
+    "stage": "priced",
+    "role": "issuer",
+    "counterparty": null,
+    "facts": [
+     {
+      "name": "instrument",
+      "value": "2.875% convertible senior notes due 2033",
+      "number": null,
+      "number_high": null,
+      "unit": null,
+      "scale": null
+     },
+     {
+      "name": "gross_proceeds",
+      "value": "$3.7 billion",
+      "number": 3.7,
+      "number_high": null,
+      "unit": "USD",
+      "scale": "billions"
+     },
+     {
+      "name": "coupon_pct",
+      "value": "2.875%",
+      "number": 2.875,
+      "number_high": null,
+      "unit": "percent",
+      "scale": null
+     },
+     {
+      "name": "maturity",
+      "value": "April 1, 2033",
+      "number": null,
+      "number_high": null,
+      "unit": null,
+      "scale": null
+     },
+     {
+      "name": "upsized",
+      "value": "true",
+      "number": null,
+      "number_high": null,
+      "unit": null,
+      "scale": null
+     },
+     {
+      "name": "use_of_proceeds",
+      "value": "approximately $498.8 million of the net proceeds to fund the cost of entering into the capped call transactions",
+      "number": null,
+      "number_high": null,
+      "unit": null,
+      "scale": null
+     },
+     {
+      "name": "stage",
+      "value": "priced",
+      "number": null,
+      "number_high": null,
+      "unit": null,
+      "scale": null
+     }
+    ],
+    "verified": true,
+    "also": []
+   }
+  },
+  {
+   "_case": "crwv_debt",
+   "original": {
+    "uid": "4c7333c51cbac394",
+    "title": "CoreWeave, Inc. (CRWV): Entry into a Material Definitive Agreement",
+    "time_published": "2026-08-10T20:10:22Z",
+    "source": "SEC EDGAR 8-K",
+    "source_domain": "sec.gov"
+   },
+   "enrichment": {
+    "category": "corporate_actions",
+    "tickers": [
+     "CRWV"
+    ],
+    "relevance_score": 6
+   },
+   "event": {
+    "type": "debt_financing",
+    "stage": null,
+    "role": "issuer",
+    "counterparty": null,
+    "facts": [
+     {
+      "name": "instrument",
+      "value": "delayed draw term loan facility",
+      "number": null,
+      "number_high": null,
+      "unit": null,
+      "scale": null
+     },
+     {
+      "name": "amount",
+      "value": "$2.6 billion",
+      "number": 2.6,
+      "number_high": null,
+      "unit": "USD",
+      "scale": "billions"
+     },
+     {
+      "name": "interest_rate",
+      "value": "SOFR + 5.50%",
+      "number": 5.5,
+      "number_high": null,
+      "unit": "percent",
+      "scale": null
+     },
+     {
+      "name": "lender",
+      "value": "JPMorgan and Mitsubishi UFJ Financial Group",
+      "number": null,
+      "number_high": null,
+      "unit": null,
+      "scale": null
+     }
+    ],
+    "verified": false,
+    "also": []
+   }
+  },
+  {
+   "_case": "crwv_earnings",
+   "original": {
+    "uid": "478495deeb370bf1",
+    "title": "CoreWeave Reports Strong Third Quarter 2026 Results",
+    "time_published": "2026-11-10T21:05:53Z",
+    "source": "SEC EDGAR 8-K",
+    "source_domain": "sec.gov"
+   },
+   "enrichment": {
+    "category": "earnings",
+    "tickers": [
+     "CRWV"
+    ],
+    "relevance_score": 9
+   },
+   "event": {
+    "type": "earnings",
+    "stage": null,
+    "role": "issuer",
+    "counterparty": null,
+    "facts": [],
+    "verified": true,
+    "also": [
+     {
+      "type": "guidance_update",
+      "facts": [
+       {
+        "name": "metric",
+        "value": "full year 2026 revenue guidance",
+        "number": null,
+        "number_high": null,
+        "unit": null,
+        "scale": null
+       },
+       {
+        "name": "period",
+        "value": "full year 2026",
+        "number": null,
+        "number_high": null,
+        "unit": null,
+        "scale": null
+       },
+       {
+        "name": "new_value",
+        "value": "$13.0 billion to $13.3 billion",
+        "number": 13.0,
+        "number_high": 13.3,
+        "unit": "USD",
+        "scale": "billions"
+       },
+       {
+        "name": "direction",
+        "value": "raise",
+        "number": null,
+        "number_high": null,
+        "unit": null,
+        "scale": null
+       }
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "_case": "nvda_exec",
+   "original": {
+    "uid": "da6612f0dd2a0322",
+    "title": "NVIDIA CORP (NVDA): Departure of Directors or Certain Officers; Election of Directors; Appointment of Certain Officers: Compensatory Arrangements of Certain Officers",
+    "time_published": "2026-07-02T13:23:16Z",
+    "source": "SEC EDGAR 8-K",
+    "source_domain": "sec.gov"
+   },
+   "enrichment": {
+    "category": "corporate_actions",
+    "tickers": [
+     "NVDA"
+    ],
+    "relevance_score": 6
+   },
+   "event": {
+    "type": "exec_change",
+    "stage": null,
+    "role": "issuer",
+    "counterparty": null,
+    "facts": [
+     {
+      "name": "person_name",
+      "value": "Nicholas Parker",
+      "number": null,
+      "number_high": null,
+      "unit": null,
+      "scale": null
+     },
+     {
+      "name": "title",
+      "value": "Executive Vice President, Worldwide Field Operations",
+      "number": null,
+      "number_high": null,
+      "unit": null,
+      "scale": null
+     },
+     {
+      "name": "action",
+      "value": "appointed",
+      "number": null,
+      "number_high": null,
+      "unit": null,
+      "scale": null
+     },
+     {
+      "name": "effective_date",
+      "value": "August 24, 2026",
+      "number": null,
+      "number_high": null,
+      "unit": null,
+      "scale": null
+     },
+     {
+      "name": "predecessor_name",
+      "value": "Ajay K. Puri",
+      "number": null,
+      "number_high": null,
+      "unit": null,
+      "scale": null
+     }
+    ],
+    "verified": true,
+    "also": []
+   }
+  },
+  {
+   "_case": "nvda_vote",
+   "original": {
+    "uid": "839f733960bcc836",
+    "title": "NVIDIA CORP (NVDA): Submission of Matters to a Vote of Security Holders",
+    "time_published": "2026-06-30T20:27:26Z",
+    "source": "SEC EDGAR 8-K",
+    "source_domain": "sec.gov"
+   },
+   "enrichment": {
+    "category": "corporate_actions",
+    "tickers": [
+     "NVDA"
+    ],
+    "relevance_score": 6
+   },
+   "event": {
+    "type": "shareholder_vote",
+    "stage": null,
+    "role": null,
+    "counterparty": null,
+    "facts": [],
+    "verified": true,
+    "also": []
+   }
+  },
+  {
+   "_case": "nvda_mna",
+   "original": {
+    "uid": "1113632e93b322f4",
+    "title": "NVIDIA CORP (NVDA): Entry into a Material Definitive Agreement",
+    "time_published": "2026-08-17T12:41:33Z",
+    "source": "SEC EDGAR 8-K",
+    "source_domain": "sec.gov"
+   },
+   "enrichment": {
+    "category": "corporate_actions",
+    "tickers": [
+     "NVDA"
+    ],
+    "relevance_score": 6
+   },
+   "event": {
+    "type": "m_and_a",
+    "stage": "announced",
+    "role": "acquirer",
+    "counterparty": "SB Energy",
+    "facts": [
+     {
+      "name": "counterparty",
+      "value": "SB Energy",
+      "number": null,
+      "number_high": null,
+      "unit": null,
+      "scale": null
+     },
+     {
+      "name": "deal_value",
+      "value": "$1.5 billion",
+      "number": 1.5,
+      "number_high": null,
+      "unit": "USD",
+      "scale": "billions"
+     },
+     {
+      "name": "stage",
+      "value": "announced",
+      "number": null,
+      "number_high": null,
+      "unit": null,
+      "scale": null
+     }
+    ],
+    "verified": true,
+    "also": []
+   }
+  },
+  {
+   "_case": "prn_other",
+   "original": {
+    "uid": "18562d46bb7bd73f",
+    "title": "AI Infrastructure Numbers Keep Climbing While the Week's Headlines Turn to the Boardroom",
+    "time_published": "2026-11-12T14:47:00Z",
+    "source": "prnewswire.com",
+    "source_domain": "prnewswire.com"
+   },
+   "enrichment": {
+    "category": "earnings",
+    "tickers": [
+     "NVDA",
+     "TSM",
+     "AMZN",
+     "CRWV"
+    ],
+    "relevance_score": 8
+   },
+   "event": {
+    "type": "other",
+    "stage": null,
+    "role": "other",
+    "counterparty": null,
+    "facts": [],
+    "verified": true,
+    "also": []
+   }
+  },
+  {
+   "_case": "prn_roundup",
+   "original": {
+    "uid": "0fb4cf61cde7b297",
+    "title": "Election Day Trading Splits the Benchmarks, With the Dow Lower and the Nasdaq Higher",
+    "time_published": "2026-11-03T16:31:00Z",
+    "source": "prnewswire.com",
+    "source_domain": "prnewswire.com"
+   },
+   "enrichment": {
+    "category": "market_movers",
+    "tickers": [
+     "PLTR",
+     "NVDA",
+     "PFE",
+     "APO",
+     "IBTA"
+    ],
+    "relevance_score": 6
+   },
+   "event": {
+    "type": "earnings",
+    "stage": null,
+    "role": "issuer",
+    "counterparty": null,
+    "facts": [],
+    "verified": true,
+    "also": [
+     {
+      "type": "guidance_update",
+      "facts": [
+       {
+        "name": "metric",
+        "value": "revenue",
+        "number": null,
+        "number_high": null,
+        "unit": null,
+        "scale": null
+       },
+       {
+        "name": "period",
+        "value": "full-year 2026",
+        "number": null,
+        "number_high": null,
+        "unit": null,
+        "scale": null
+       },
+       {
+        "name": "new_value",
+        "value": "$8.530 billion and $8.534 billion",
+        "number": 8.53,
+        "number_high": 8.534,
+        "unit": "USD",
+        "scale": "billions"
+       },
+       {
+        "name": "direction",
+        "value": "raise",
+        "number": null,
+        "number_high": null,
+        "unit": null,
+        "scale": null
+       }
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "_case": "patk_div",
+   "original": {
+    "uid": "48ed64414be3031a",
+    "title": "Patrick Industries, Inc. Announces Increase to Regular Quarterly Cash Dividend and Replenished Share Repurchase Authorization",
+    "time_published": "2026-11-13T13:30:00Z",
+    "source": "prnewswire.com",
+    "source_domain": "prnewswire.com"
+   },
+   "enrichment": {
+    "category": "corporate_actions",
+    "tickers": [
+     "PATK"
+    ],
+    "relevance_score": 6
+   },
+   "event": {
+    "type": "dividend",
+    "stage": null,
+    "role": "issuer",
+    "counterparty": null,
+    "facts": [
+     {
+      "name": "amount_per_share",
+      "value": "$0.52 per share",
+      "number": 0.52,
+      "number_high": null,
+      "unit": "USD",
+      "scale": null
+     },
+     {
+      "name": "kind",
+      "value": "increase",
+      "number": null,
+      "number_high": null,
+      "unit": null,
+      "scale": null
+     },
+     {
+      "name": "prior_amount_per_share",
+      "value": "$0.47 per share",
+      "number": 0.47,
+      "number_high": null,
+      "unit": "USD",
+      "scale": null
+     },
+     {
+      "name": "frequency",
+      "value": "quarterly",
+      "number": null,
+      "number_high": null,
+      "unit": null,
+      "scale": null
+     },
+     {
+      "name": "record_date",
+      "value": "November 23, 2026",
+      "number": null,
+      "number_high": null,
+      "unit": null,
+      "scale": null
+     },
+     {
+      "name": "payable_date",
+      "value": "December 7, 2026",
+      "number": null,
+      "number_high": null,
+      "unit": null,
+      "scale": null
+     }
+    ],
+    "verified": true,
+    "also": [
+     {
+      "type": "buyback",
+      "facts": [
+       {
+        "name": "authorization_amount",
+        "value": "$200.0 million",
+        "number": 200.0,
+        "number_high": null,
+        "unit": "USD",
+        "scale": "millions"
+       },
+       {
+        "name": "prior_authorization_amount",
+        "value": "$61.9 million",
+        "number": 61.9,
+        "number_high": null,
+        "unit": "USD",
+        "scale": "millions"
+       },
+       {
+        "name": "is_increase",
+        "value": "true",
+        "number": null,
+        "number_high": null,
+        "unit": null,
+        "scale": null
+       }
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "_case": "lcii_target",
+   "original": {
+    "uid": "bffbd22e019a6c54",
+    "title": "LCI Board Determines that the Unsolicited, Non-Binding Proposal from Monomoy Capital Partners Does Not Constitute a Superior Proposal",
+    "time_published": "2026-10-30T11:31:36Z",
+    "source": "SEC EDGAR 8-K",
+    "source_domain": "sec.gov"
+   },
+   "enrichment": {
+    "category": "mergers_acquisitions",
+    "tickers": [
+     "LCII",
+     "PATK"
+    ],
+    "relevance_score": 8
+   },
+   "event": {
+    "type": "m_and_a",
+    "stage": "definitive",
+    "role": "target",
+    "counterparty": "Patrick Industries",
+    "facts": [
+     {
+      "name": "counterparty",
+      "value": "Patrick Industries",
+      "number": null,
+      "number_high": null,
+      "unit": null,
+      "scale": null
+     },
+     {
+      "name": "expected_close",
+      "value": "first half of 2027",
+      "number": null,
+      "number_high": null,
+      "unit": null,
+      "scale": null
+     },
+     {
+      "name": "stage",
+      "value": "definitive",
+      "number": null,
+      "number_high": null,
+      "unit": null,
+      "scale": null
+     }
+    ],
+    "verified": true,
+    "also": []
+   }
+  },
+  {
+   "_case": "cinf_div",
+   "original": {
+    "uid": "a3bec214ddb5205c",
+    "title": "Cincinnati Financial Corporation Declares Regular Quarterly Cash Dividend",
+    "time_published": "2026-11-13T18:01:26Z",
+    "source": "SEC EDGAR 8-K",
+    "source_domain": "sec.gov"
+   },
+   "enrichment": {
+    "category": "corporate_actions",
+    "tickers": [
+     "CINF"
+    ],
+    "relevance_score": 5
+   },
+   "event": {
+    "type": "dividend",
+    "stage": null,
+    "role": "issuer",
+    "counterparty": null,
+    "facts": [
+     {
+      "name": "frequency",
+      "value": "quarterly",
+      "number": null,
+      "number_high": null,
+      "unit": null,
+      "scale": null
+     },
+     {
+      "name": "kind",
+      "value": "regular",
+      "number": null,
+      "number_high": null,
+      "unit": null,
+      "scale": null
+     },
+     {
+      "name": "payable_date",
+      "value": "January 15, 2027",
+      "number": null,
+      "number_high": null,
+      "unit": null,
+      "scale": null
+     },
+     {
+      "name": "record_date",
+      "value": "December 23, 2026",
+      "number": null,
+      "number_high": null,
+      "unit": null,
+      "scale": null
+     }
+    ],
+    "verified": false,
+    "also": []
+   }
+  },
+  {
+   "_case": "fxnc_div",
+   "original": {
+    "uid": "ba0b19a96bdac78f",
+    "title": "FIRST NATIONAL CORPORATION ANNOUNCES 11.8% INCREASE IN QUARTERLY CASH DIVIDENDS",
+    "time_published": "2026-11-13T14:48:36Z",
+    "source": "SEC EDGAR 8-K",
+    "source_domain": "sec.gov"
+   },
+   "enrichment": {
+    "category": "corporate_actions",
+    "tickers": [
+     "FXNC"
+    ],
+    "relevance_score": 5
+   },
+   "event": {
+    "type": "dividend",
+    "stage": null,
+    "role": "issuer",
+    "counterparty": null,
+    "facts": [
+     {
+      "name": "amount_per_share",
+      "value": "$0.19 per share",
+      "number": 0.19,
+      "number_high": null,
+      "unit": "USD",
+      "scale": null
+     },
+     {
+      "name": "frequency",
+      "value": "quarterly",
+      "number": null,
+      "number_high": null,
+      "unit": null,
+      "scale": null
+     },
+     {
+      "name": "kind",
+      "value": "increase",
+      "number": null,
+      "number_high": null,
+      "unit": null,
+      "scale": null
+     },
+     {
+      "name": "prior_amount_per_share",
+      "value": "$0.17 per share",
+      "number": 0.17,
+      "number_high": null,
+      "unit": "USD",
+      "scale": null
+     },
+     {
+      "name": "change_pct",
+      "value": "11.8%",
+      "number": 11.8,
+      "number_high": null,
+      "unit": "percent",
+      "scale": null
+     },
+     {
+      "name": "record_date",
+      "value": "November 27, 2026",
+      "number": null,
+      "number_high": null,
+      "unit": null,
+      "scale": null
+     },
+     {
+      "name": "payable_date",
+      "value": "December 11, 2026",
+      "number": null,
+      "number_high": null,
+      "unit": null,
+      "scale": null
+     }
+    ],
+    "verified": true,
+    "also": []
+   }
+  },
+  {
+   "_case": "rain_mna",
+   "original": {
+    "uid": "a6d3f5a3b4fe724e",
+    "title": "Rain Enhancement Technologies Holdco, Inc. (RAIN): Entry into a Material Definitive Agreement",
+    "time_published": "2026-11-13T14:18:50Z",
+    "source": "SEC EDGAR 8-K",
+    "source_domain": "sec.gov"
+   },
+   "enrichment": {
+    "category": "corporate_actions",
+    "tickers": [
+     "RAIN"
+    ],
+    "relevance_score": 6
+   },
+   "event": {
+    "type": "m_and_a",
+    "stage": "definitive",
+    "role": "acquirer",
+    "counterparty": "Tensor Networks",
+    "facts": [
+     {
+      "name": "counterparty",
+      "value": "Tensor Networks",
+      "number": null,
+      "number_high": null,
+      "unit": null,
+      "scale": null
+     },
+     {
+      "name": "consideration",
+      "value": "stock",
+      "number": null,
+      "number_high": null,
+      "unit": null,
+      "scale": null
+     },
+     {
+      "name": "expected_close",
+      "value": "February 2027",
+      "number": null,
+      "number_high": null,
+      "unit": null,
+      "scale": null
+     },
+     {
+      "name": "stage",
+      "value": "definitive",
+      "number": null,
+      "number_high": null,
+      "unit": null,
+      "scale": null
+     }
+    ],
+    "verified": false,
+    "also": [
+     {
+      "type": "exec_change",
+      "facts": [
+       {
+        "name": "person_name",
+        "value": "Eric Frazier",
+        "number": null,
+        "number_high": null,
+        "unit": null,
+        "scale": null
+       },
+       {
+        "name": "title",
+        "value": "Chief Executive Officer",
+        "number": null,
+        "number_high": null,
+        "unit": null,
+        "scale": null
+       },
+       {
+        "name": "action",
+        "value": "appointed",
+        "number": null,
+        "number_high": null,
+        "unit": null,
+        "scale": null
+       },
+       {
+        "name": "successor_name",
+        "value": "Randy Seidl",
+        "number": null,
+        "number_high": null,
+        "unit": null,
+        "scale": null
+       }
+      ]
+     },
+     {
+      "type": "offering",
+      "facts": [
+       {
+        "name": "gross_proceeds",
+        "value": "$25 million",
+        "number": 25.0,
+        "number_high": null,
+        "unit": "USD",
+        "scale": "millions"
+       },
+       {
+        "name": "stage",
+        "value": "proposed",
+        "number": null,
+        "number_high": null,
+        "unit": null,
+        "scale": null
+       },
+       {
+        "name": "use_of_proceeds",
+        "value": "pay transaction expenses and fund Tensor Networks’ growth and working capital",
+        "number": null,
+        "number_high": null,
+        "unit": null,
+        "scale": null
+       }
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "_case": "tmgi_done",
+   "original": {
+    "uid": "94019f0ae95237f5",
+    "title": "Transglobal Management Group, Inc. (TMGI): Completion of Acquisition or Disposition of Assets",
+    "time_published": "2026-11-13T13:11:27Z",
+    "source": "SEC EDGAR 8-K",
+    "source_domain": "sec.gov"
+   },
+   "enrichment": {
+    "category": "mergers_acquisitions",
+    "tickers": [
+     "TMGI"
+    ],
+    "relevance_score": 7
+   },
+   "event": {
+    "type": "m_and_a",
+    "stage": "completed",
+    "role": "acquirer",
+    "counterparty": "Third Life World platform",
+    "facts": [
+     {
+      "name": "counterparty",
+      "value": "Third Life World platform",
+      "number": null,
+      "number_high": null,
+      "unit": null,
+      "scale": null
+     },
+     {
+      "name": "seller",
+      "value": "Third Life World, LLC",
+      "number": null,
+      "number_high": null,
+      "unit": null,
+      "scale": null
+     },
+     {
+      "name": "stage",
+      "value": "completed",
+      "number": null,
+      "number_high": null,
+      "unit": null,
+      "scale": null
+     }
+    ],
+    "verified": true,
+    "also": [
+     {
+      "type": "exec_change",
+      "facts": [
+       {
+        "name": "person_name",
+        "value": "Marc Angell",
+        "number": null,
+        "number_high": null,
+        "unit": null,
+        "scale": null
+       },
+       {
+        "name": "title",
+        "value": "Chief Executive Officer and President",
+        "number": null,
+        "number_high": null,
+        "unit": null,
+        "scale": null
+       },
+       {
+        "name": "action",
+        "value": "resigned",
+        "number": null,
+        "number_high": null,
+        "unit": null,
+        "scale": null
+       },
+       {
+        "name": "effective_date",
+        "value": "November 12, 2026",
+        "number": null,
+        "number_high": null,
+        "unit": null,
+        "scale": null
+       }
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "_case": "hbm_6k",
+   "original": {
+    "uid": "001febc1c87be7ce",
+    "title": "Hudbay Minerals Inc. (HBM): Financial results for Q3 2026",
+    "time_published": "2026-11-13T17:30:47Z",
+    "source": "SEC EDGAR 6-K",
+    "source_domain": "sec.gov"
+   },
+   "enrichment": {
+    "category": "earnings",
+    "tickers": [
+     "HBM"
+    ],
+    "relevance_score": 8
+   },
+   "event": {
+    "type": "earnings",
+    "stage": null,
+    "role": "issuer",
+    "counterparty": null,
+    "facts": [],
+    "verified": false,
+    "also": [
+     {
+      "type": "guidance_update",
+      "facts": [
+       {
+        "name": "period",
+        "value": "full year 2026",
+        "number": null,
+        "number_high": null,
+        "unit": null,
+        "scale": null
+       },
+       {
+        "name": "new_value",
+        "value": "$(0.55) to $(0.35) per pound of copper",
+        "number": 0.55,
+        "number_high": null,
+        "unit": null,
+        "scale": null
+       },
+       {
+        "name": "prior_value",
+        "value": "$(0.45) to $(0.25) per pound of copper",
+        "number": 0.45,
+        "number_high": null,
+        "unit": null,
+        "scale": null
+       },
+       {
+        "name": "direction",
+        "value": "lower",
+        "number": null,
+        "number_high": null,
+        "unit": null,
+        "scale": null
+       }
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "_case": "cvlt_exec",
+   "original": {
+    "uid": "ad8eaa89348338ab",
+    "title": "COMMVAULT SYSTEMS INC (CVLT): Departure of Directors or Certain Officers; Election of Directors; Appointment of Certain Officers: Compensatory Arrangements of Certain Officers",
+    "time_published": "2026-11-13T13:30:57Z",
+    "source": "SEC EDGAR 8-K",
+    "source_domain": "sec.gov"
+   },
+   "enrichment": {
+    "category": "corporate_actions",
+    "tickers": [
+     "CVLT"
+    ],
+    "relevance_score": 6
+   },
+   "event": {
+    "type": "exec_change",
+    "stage": null,
+    "role": "issuer",
+    "counterparty": null,
+    "facts": [
+     {
+      "name": "person_name",
+      "value": "Danielle Abrahamsen",
+      "number": null,
+      "number_high": null,
+      "unit": null,
+      "scale": null
+     },
+     {
+      "name": "title",
+      "value": "Interim Chief Financial Officer",
+      "number": null,
+      "number_high": null,
+      "unit": null,
+      "scale": null
+     },
+     {
+      "name": "action",
+      "value": "appointed",
+      "number": null,
+      "number_high": null,
+      "unit": null,
+      "scale": null
+     },
+     {
+      "name": "effective_date",
+      "value": "December 1, 2026",
+      "number": null,
+      "number_high": null,
+      "unit": null,
+      "scale": null
+     },
+     {
+      "name": "predecessor_name",
+      "value": "Gary Merrill",
+      "number": null,
+      "number_high": null,
+      "unit": null,
+      "scale": null
+     }
+    ],
+    "verified": true,
+    "also": [
+     {
+      "type": "guidance_update",
+      "facts": [
+       {
+        "name": "metric",
+        "value": "third quarter and fiscal year 2027 guidance",
+        "number": null,
+        "number_high": null,
+        "unit": null,
+        "scale": null
+       },
+       {
+        "name": "period",
+        "value": "fiscal year 2027",
+        "number": null,
+        "number_high": null,
+        "unit": null,
+        "scale": null
+       },
+       {
+        "name": "direction",
+        "value": "reaffirm",
+        "number": null,
+        "number_high": null,
+        "unit": null,
+        "scale": null
+       }
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "_case": "patk_news",
+   "original": {
+    "uid": "b33180150afb1761",
+    "title": "StoneX reiterates Buy rating on Patrick Industries stock at $100",
+    "time_published": "2026-11-12T15:56:55Z",
+    "source": "investing.com",
+    "source_domain": "investing.com"
+   },
+   "enrichment": {
+    "category": "earnings",
+    "tickers": [
+     "PATK"
+    ],
+    "relevance_score": 4
+   },
+   "event": null
+  }
+ ]
+}

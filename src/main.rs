@@ -5,6 +5,7 @@ mod cache;
 mod category;
 mod config;
 mod domain;
+mod event;
 mod indicators;
 mod keymap;
 mod market;
@@ -70,13 +71,24 @@ struct Args {
 
     /// Print those quotes as JSON instead of a text table, for status bars
     /// and scripts (implies --once)
-    #[arg(long, conflicts_with = "earnings")]
+    #[arg(long, conflicts_with_all = ["earnings", "events"])]
     json: bool,
 
     /// Print the latest AlphAI earnings read for one ticker and exit
     /// (no TUI); needs an API key. One request.
     #[arg(long, value_name = "TICKER", value_parser = domain::normalize_symbol)]
     earnings: Option<String>,
+
+    /// Print one ticker's corporate events from its SEC filings and press
+    /// releases (offerings, deals, dividends, guidance...) and exit (no TUI);
+    /// needs an API key. One request.
+    #[arg(
+        long,
+        value_name = "TICKER",
+        value_parser = domain::normalize_symbol,
+        conflicts_with = "earnings"
+    )]
+    events: Option<String>,
 
     /// Use an alternate config file (the settings screen saves back to it)
     #[arg(long, value_name = "PATH")]
@@ -137,6 +149,9 @@ fn main() -> Result<()> {
     }
     if let Some(ticker) = args.earnings.as_deref() {
         return print_earnings(&rt, cfg.alphai_key(), ticker);
+    }
+    if let Some(ticker) = args.events.as_deref() {
+        return print_events(&rt, cfg.alphai_key(), ticker);
     }
 
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
@@ -258,14 +273,72 @@ fn startup_symbols(cli: &[String], saved: &[String]) -> Result<Vec<String>> {
         .collect()
 }
 
+/// What the one-shot AlphAI commands print without a key.
+fn print_no_key() {
+    println!(
+        "no AlphAI API key. Get a free one at https://alphai.io (Account -> API keys),\n             then set ALPHAI_API_KEY or press s in the app to save it."
+    );
+}
+
+/// `--events TICKER`: the ticker's corporate events, newest first, one
+/// block per filing or release: the date, the label the app's list shows
+/// (`offering`, `dividend ↑`, `8-K guide↑`), the event's figures or the
+/// document's headline, and what else the document announced. One request,
+/// and every value prints as the document wrote it, units aside.
+fn print_events(rt: &tokio::runtime::Runtime, key: Option<String>, ticker: &str) -> Result<()> {
+    use crate::app::NewsScope;
+    let Some(key) = key else {
+        print_no_key();
+        return Ok(());
+    };
+    let ticker = ticker.to_uppercase();
+    let client = alphai::Client::new(key)?;
+    let page = rt.block_on(client.events(&ticker, None, Some(alphai::PAGE_SIZE)))?;
+    if page.results.is_empty() {
+        println!("no corporate events for {ticker} in the archive yet.");
+        return Ok(());
+    }
+    println!("{ticker} corporate events, newest first:");
+    for a in &page.results {
+        let date = a
+            .published()
+            .map(|t| t.format("%Y-%m-%d").to_string())
+            .unwrap_or_default();
+        let (label, _) = ui::news::category_label(a, NewsScope::Events, &ticker);
+        let title = event::row_title(a, NewsScope::Events, &ticker, usize::MAX);
+        println!("\n{date}  {label:<11}  {}", title.text);
+        if let Some(detail) = title.detail {
+            println!("{:>25}{detail}", "");
+        }
+        if let Some(e) = event::for_row(a, NewsScope::Events, &ticker) {
+            let extra = if e.kind == "earnings" {
+                event::release_lines(e)
+            } else {
+                e.also.iter().map(event::also_line).collect()
+            };
+            for line in extra {
+                println!("{:>25}also: {line}", "");
+            }
+        }
+        if let Some(url) = a.alphai_url() {
+            println!("{:>25}{url}", "");
+        }
+    }
+    println!(
+        "\nvalues quoted from the documents; type and role read by AI, so check the filing before acting."
+    );
+    if page.next_cursor.is_some() {
+        println!("older events: open the Events scope in the app (f in News) and page down.");
+    }
+    Ok(())
+}
+
 /// `--earnings TICKER`: the newest earnings read in plain text, for a pipe
 /// or a tmux pane. One request, and the figures print exactly as the filing
 /// wrote them.
 fn print_earnings(rt: &tokio::runtime::Runtime, key: Option<String>, ticker: &str) -> Result<()> {
     let Some(key) = key else {
-        println!(
-            "no AlphAI API key. Get a free one at https://alphai.io (Account -> API keys),\n             then set ALPHAI_API_KEY or press s in the app to save it."
-        );
+        print_no_key();
         return Ok(());
     };
     let ticker = ticker.to_uppercase();
@@ -636,9 +709,17 @@ mod tests {
         for args in [
             vec!["alphai-tui", "NASDAQ COMPOSITE"],
             vec!["alphai-tui", "--earnings", "NASDAQ COMPOSITE"],
+            vec!["alphai-tui", "--events", "NASDAQ COMPOSITE"],
         ] {
             let error = Args::try_parse_from(args).unwrap_err().to_string();
             assert!(error.contains("use a ticker without spaces"), "{error}");
+        }
+        // One-shot outputs exclude each other rather than one silently winning.
+        for args in [
+            vec!["alphai-tui", "--json", "--events", "AAPL"],
+            vec!["alphai-tui", "--earnings", "AAPL", "--events", "AAPL"],
+        ] {
+            assert!(Args::try_parse_from(args).is_err());
         }
         let saved = vec!["AAPL".into(), "NASDAQ COMPOSITE".into()];
         let error = startup_symbols(&[], &saved).unwrap_err().to_string();

@@ -112,7 +112,7 @@ The card starts with the selected ticker's AI impact and explanation,
 followed by the general summary and other companies. The selected ticker
 keeps its place even when it appears later in the provider's analysis.
 
-The feed shows articles scoring 7 and up by default. `+` and `-` move that
+The feed shows articles scoring 5 and up by default. `+` and `-` move that
 bar live, the server does the filtering, so nothing you filtered out eats a
 slot on the page.
 
@@ -126,6 +126,24 @@ ticker and market scopes; trending is a curated top ten and stays as it is.
 To start every session with a choice, set `news_categories` or
 `news_exclude_categories` in the config.
 
+Filings and press releases that report a corporate event name the event in
+that column instead: `offering`, `debt`, `M&A`, `exec`, `buyback`,
+`dividend ↑` for a raised dividend, `guide ↓` for a lowered outlook. An
+earnings filing reads `8-K guide↑` when the release also raised its
+guidance. The SEC's generic headings, such as "Entry into a Material
+Definitive Agreement", give way to the event's figures, for example
+`$3.7B · priced · upsized · 2.875% convertible senior notes due 2033`.
+The same summary stands in for a headline the list is too narrow to
+show, and follows the headline when there is room for both. The card
+lists the facts as the document words them, names the company that
+reported the event and its role in it, and says when AlphAI withheld a
+fact it could not find in the text. The values are quoted from the
+document, while the type and the role are read by AI, so check the
+filing before acting on them. Most 8-K filings score 5 or 6, so a bar
+raised past 5 with `+` hides them. With reprints collapsed, a filing that
+joined a story an outlet started sits under that story's row; the events
+scope below never groups.
+
 Articles fresher than 15 minutes light up their age, and
 rows that arrived since you last looked carry a `●` that goes out once the
 cursor rests on them. New arrivals are placed at the top of the list even
@@ -136,7 +154,7 @@ and never be seen.
 The ticker's chart sits over the list and the card beside them. The article
 you are reading is the highlighted mark on the chart and the chart's bottom
 line names it, so the story and the move it came with are on one screen.
-That needs a terminal at least 120 columns wide and the ticker scope;
+That needs a terminal at least 120 columns wide and the ticker or events scope;
 elsewhere the list and the card stand side by side. `x` cycles to list over
 card and to list beside card without the chart, and the News layout row in
 the settings screen saves the choice. `v` opens the article for reading:
@@ -146,8 +164,14 @@ the next page.
 
 ![alphai-tui news view in the market-wide scope: filings marked 8-K and 6-K, insider rows, reprints collapsed with an outlet count, and an earnings read available for the selected filing](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/market.png)
 
-`f` cycles the scope: the selected ticker, the whole market, or the 48-hour
-trending top ten. Ticker and market news collapse reprints into one row by
+`f` cycles the scope: the selected ticker, its corporate events, the whole
+market, or the 48-hour trending top ten. The events scope is the company's
+ledger: only its filings and press releases that report an event, newest
+first, from offerings and debt to deals, executive changes, dividends,
+buybacks and guidance, going back to June 2026 within your plan's archive.
+It ignores the score and category filters, refreshes once per cache window
+like trending, and once loaded its events also mark the price chart, so an
+offering months ago shows on the candle it moved. Ticker and market news collapse reprints into one row by
 default and say how many outlets carry the story (`×4`). In `s` settings,
 turn **Collapse news** off and Save to see every article, or set
 `collapse_news = false` under `[ui]` in the config file. Save refreshes the
@@ -191,9 +215,12 @@ a trade from a candle close. With the quote rail hidden, the chart title
 also carries the quote, currency and daily change.
 
 The ticker's news is marked on the candles it was published in: `▲` and
-`▼` for the AI sentiment call, `◆` when it is neutral, brighter for a
-higher relevance score, and the freshest of them named on the bottom
-border. So the move and its reason share a column instead of living in
+`▼` for the AI sentiment call, `◆` when it is neutral, drawn in outline
+(`△ ▽ ◇`) for a filing or release reporting the company's own corporate
+event, brighter for a higher relevance score, and the freshest of them
+named on the bottom border. An event that can move a stock on its own,
+such as an offering, a deal or a dividend cut, counts two points higher
+than the coverage it shares a candle with. So the move and its reason share a column instead of living in
 different views. `n` turns the marks off. They are drawn from the news the
 app already holds for that ticker, which the Split and News views keep
 fresh, so they never cost an API request and they are simply absent until
@@ -270,6 +297,10 @@ against the filing text before it was published, and it prints exactly as
 the filing wrote it, units shortened and nothing rounded into a new number.
 American and foreign filings both (an 8-K item 2.02, or a foreign private
 issuer's 6-K with its half years and its own currency).
+
+When the release also announced something else, a buyback, a dividend or a
+change to the outlook, the read lists it under **Also in this release**,
+taken from the filing's row in the news or events feed already loaded.
 
 `←` `→` walk the watchlist, older quarters continue below the newest read.
 When a company has not reported since AlphAI began reading filings, the
@@ -591,6 +622,7 @@ alphai-tui -s finnhub NVDA  # explicit source for one run
 | `--once` | | Print quotes to stdout and exit |
 | `--json` | | Print those quotes as JSON instead of a text table (implies `--once`) |
 | `--earnings TICKER` | | Print the latest earnings read to stdout and exit (needs an AlphAI key; one request) |
+| `--events TICKER` | | Print the ticker's corporate events to stdout and exit (needs an AlphAI key; one request) |
 | `--config` | | Use an alternate config file (Save writes back to it) |
 
 `-r` and `-i` set the startup window; the `t` key cycles the preset
@@ -727,7 +759,7 @@ defaults. API keys can also come from env vars, which win over the config:
 | `PgUp` `PgDn` | earnings | page through the read |
 | `PgUp` `PgDn` | calendar | move ten events |
 | `↓` / `j` on the last row | news, insider | load the next page of the feed |
-| `f` | news, split | cycle news scope: selected ticker, whole market, trending |
+| `f` | news, split | cycle news scope: selected ticker, its events, whole market, trending |
 | `+` / `-` | news, insider, split | raise / lower the visible feed's score filter (news: relevance, starts at 7; insider: trade size, starts at 4) |
 | `C` | news, split | pick the news categories to show: `space` toggles, `o` only this one, `a` all, `Enter` applies, `Esc` cancels |
 | `g` | insider | cycle the trades chart window: 3 months, 12 months, off |
@@ -963,10 +995,12 @@ Three things happen here instead:
   article carries validated tickers, a category, a deterministic 1 to 10
   relevance score and a full per-ticker AI analysis (sentiment, price
   impact, confidence, novelty, actionability); insider rows are generated
-  from SEC EDGAR Form 4 filings, one row per economic event. The free tier
+  from SEC EDGAR Form 4 filings, one row per economic event; 8-K filings
+  and press releases carry the corporate event they report, with facts
+  quoted from the document, in the same response. The free tier
   (no card) allows 20 requests/min and 100/day. The app is careful with
   that budget: news and insider feeds fetch only what the visible view needs
-  (the trending scope is one extra request), and cache each response for 5 minutes
+  (the trending and events scopes are one extra request each), and cache each response for 5 minutes
   (`[ui] alphai_ttl_secs` in the config changes that), loads
   further pages only when you ask for them, and the article card reuses
   data already fetched with the list. The refresh at the end of that cache
@@ -1055,10 +1089,10 @@ animations = true         # price color fades and refresh spinner; also in setti
 mouse = true              # clicks and the wheel; false leaves the mouse to the terminal (M toggles)
 synchronized_output = true # use synchronized frames only when terminfo advertises support
 news_layout = "chart"     # chart | stacked | side (also a row in the settings screen)
-news_scope = "ticker"     # ticker | market | trending
+news_scope = "ticker"     # ticker | events | market | trending
 collapse_news = true      # one row per story in ticker and market news; settings can toggle it
 borders = "rounded"       # frame lines: rounded | plain, or none for tinted panels (also a settings row)
-news_min_score = 7        # minimum relevance score in news feeds, 1 to 10
+news_min_score = 5        # minimum relevance score in news feeds, 1 to 10
 news_categories = []      # only these categories, e.g. ["earnings", "m&a"]; empty means all
 news_exclude_categories = []  # or all but these, e.g. ["crypto", "other"]
 insider_min_score = 4     # insider feed filter; the score tracks trade size

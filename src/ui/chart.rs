@@ -555,6 +555,7 @@ fn render_price_candles(
             &display,
             drawn.interval,
             focus.as_deref(),
+            symbol,
         )
     } else {
         Vec::new()

@@ -81,13 +81,13 @@ pub fn render(f: &mut Frame, app: &mut App) {
     } else {
         format!("{} of {} shown", picker.draft.shown(), category::ALL.len())
     };
-    // Trending is a fixed top ten picked on the server: the choice applies
-    // to the ticker and market scopes, and saying so beats a filter that
-    // silently does nothing.
-    let note = if app.news_scope == NewsScope::Trending {
-        " · not for trending"
-    } else {
-        ""
+    // Trending is a fixed top ten picked on the server and events filter by
+    // event type: the choice applies to the ticker and market scopes, and
+    // saying so beats a filter that silently does nothing.
+    let note = match app.news_scope {
+        NewsScope::Trending => " · not for trending",
+        NewsScope::Events => " · not for events",
+        _ => "",
     };
     f.render_widget(
         Paragraph::new(Line::from(format!(" {shown}{note}")).style(theme.subtle())),

@@ -86,7 +86,13 @@ impl View for NewsView {
         let [head, main] =
             Layout::vertical([Constraint::Length(1), Constraint::Min(3)]).areas(area);
 
-        f.render_widget(head_line(app, bundle.sentiment()), head);
+        // The Events scope fetches no rollup of its own; the ticker's news
+        // feed carries one when it is loaded.
+        let sentiment = match scope {
+            NewsScope::Events => app.feeds.get(&symbol).and_then(|b| b.sentiment()),
+            _ => bundle.sentiment(),
+        };
+        f.render_widget(head_line(app, sentiment), head);
 
         if bundle.articles.is_empty() {
             let msg = empty_feed_message(scope, &label, app.news_min_score, app.news_categories);
@@ -162,7 +168,11 @@ impl View for NewsView {
         }
 
         let now = Utc::now();
-        let widths = article_widths(scope, full, category_width(&bundle.articles));
+        let widths = article_widths(
+            scope,
+            full,
+            category_width(&bundle.articles, scope, &symbol),
+        );
         let ctx = RowCtx {
             scope,
             symbol: &symbol,
@@ -238,7 +248,7 @@ fn panes(layout: NewsLayout, scope: NewsScope, main: Rect) -> NewsPanes {
             NewsPanes::Stacked { list, card }
         }
         NewsLayout::Chart => {
-            let fits = scope == NewsScope::Ticker
+            let fits = scope.is_ticker()
                 && main.width >= CHART_LAYOUT_MIN_WIDTH
                 && main.height >= CHART_MIN_HEIGHT + CHART_LIST_MIN_HEIGHT;
             match side(main) {
@@ -297,6 +307,7 @@ pub(crate) fn feed_bottom_hint(
 fn news_title(scope: NewsScope, label: &str, min_score: u8, categories: Categories) -> String {
     match (scope, categories.label()) {
         (NewsScope::Trending, _) => format!(" News · {label} "),
+        (NewsScope::Events, _) => format!(" Events · {label} "),
         (_, Some(picked)) => format!(" News · {label} · score {min_score}+ · {picked} "),
         (_, None) => format!(" News · {label} · score {min_score}+ "),
     }
@@ -312,6 +323,9 @@ fn empty_feed_message(
 ) -> String {
     if scope == NewsScope::Trending {
         return "no trending stories right now".to_string();
+    }
+    if scope == NewsScope::Events {
+        return format!("no corporate events for {label} in the archive yet");
     }
     let mut filters = Vec::new();
     let mut keys = Vec::new();
@@ -376,10 +390,15 @@ pub fn render_panel(f: &mut Frame, area: Rect, app: &mut App) {
 
     let now = Utc::now();
     // The strip has no cursor, so no marker column to account for.
-    let widths = article_widths(scope, false, category_width(&bundle.articles));
+    let symbol = app.selected_symbol();
+    let widths = article_widths(
+        scope,
+        false,
+        category_width(&bundle.articles, scope, symbol),
+    );
     let ctx = RowCtx {
         scope,
-        symbol: app.selected_symbol(),
+        symbol,
         now,
         full: false,
         theme: &app.theme,
@@ -431,7 +450,7 @@ fn article_row(a: &Article, ctx: &RowCtx, unseen: bool) -> Row<'static> {
     if full {
         cells.push(novelty_cell(a.novelty(), theme));
     }
-    if scope == NewsScope::Ticker {
+    if scope.is_ticker() {
         cells.push(sentiment_cell(a.sentiment_for(symbol), theme));
     } else {
         let tickers: Vec<&str> = a
@@ -444,15 +463,43 @@ fn article_row(a: &Article, ctx: &RowCtx, unseen: bool) -> Row<'static> {
         cells.push(Cell::from(tickers.join(",")).bold());
     }
     cells.push(sources_cell(a.sources_badge(), theme));
-    cells.push(category_cell(a, theme));
-    cells.push(title_cell(
-        a.original.title.clone(),
-        Style::new(),
+    cells.push(category_cell(a, scope, symbol, theme));
+    let room = if unseen {
+        title_w.saturating_sub(2)
+    } else {
+        title_w
+    };
+    let title = crate::event::row_title(a, scope, symbol, room);
+    cells.push(title_cell_with(
+        title.text.into_owned(),
+        title.detail,
         unseen,
         theme,
         title_w,
     ));
     Row::new(cells)
+}
+
+/// `title_cell` with an optional detail after the title: a corporate
+/// event's summary, set off in the subtle tier, which `event::row_title`
+/// only offers when title and detail both fit.
+fn title_cell_with(
+    title: String,
+    detail: Option<String>,
+    unseen: bool,
+    theme: &Theme,
+    width: usize,
+) -> Cell<'static> {
+    let Some(detail) = detail else {
+        return title_cell(title, Style::new(), unseen, theme, width);
+    };
+    let mut spans = Vec::new();
+    if unseen {
+        spans.push(Span::styled("● ", Style::new().fg(theme.accent)));
+    }
+    spans.push(Span::raw(title));
+    spans.push(Span::styled(format!("  {detail}"), theme.subtle()));
+    Cell::from(Line::from(spans))
 }
 
 /// Title cell of a feed row; rows new since the reader last looked carry
@@ -500,7 +547,7 @@ fn article_widths(scope: NewsScope, full: bool, category_w: u16) -> Vec<Constrai
     if full {
         widths.push(Constraint::Length(2)); // novelty
     }
-    if scope == NewsScope::Ticker {
+    if scope.is_ticker() {
         widths.push(Constraint::Length(2)); // sentiment glyph
     } else {
         widths.push(Constraint::Length(12)); // tickers
@@ -531,6 +578,12 @@ fn head_line(app: &App, sentiment: Option<&crate::alphai::SentimentSummary>) -> 
                     app.selected_symbol()
                 ))
                 .style(app.theme.subtle()),
+            );
+        }
+        NewsScope::Events => {
+            return Paragraph::new(
+                Line::from(" corporate events · SEC filings and press releases · f: market")
+                    .style(app.theme.subtle()),
             );
         }
         NewsScope::Ticker => {}
@@ -691,48 +744,60 @@ fn sources_cell(count: Option<i64>, theme: &Theme) -> Cell<'static> {
     }
 }
 
-/// The category cell, except on the earnings filing itself: there it names
-/// the form (8-K, or a foreign private issuer's 6-K) in the accent color.
-/// Coverage of the same quarter is also categorised "earnings", but only the
-/// filing carries a structured read, and in a busy feed that is the row a
-/// reader is looking for. Every other row names its category, the
-/// catch-all "other" included: left blank, a third of a ticker's feed read
-/// as if the column was not there. A category this build does not know yet
-/// shows as the server spells it.
-fn category_cell(a: &Article, theme: &Theme) -> Cell<'static> {
-    let style = if alphai::is_earnings_filing(a) {
+/// The category cell. Every row names its category, the catch-all "other"
+/// included: left blank, a third of a ticker's feed read as if the column
+/// was not there. Primary documents name themselves instead (see
+/// `category_label`). A category this build does not know yet shows as the
+/// server spells it.
+fn category_cell(a: &Article, scope: NewsScope, symbol: &str, theme: &Theme) -> Cell<'static> {
+    let (label, highlight) = category_label(a, scope, symbol);
+    let style = if highlight {
         Style::new().fg(theme.accent)
     } else {
         theme.subtle()
     };
-    Cell::from(category_label(a)).style(style)
+    Cell::from(label).style(style)
 }
 
-fn category_label(a: &Article) -> String {
+/// The category column's text, and whether it names a primary document (a
+/// filing or a release with a typed event) rather than coverage: those are
+/// drawn in the accent. An earnings filing names its form, with `guide↑` or
+/// `guide↓` when the release also moved its outlook (a bare arrow would read
+/// as a verdict on the quarter). Any other typed event names itself
+/// (`offering`, `m&a`, `dividend ↑`).
+pub(crate) fn category_label(a: &Article, scope: NewsScope, symbol: &str) -> (String, bool) {
+    let event = crate::event::for_row(a, scope, symbol);
     if alphai::is_earnings_filing(a) {
         let form = if a.original.source.contains("6-K") {
             "6-K"
         } else {
             "8-K"
         };
-        return form.into();
+        return match event.and_then(crate::event::guidance_arrow) {
+            Some(arrow) => (format!("{form} guide{arrow}"), true),
+            None => (form.into(), true),
+        };
     }
-    match a.enrichment.category.as_deref() {
+    if let Some(e) = event.filter(|e| e.kind != "earnings") {
+        return (crate::event::label(e), true);
+    }
+    let category = match a.enrichment.category.as_deref() {
         Some(api) => {
             category::by_api(api).map_or_else(|| api.replace('_', " "), |c| c.short.into())
         }
         None => String::new(),
-    }
+    };
+    (category, false)
 }
 
 /// The category column fits the longest label among the feed's rows, up to
 /// the longest one there is: a feed of earnings and m&a keeps the title room
 /// that "geopolitics" would take, which on a narrow list is the difference
 /// between a readable ticker column and a cut one.
-fn category_width(articles: &[Article]) -> u16 {
+fn category_width(articles: &[Article], scope: NewsScope, symbol: &str) -> u16 {
     let longest = articles
         .iter()
-        .map(|a| category_label(a).width())
+        .map(|a| category_label(a, scope, symbol).0.width())
         .max()
         .unwrap_or(0);
     (longest as u16).clamp(3, category::COLUMN_WIDTH)

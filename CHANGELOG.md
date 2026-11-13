@@ -5,6 +5,45 @@ the crates.io releases; from 0.7.0 on each one is also a git tag and a
 GitHub release with prebuilt binaries. The Homebrew tap, the AUR and the
 apt repository joined later, and carry every version since.
 
+## 0.41.0 - 2026-11-13
+
+- News rows from 8-K filings, 6-K earnings releases and PR Newswire name the
+  corporate event they report in the category column: `offering`, `debt`,
+  `M&A`, `exec`, `buyback`, `dividend ↑`, `guide ↓` and so on. An earnings
+  filing reads `8-K guide↑` or `8-K guide↓` when the release also moved
+  its guidance.
+- The SEC's generic 8-K headings give way to the event's figures in the
+  list, for example `$3.7B · priced · upsized · 2.875% convertible senior
+  notes due 2033`. The same summary replaces a headline too narrow to
+  read and follows one when both fit. The card keeps the filing's own title.
+- The article card opens a filing with an Event section: the type, stage
+  and kind, the company that reported it and its role, each fact as the
+  document words it, other events the same document announced, and a note
+  when a value was withheld because it could not be found in the text. An
+  earnings release lists what else it announced under its read.
+- On the candle chart a filing or release reporting the company's own event
+  is marked in outline (`△ ▽ ◇`), and an event that can move the stock on
+  its own (an offering, a deal, a dividend change) counts two points higher
+  than coverage in the same candle. The bottom line names it by the event.
+- All of it comes with the news already fetched, at no extra request.
+- The news feed now starts at relevance 5 instead of 7. Most 8-K filings
+  score 5 or 6, so the old bar hid nearly every event above.
+  `news_min_score = 7` under `[ui]` keeps the old feed, and `+` / `-` still
+  move the bar for the session.
+- A press release naming more than two tickers is a market roundup with no
+  single reporter, and shows no event.
+- A new events scope sits after the ticker in the `f` cycle: the company's
+  corporate events alone, newest first, months deep, from its filings and
+  press releases. It ignores the score and category filters and refreshes
+  once per cache window, one request, like trending. Once it has loaded,
+  its events mark the price chart too, so an offering from months ago sits
+  on its candle. `news_scope = "events"` under `[ui]` starts there.
+- The Earnings view lists what a release announced besides its results (a
+  buyback, a dividend, a guidance change) under **Also in this release**,
+  from the feed rows already loaded.
+- `--events TICKER` prints a ticker's corporate events and exits, one
+  request.
+
 ## 0.40.0 - 2026-11-07
 
 - Calendar now combines macro releases with AlphAI's batched earnings calendar

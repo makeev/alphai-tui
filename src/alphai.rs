@@ -233,6 +233,35 @@ impl Client {
         self.get_json("/api/news/", &query).await
     }
 
+    /// One page of a ticker's corporate events: its rows whose `event`
+    /// block is of a real type (`event::QUERY_TYPES`, everything but the
+    /// catch-all `other`), as the main event or one in `also`. No
+    /// `collapse`: with it the filter only sees a story's representative,
+    /// and a filing inside a story some outlet started would never come
+    /// back. No `sort`: `ingested` with `event_type` is a 400, because a row
+    /// gets its event after it enters the feed. No `min_relevance`: the
+    /// server's floor of 4 keeps every filing (they score 5 and up) and
+    /// drops the press-release noise below it.
+    pub async fn events(
+        &self,
+        symbol: &str,
+        cursor: Option<&str>,
+        page_size: Option<u8>,
+    ) -> Result<NewsPage> {
+        let mut query: Vec<(&str, &str)> = vec![
+            ("symbol", symbol),
+            ("event_type", crate::event::QUERY_TYPES),
+        ];
+        if let Some(c) = cursor {
+            query.push(("cursor", c));
+        }
+        let size = page_size.map(|n| n.to_string());
+        if let Some(size) = &size {
+            query.push(("page_size", size));
+        }
+        self.get_json("/api/news/", &query).await
+    }
+
     /// Top 10 stories of the trailing 48h (relevance 8+, server-collapsed).
     /// The response is a bare array, not the paginated news shape.
     pub async fn trending(&self) -> Result<Vec<Article>> {
@@ -421,6 +450,13 @@ pub enum Cmd {
     },
     /// Fetch the 48h trending top 10 (cached under `TRENDING_KEY`).
     FetchTrending,
+    /// Fetch one ticker's corporate events (cached under `events_key`); a
+    /// cursor pages. Published order only: the server has no delta feed of
+    /// events, so the app refetches the head on the TTL like trending.
+    FetchEvents {
+        symbol: String,
+        cursor: Option<String>,
+    },
     /// Fetch the insider feed + the Form 4 chart bundle for one symbol; a
     /// cursor pages. `min_relevance` works as in `FetchNews` (insider
     /// scores track the trade size, so this is effectively a size filter).
@@ -526,6 +562,12 @@ pub fn insider_key(symbol: &str) -> String {
     format!("ins:{symbol}")
 }
 
+/// Cache key for a ticker's corporate events feed (kept distinct from its
+/// news, which the same symbol keys).
+pub fn events_key(symbol: &str) -> String {
+    format!("ev:{symbol}")
+}
+
 /// Cache key for a ticker's earnings reads (kept distinct from feed keys).
 pub fn earnings_key(symbol: &str) -> String {
     format!("earn:{symbol}")
@@ -544,6 +586,7 @@ pub const CALENDAR_LOOKBACK_DAYS: i64 = 7;
 enum Feed<'a> {
     News(Option<&'a str>, NewsFilters),
     Insider(&'a str, Option<u8>),
+    Events(&'a str),
 }
 
 /// Fetch one feed page, self-tuning the page size to the key's tier.
@@ -574,6 +617,7 @@ async fn fetch_feed_page(
                     .insider_news(symbol, cursor, Some(50), *min, sort)
                     .await
             }
+            Feed::Events(symbol) => client.events(symbol, cursor, Some(50)).await,
         };
         match result {
             Ok(page) => {
@@ -598,6 +642,7 @@ async fn fetch_feed_page(
                 .insider_news(symbol, cursor, Some(PAGE_SIZE), *min, sort)
                 .await
         }
+        Feed::Events(symbol) => client.events(symbol, cursor, Some(PAGE_SIZE)).await,
     }
 }
 
@@ -734,6 +779,37 @@ pub async fn run(
                         key,
                         error: format!("{e:#}"),
                     },
+                };
+                if tx.send(SourceEvent::Alphai(event)).is_err() {
+                    return;
+                }
+            }
+            Cmd::FetchEvents { symbol, cursor } => {
+                let key = events_key(&symbol);
+                let Some(client) = &client else {
+                    send_error(&tx, key, "no AlphAI API key configured");
+                    continue;
+                };
+                let mode = feed_mode(Sort::Published, cursor.as_deref());
+                let page = fetch_feed_page(
+                    client,
+                    Feed::Events(&symbol),
+                    cursor.as_deref(),
+                    Sort::Published,
+                    &mut page50,
+                )
+                .await;
+                let event = match page {
+                    Ok(p) => Event::Feed {
+                        key,
+                        articles: p.results,
+                        side: None,
+                        next_cursor: p.next_cursor,
+                        mode,
+                        min_relevance: None,
+                        categories: Categories::default(),
+                    },
+                    Err(e) => error_event(key, e, mode, cursor.as_deref()),
                 };
                 if tx.send(SourceEvent::Alphai(event)).is_err() {
                     return;
@@ -913,6 +989,167 @@ pub struct Article {
     /// None on news rows and on insider rows without transaction data.
     #[serde(default)]
     pub insider: Option<InsiderEvent>,
+    /// The corporate event an SEC 8-K, a 6-K earnings release or a PR
+    /// Newswire release reports. None on every other row, and on those rows
+    /// too until the server has read the document (minutes after the row).
+    /// Read leniently (`lenient_event`): a block in a shape this build does
+    /// not expect costs the row its event, never the row or the page.
+    #[serde(default, deserialize_with = "lenient_event")]
+    pub event: Option<CorporateEvent>,
+}
+
+/// Corporate event block of a filing or press-release row: a type, the
+/// reporting company's side of it and facts quoted from the document. Every
+/// quoted value is checked against the document by the server before it is
+/// published; one that is not found there is withheld and `verified` turns
+/// false. Strings, not enums, throughout: a type or value this build does
+/// not know yet is shown as the server spells it. The parsed number fields
+/// are not read: the client shows the quotes, never a figure of its own.
+///
+/// The block is new (openapi 1.61.0, 13.11.2026) and its fact check was
+/// still being tuned at release, so every field reads leniently: null,
+/// a number where a string was expected or an item of an unexpected shape
+/// is dropped or stringified instead of failing the parse, and a released
+/// binary keeps reading the feed whatever the block turns into.
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct CorporateEvent {
+    /// One of the server's event types (`offering`, `m_and_a`, ...).
+    #[serde(default, rename = "type", deserialize_with = "lenient_string")]
+    pub kind: String,
+    /// How far a deal or an offering has gone (`definitive`, `priced`).
+    #[serde(default, deserialize_with = "lenient_opt_string")]
+    pub stage: Option<String>,
+    /// The REPORTING company's side (`acquirer`, `target`, `issuer`, ...),
+    /// which is not necessarily the ticker whose feed shows the row.
+    #[serde(default, deserialize_with = "lenient_opt_string")]
+    pub role: Option<String>,
+    /// The other party, as the document names it.
+    #[serde(default, deserialize_with = "lenient_opt_string")]
+    pub counterparty: Option<String>,
+    #[serde(default, deserialize_with = "lenient_facts")]
+    pub facts: Vec<EventFact>,
+    /// False when the check withheld a fact, or while the facts are still
+    /// being read (then `facts` is empty).
+    #[serde(default, deserialize_with = "lenient_bool")]
+    pub verified: bool,
+    /// Other events the same document reports: a dividend, a buyback or a
+    /// guidance change inside an earnings release.
+    #[serde(default, deserialize_with = "lenient_also")]
+    pub also: Vec<AlsoEvent>,
+}
+
+/// One fact of an event: its name and the document's own wording.
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct EventFact {
+    #[serde(default, deserialize_with = "lenient_string")]
+    pub name: String,
+    #[serde(default, deserialize_with = "lenient_string")]
+    pub value: String,
+}
+
+/// A secondary event of the same document, with its own facts.
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct AlsoEvent {
+    #[serde(default, rename = "type", deserialize_with = "lenient_string")]
+    pub kind: String,
+    #[serde(default, deserialize_with = "lenient_facts")]
+    pub facts: Vec<EventFact>,
+}
+
+/// A JSON scalar as text: strings as they are, numbers and booleans
+/// spelled out, null and anything structured as nothing.
+fn scalar_text(v: serde_json::Value) -> Option<String> {
+    match v {
+        serde_json::Value::String(s) => Some(s),
+        serde_json::Value::Number(n) => Some(n.to_string()),
+        serde_json::Value::Bool(b) => Some(b.to_string()),
+        _ => None,
+    }
+}
+
+fn lenient_string<'de, D: serde::Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+    Ok(scalar_text(serde_json::Value::deserialize(d)?).unwrap_or_default())
+}
+
+fn lenient_opt_string<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<String>, D::Error> {
+    Ok(scalar_text(serde_json::Value::deserialize(d)?).filter(|s| !s.trim().is_empty()))
+}
+
+fn lenient_bool<'de, D: serde::Deserializer<'de>>(d: D) -> Result<bool, D::Error> {
+    Ok(matches!(
+        serde_json::Value::deserialize(d)?,
+        serde_json::Value::Bool(true)
+    ))
+}
+
+/// The items of a list that read as `T`; anything else is skipped.
+fn lenient_items<T: DeserializeOwned>(v: serde_json::Value) -> Vec<T> {
+    match v {
+        serde_json::Value::Array(items) => items
+            .into_iter()
+            .filter_map(|i| serde_json::from_value(i).ok())
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn lenient_facts<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<EventFact>, D::Error> {
+    Ok(lenient_items(serde_json::Value::deserialize(d)?))
+}
+
+/// `also` entries as objects, or as bare type names (the shape the
+/// server's own design notes still show).
+fn lenient_also<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<AlsoEvent>, D::Error> {
+    let serde_json::Value::Array(items) = serde_json::Value::deserialize(d)? else {
+        return Ok(Vec::new());
+    };
+    Ok(items
+        .into_iter()
+        .filter_map(|i| match i {
+            serde_json::Value::String(kind) => Some(AlsoEvent {
+                kind,
+                facts: Vec::new(),
+            }),
+            other => serde_json::from_value(other).ok(),
+        })
+        .filter(|x: &AlsoEvent| !x.kind.is_empty())
+        .collect())
+}
+
+/// The event block, or None when it is null, not an object or carries no
+/// type.
+fn lenient_event<'de, D: serde::Deserializer<'de>>(
+    d: D,
+) -> Result<Option<CorporateEvent>, D::Error> {
+    let v = serde_json::Value::deserialize(d)?;
+    if !v.is_object() {
+        return Ok(None);
+    }
+    Ok(serde_json::from_value::<CorporateEvent>(v)
+        .ok()
+        .filter(|e| !e.kind.trim().is_empty()))
+}
+
+/// Fact lookup shared by the main event and the `also` entries; a blank
+/// value counts as absent.
+fn fact<'a>(facts: &'a [EventFact], name: &str) -> Option<&'a str> {
+    facts
+        .iter()
+        .find(|f| f.name == name)
+        .map(|f| f.value.trim())
+        .filter(|v| !v.is_empty())
+}
+
+impl CorporateEvent {
+    pub fn fact(&self, name: &str) -> Option<&str> {
+        fact(&self.facts, name)
+    }
+}
+
+impl AlsoEvent {
+    pub fn fact(&self, name: &str) -> Option<&str> {
+        fact(&self.facts, name)
+    }
 }
 
 /// Structured SEC Form 4 event on an insider-feed row: the aggregate of the

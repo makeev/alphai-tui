@@ -60,13 +60,15 @@ pub enum ChartStyle {
     Line,
 }
 
-/// News feed scope the f key cycles: the selected ticker, the whole market
-/// (story-collapsed), or the 48h trending top 10. Session-only, like the
-/// chart options.
+/// News feed scope the f key cycles: the selected ticker, its corporate
+/// events (filings and releases with a typed event, months deep), the whole
+/// market (story-collapsed), or the 48h trending top 10. Session-only, like
+/// the chart options.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum NewsScope {
     #[default]
     Ticker,
+    Events,
     Market,
     Trending,
 }
@@ -74,7 +76,8 @@ pub enum NewsScope {
 impl NewsScope {
     pub fn next(self) -> Self {
         match self {
-            Self::Ticker => Self::Market,
+            Self::Ticker => Self::Events,
+            Self::Events => Self::Market,
             Self::Market => Self::Trending,
             Self::Trending => Self::Ticker,
         }
@@ -83,10 +86,17 @@ impl NewsScope {
     /// Label for block titles and head lines.
     pub fn label(self, symbol: &str) -> &str {
         match self {
-            Self::Ticker => symbol,
+            Self::Ticker | Self::Events => symbol,
             Self::Market => "market",
             Self::Trending => "trending",
         }
+    }
+
+    /// Whether the scope is one ticker's: its rows carry that ticker's
+    /// sentiment, its chart can sit over the list, and another company's
+    /// filing in it names its filer.
+    pub fn is_ticker(self) -> bool {
+        matches!(self, Self::Ticker | Self::Events)
     }
 }
 

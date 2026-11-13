@@ -51,6 +51,7 @@ const CALENDAR_TTL_FACTOR: u32 = 72;
 /// have reserved keys. A provider's ticker may itself contain a colon.
 fn is_groupable_news(key: &str) -> bool {
     !key.starts_with("ins:")
+        && !key.starts_with("ev:")
         && !key.starts_with("earn:")
         && key != alphai::CALENDAR_KEY
         && key != alphai::TRENDING_KEY
@@ -147,6 +148,7 @@ impl App {
     pub fn news_cache_key(&self) -> String {
         match self.news_scope {
             NewsScope::Ticker => self.selected_symbol().to_string(),
+            NewsScope::Events => alphai::events_key(self.selected_symbol()),
             NewsScope::Market => alphai::MARKET_KEY.to_string(),
             NewsScope::Trending => alphai::TRENDING_KEY.to_string(),
         }
@@ -190,6 +192,10 @@ impl App {
                     collapse: self.collapse_news,
                     sort: Sort::Published,
                 },
+                NewsScope::Events => alphai::Cmd::FetchEvents {
+                    symbol: self.selected_symbol().to_string(),
+                    cursor: None,
+                },
                 NewsScope::Trending => alphai::Cmd::FetchTrending,
             },
             FeedKind::Insider => alphai::Cmd::FetchInsider {
@@ -204,6 +210,10 @@ impl App {
     /// Next-page fetch continuing an already shown feed.
     fn page_cmd(&self, kind: FeedKind, cursor: String) -> alphai::Cmd {
         match kind {
+            FeedKind::News if self.news_scope == NewsScope::Events => alphai::Cmd::FetchEvents {
+                symbol: self.selected_symbol().to_string(),
+                cursor: Some(cursor),
+            },
             FeedKind::News => alphai::Cmd::FetchNews {
                 symbol: (self.news_scope == NewsScope::Ticker)
                     .then(|| self.selected_symbol().to_string()),
@@ -222,11 +232,15 @@ impl App {
         }
     }
 
-    /// Whether a feed has a delta poll behind it. Trending is the one that
-    /// does not: a fixed top-10 endpoint with no cursor and no `sort`, so it
-    /// keeps refetching its head on the TTL like every feed did before.
+    /// Whether a feed has a delta poll behind it. Trending does not (a
+    /// fixed top-10 endpoint with no cursor and no `sort`), nor do events
+    /// (the server answers `event_type` with `sort=ingested` with a 400: a
+    /// row gets its event after it enters the feed, so a delta position
+    /// would already be past it). Both refetch their head on the TTL like
+    /// every feed did before.
     fn feed_polls(&self, kind: FeedKind) -> bool {
-        !(kind == FeedKind::News && self.news_scope == NewsScope::Trending)
+        !(kind == FeedKind::News
+            && matches!(self.news_scope, NewsScope::Trending | NewsScope::Events))
     }
 
     /// Delta poll of a shown feed: same filters, ingest ordering, and the
@@ -270,7 +284,7 @@ impl App {
     pub(crate) fn chart_focus(&self, symbol: &str) -> Option<String> {
         if self.view_id() != ui::ViewId::News
             || self.news_layout != crate::app::NewsLayout::Chart
-            || self.news_scope != crate::app::NewsScope::Ticker
+            || !self.news_scope.is_ticker()
             || self.selected_symbol() != symbol
         {
             return None;
@@ -281,15 +295,33 @@ impl App {
             .filter(|uid| !uid.is_empty())
     }
 
-    /// The ticker-scoped news rows already in the cache, for the price
-    /// chart's news marks. Read-only on purpose: the chart never asks for a
+    /// The ticker-scoped rows already in the cache, for the price chart's
+    /// news marks: its news and, once the Events scope has loaded them, its
+    /// corporate events, which reach months back where a busy ticker's news
+    /// page covers a day. Read-only on purpose: the chart never asks for a
     /// feed of its own, it garnishes what the News and Split views have
     /// loaded, so the marks cost no request (and are simply absent until
-    /// one of those views has fetched the ticker).
-    pub(crate) fn ticker_articles(&self, symbol: &str) -> &[Article] {
+    /// one of those views has fetched the ticker). A row in both feeds is
+    /// yielded twice; one candle keeps one mark, so that is harmless.
+    pub(crate) fn ticker_articles<'a>(&'a self, symbol: &str) -> impl Iterator<Item = &'a Article> {
+        let rows = |key: &str| {
+            self.feeds
+                .get(key)
+                .map_or(&[][..], |b| b.articles.as_slice())
+        };
+        rows(symbol).iter().chain(rows(&alphai::events_key(symbol)))
+    }
+
+    /// The feed row behind an article uid, from any feed in the cache: the
+    /// Earnings view joins a read to its filing's corporate event this way.
+    pub(crate) fn find_article_by_uid(&self, uid: &str) -> Option<&Article> {
+        if uid.is_empty() {
+            return None;
+        }
         self.feeds
-            .get(symbol)
-            .map_or(&[][..], |b| b.articles.as_slice())
+            .values()
+            .flat_map(|b| b.articles.iter())
+            .find(|a| a.original.uid == uid)
     }
 
     /// The cached read for one article uid, from any ticker in the cache.
@@ -567,7 +599,7 @@ impl App {
         // (trending is the exception: server-curated 8+, no filter; insider
         // rows are all one category).
         let (wanted, wanted_categories) = match kind {
-            FeedKind::News if self.news_scope != NewsScope::Trending => {
+            FeedKind::News if matches!(self.news_scope, NewsScope::Ticker | NewsScope::Market) => {
                 (Some(self.news_min_score), self.news_categories)
             }
             FeedKind::News => (None, Categories::default()),

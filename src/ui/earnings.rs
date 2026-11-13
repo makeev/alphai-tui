@@ -152,9 +152,21 @@ impl View for EarningsView {
         } else if app.earnings_target.is_some()
             && let Some(read) = latest
         {
-            read_lines(read, &symbol, body.width as usize, &theme)
+            let also = release_also(app, read);
+            read_lines(read, &symbol, body.width as usize, &theme, &also)
         } else {
-            body_lines(data, &symbol, body.width as usize, &theme, next.as_deref())
+            let also = data
+                .latest()
+                .map(|read| release_also(app, read))
+                .unwrap_or_default();
+            body_lines(
+                data,
+                &symbol,
+                body.width as usize,
+                &theme,
+                next.as_deref(),
+                &also,
+            )
         };
         let max_scroll = lines.len().saturating_sub(body.height as usize);
         app.earnings_scroll = app.earnings_scroll.min(max_scroll as u16);
@@ -201,6 +213,7 @@ fn body_lines(
     width: usize,
     theme: &Theme,
     next: Option<&str>,
+    also: &[String],
 ) -> Vec<Line<'static>> {
     if data.unknown {
         return vec![
@@ -233,7 +246,7 @@ fn body_lines(
         return lines;
     };
 
-    let mut lines = read_lines(read, symbol, width, theme);
+    let mut lines = read_lines(read, symbol, width, theme, also);
     let older = &data.reports[1..];
     for read in older.iter().take(HISTORY_CAP) {
         lines.push(Line::from(""));
@@ -249,12 +262,24 @@ fn body_lines(
     lines
 }
 
-/// One read, in full.
+/// What else the read's filing announced (`event::release_lines`), found
+/// by uid in whatever feed the cache holds: the ticker's news or its Events
+/// scope. Costs no request, and is simply absent until one of them has
+/// loaded the filing's row.
+fn release_also(app: &App, read: &EarningsRead) -> Vec<String> {
+    app.find_article_by_uid(&read.uid)
+        .and_then(crate::event::shown)
+        .map(crate::event::release_lines)
+        .unwrap_or_default()
+}
+
+/// One read, in full; `also` lists what else its release announced.
 fn read_lines(
     read: &EarningsRead,
     symbol: &str,
     width: usize,
     theme: &Theme,
+    also: &[String],
 ) -> Vec<Line<'static>> {
     let r = read.report();
     let mut lines = vec![meta_line(read, symbol, width, theme)];
@@ -305,6 +330,14 @@ fn read_lines(
         }
         for other in g.other.iter().take(SHORT_LIST_CAP) {
             lines.extend(wrap(other, width, "  ", None));
+        }
+    }
+
+    if !also.is_empty() {
+        lines.push(Line::from(""));
+        lines.push(section("Also in this release", theme));
+        for line in also {
+            lines.extend(wrap(line, width, "  ", None));
         }
     }
 

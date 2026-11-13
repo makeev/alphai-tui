@@ -11,6 +11,7 @@ use ratatui::widgets::{Block, Clear, Paragraph, Wrap};
 
 use crate::alphai::{self, Article, EarningsRead, KeyMetric, TickerAnalysis};
 use crate::app::App;
+use crate::event;
 use crate::theme::Theme;
 use crate::ui::hits::Modal;
 use crate::ui::{centered, news};
@@ -47,6 +48,7 @@ pub fn render(f: &mut Frame, app: &mut App) {
         app.selected_symbol(),
         earnings,
         extra.as_deref(),
+        area.width.saturating_sub(2),
         &app.theme,
     );
     let mut scroll = app.article_overlay.scroll;
@@ -99,7 +101,14 @@ pub fn render_pane_with(
         f.render_widget(block, area);
         return;
     };
-    let lines = card_lines(a, symbol, earnings, extra.as_deref(), theme);
+    let lines = card_lines(
+        a,
+        symbol,
+        earnings,
+        extra.as_deref(),
+        area.width.saturating_sub(2),
+        theme,
+    );
     render_card(f, area, block, lines, scroll);
 }
 
@@ -123,7 +132,14 @@ pub fn render_reading(
         f.render_widget(block, area);
         return;
     };
-    let lines = card_lines(a, symbol, earnings, None, theme);
+    let lines = card_lines(
+        a,
+        symbol,
+        earnings,
+        None,
+        area.width.saturating_sub(2),
+        theme,
+    );
     render_card(f, area, block, lines, scroll);
 }
 
@@ -158,6 +174,7 @@ fn card_lines(
     symbol: &str,
     earnings: Option<&EarningsRead>,
     extra: Option<&str>,
+    width: u16,
     theme: &Theme,
 ) -> Vec<Line<'static>> {
     let title = a
@@ -182,6 +199,7 @@ fn card_lines(
         Line::from(news::source_meta(a).join(" · ")).style(theme.subtle()),
     ];
     lines.extend(trade_lines(a, extra, theme));
+    lines.extend(event_lines(a, width as usize, theme));
     let selected = a.enrichment.ai_trading_insights.as_ref().and_then(|i| {
         i.ticker_analysis
             .iter()
@@ -251,6 +269,8 @@ fn card_lines(
             Span::styled(" · press 6", theme.subtle()),
         ]));
     }
+
+    lines.extend(release_also_lines(a, symbol, width as usize, theme));
 
     let mut details = Vec::new();
     if let Some(category) = &a.enrichment.category {
@@ -439,6 +459,165 @@ fn trade_lines(a: &Article, extra: Option<&str>, theme: &Theme) -> Vec<Line<'sta
     }
     if !when.is_empty() {
         lines.push(Line::from(when.join(" · ")).style(theme.subtle()));
+    }
+    lines
+}
+
+/// The corporate event a filing or a release reports, right under its
+/// title, where a Form 4 row shows its trade: the type, the stage and the
+/// enumerated facts in the heading, who reported it and in what role, then
+/// each quoted fact. An 8-K's own summary is often boilerplate, so the
+/// event leads. The reporter is always named: the same filing sits in the
+/// feed of every company it mentions, and `role` is the reporter's side,
+/// not the side of the ticker on screen. An earnings release has no
+/// section of its own (its numbers are the earnings read); what it also
+/// announced follows the read instead, see `release_also_lines`.
+fn event_lines(a: &Article, width: usize, theme: &Theme) -> Vec<Line<'static>> {
+    let Some(e) = event::shown(a).filter(|e| e.kind != "earnings") else {
+        return Vec::new();
+    };
+    let mut head = vec![event::name(&e.kind).into_owned()];
+    head.extend(e.stage.as_deref().map(|s| s.replace('_', " ")));
+    head.extend(event::heading_words(e));
+    let mut lines = vec![
+        Line::from(""),
+        section(&format!("Event · {}", head.join(" · ")), theme),
+    ];
+
+    let mut by = Vec::new();
+    if let Some(reporter) = event::reporter(a) {
+        match event::role_phrase(e.role.as_deref()) {
+            Some(role) => by.push(format!("reported by {reporter} {role}")),
+            None => by.push(format!("reported by {reporter}")),
+        }
+    }
+    if let Some(other) = e.counterparty.as_deref() {
+        by.push(format!("other side {other}"));
+    }
+    lines.push(Line::from(format!("  {}", by.join(" · "))).style(theme.subtle()));
+
+    // Short labels make an aligned table; a long one ("use of proceeds")
+    // would push every value right, so its fact runs as prose instead.
+    let facts = event::card_facts(e);
+    let tabled = |label: &str| label.chars().count() <= TABLE_LABEL_MAX;
+    let label_w = facts
+        .iter()
+        .map(|f| event::fact_label(&f.name))
+        .filter(|l| tabled(l))
+        .map(|l| l.chars().count())
+        .max()
+        .unwrap_or(0);
+    for f in &facts {
+        let label = event::fact_label(&f.name);
+        let value = event::fact_value(f);
+        if tabled(&label) {
+            let prefix = format!("  {label:<label_w$}  ");
+            let indent = prefix.chars().count();
+            lines.extend(hanging(prefix, indent, &value, width, theme));
+        } else {
+            lines.extend(hanging(format!("  {label}: "), 4, &value, width, theme));
+        }
+    }
+    for x in &e.also {
+        let prefix = format!("  {:<label_w$}  ", "also");
+        let indent = prefix.chars().count();
+        lines.extend(hanging(prefix, indent, &event::also_line(x), width, theme));
+    }
+
+    let note = match (e.facts.is_empty(), e.verified) {
+        (true, false) => Some("no facts yet · r reloads"),
+        (true, true) => None,
+        (false, true) => Some("values quoted from the document · type and role read by AI"),
+        (false, false) => {
+            Some("values quoted from the document, some withheld · type and role read by AI")
+        }
+    };
+    if let Some(note) = note {
+        lines.extend(
+            hanging("  ".into(), 2, note, width, theme)
+                .into_iter()
+                .map(|l| l.style(theme.subtle())),
+        );
+    }
+    lines
+}
+
+/// Labels up to this long line up in the event's fact table.
+const TABLE_LABEL_MAX: usize = 12;
+
+/// `text` after a subtle `prefix`, wrapped by word to `width` with the
+/// lines after the first indented by `indent`, so a long value stays in
+/// its column. The card's paragraph wrap would restart it at the left
+/// edge. Too narrow a card leaves the wrapping to the paragraph.
+fn hanging(
+    prefix: String,
+    indent: usize,
+    text: &str,
+    width: usize,
+    theme: &Theme,
+) -> Vec<Line<'static>> {
+    let first_room = width.saturating_sub(prefix.chars().count());
+    let next_room = width.saturating_sub(indent);
+    if first_room < 12 || next_room < 12 {
+        return vec![Line::from(vec![
+            Span::styled(prefix, theme.subtle()),
+            Span::raw(text.to_string()),
+        ])];
+    }
+    let mut rows: Vec<String> = Vec::new();
+    let mut line = String::new();
+    for word in text.split_whitespace() {
+        let room = if rows.is_empty() {
+            first_room
+        } else {
+            next_room
+        };
+        if !line.is_empty() && line.chars().count() + 1 + word.chars().count() > room {
+            rows.push(std::mem::take(&mut line));
+        }
+        if !line.is_empty() {
+            line.push(' ');
+        }
+        line.push_str(word);
+    }
+    rows.push(line);
+    rows.into_iter()
+        .enumerate()
+        .map(|(i, row)| {
+            let lead = if i == 0 {
+                Span::styled(prefix.clone(), theme.subtle())
+            } else {
+                Span::raw(" ".repeat(indent))
+            };
+            Line::from(vec![lead, Span::raw(row)])
+        })
+        .collect()
+}
+
+/// What an earnings release announced besides its results: a dividend, a
+/// buyback, a change to the outlook. Named after the reporter when another
+/// company issued the release, so a market roundup tagged with this ticker
+/// cannot pass its outlook off as this company's.
+fn release_also_lines(
+    a: &Article,
+    symbol: &str,
+    width: usize,
+    theme: &Theme,
+) -> Vec<Line<'static>> {
+    let Some(e) = event::shown(a).filter(|e| e.kind == "earnings") else {
+        return Vec::new();
+    };
+    let also = event::release_lines(e);
+    if also.is_empty() {
+        return Vec::new();
+    }
+    let head = match event::reporter(a) {
+        Some(r) if !r.eq_ignore_ascii_case(symbol) => format!("Also in {r}'s release"),
+        _ => "Also in this release".to_string(),
+    };
+    let mut lines = vec![Line::from(""), section(&head, theme)];
+    for line in &also {
+        lines.extend(hanging("  ".into(), 4, line, width, theme));
     }
     lines
 }

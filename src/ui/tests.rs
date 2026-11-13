@@ -1,6 +1,7 @@
 mod alerts;
 mod calendar;
 mod design;
+mod events;
 mod motion;
 mod mouse;
 mod news_collapse;
@@ -2388,6 +2389,10 @@ fn news_scope_cycles_and_relabels() {
     app.view_idx = ui::view_index(ui::ViewId::News);
     assert_eq!(app.news_cache_key(), "AAPL");
     press(&mut app, KeyCode::Char('f'));
+    assert_eq!(app.news_scope, NewsScope::Events);
+    assert_eq!(app.news_cache_key(), "ev:AAPL");
+    assert!(render(&mut app).contains("Events · AAPL"));
+    press(&mut app, KeyCode::Char('f'));
     assert_eq!(app.news_scope, NewsScope::Market);
     assert_eq!(app.news_cache_key(), "*");
     assert!(render(&mut app).contains("News · market"));
@@ -2732,19 +2737,29 @@ fn v_in_the_chart_layout_reads_under_the_chart() {
 fn head_refetch_keeps_the_article_under_the_cursor() {
     let mut app = empty_app(vec!["AAPL".into()]);
     app.view_idx = ui::view_index(ui::ViewId::News);
-    head_fetch(&mut app, "AAPL", vec![uid_article("a", "Read me")], Some(7));
+    head_fetch(
+        &mut app,
+        "AAPL",
+        vec![uid_article("a", "Read me")],
+        Some(crate::config::DEFAULT_NEWS_MIN_SCORE),
+    );
     app.card_scroll = 4;
     head_fetch(
         &mut app,
         "AAPL",
         vec![uid_article("new", "Breaking"), uid_article("a", "Read me")],
-        Some(7),
+        Some(crate::config::DEFAULT_NEWS_MIN_SCORE),
     );
     assert_eq!(app.news_selected, 1);
     assert_eq!(app.card_scroll, 4);
     // Gone from the new page: the row index stays (the list clamps it on
     // the next frame) and the card starts over.
-    head_fetch(&mut app, "AAPL", vec![uid_article("x", "Other")], Some(7));
+    head_fetch(
+        &mut app,
+        "AAPL",
+        vec![uid_article("x", "Other")],
+        Some(crate::config::DEFAULT_NEWS_MIN_SCORE),
+    );
     assert_eq!(app.news_selected, 1);
     assert_eq!(app.card_scroll, 0);
 }
@@ -2773,16 +2788,17 @@ fn score_keys_adjust_filter_and_refetch() {
 
     // The title advertises the active filter before and after the change.
     assert!(
-        render(&mut app).contains("score 7+"),
+        render(&mut app).contains("score 5+"),
         "filter missing from the title"
     );
     press(&mut app, KeyCode::Char('+'));
-    assert_eq!(app.news_min_score, 8);
+    let raised = crate::config::DEFAULT_NEWS_MIN_SCORE + 1;
+    assert_eq!(app.news_min_score, raised);
     assert_eq!(
         app.news_selected, 0,
         "selection not reset on a filter change"
     );
-    assert!(render(&mut app).contains("score 8+"));
+    assert!(render(&mut app).contains(&format!("score {raised}+")));
 
     app.ensure_alphai_data();
     match cmds.try_recv() {
@@ -2794,7 +2810,7 @@ fn score_keys_adjust_filter_and_refetch() {
         }) => {
             assert_eq!(symbol.as_deref(), Some("AAPL"));
             assert_eq!(cursor, None, "filter change must restart from page 1");
-            assert_eq!(min_relevance, Some(8));
+            assert_eq!(min_relevance, Some(raised));
         }
         other => panic!("expected a filtered head fetch, got {:?}", other.is_ok()),
     }
@@ -2864,7 +2880,7 @@ fn category_picker_applies_on_enter_and_refetches() {
     );
     let screen = render(&mut app);
     assert!(
-        screen.contains("score 7+ · without corporate"),
+        screen.contains("score 5+ · without corporate"),
         "filter missing from the title:\n{screen}"
     );
 
@@ -2929,7 +2945,7 @@ fn category_picker_keys() {
     press(&mut app, KeyCode::Char('C'));
     assert!(!app.category_picker.open);
     assert_eq!(app.news_categories, Categories::only([0]));
-    assert!(render(&mut app).contains("score 7+ · earnings"));
+    assert!(render(&mut app).contains("score 5+ · earnings"));
 }
 
 /// The insider feed is one category, so C means nothing there.
@@ -3019,7 +3035,7 @@ fn empty_feed_names_the_category_filter() {
     app.feeds.insert("AAPL".into(), bundle);
     let screen = render_sized(&mut app, 160, 30);
     assert!(
-        screen.contains("with score 7+ · ipo (- lowers the score, C changes the categories)"),
+        screen.contains("with score 5+ · ipo (- lowers the score, C changes the categories)"),
         "{screen}"
     );
 }
@@ -3200,7 +3216,7 @@ fn page_append_extends_list_and_dedupes() {
         side: None,
         next_cursor: Some("c2".into()),
         mode: alphai::FeedMode::Append,
-        min_relevance: Some(7),
+        min_relevance: Some(crate::config::DEFAULT_NEWS_MIN_SCORE),
         categories: Default::default(),
     });
     let b = &app.feeds["AAPL"];
@@ -3219,7 +3235,7 @@ fn refetch_marks_new_rows_until_hovered() {
         &mut app,
         "AAPL",
         vec![uid_article("aaa", "First"), uid_article("bbb", "Second")],
-        Some(7),
+        Some(crate::config::DEFAULT_NEWS_MIN_SCORE),
     );
     assert!(
         !app.is_unseen("AAPL", &app.feeds["AAPL"].articles[0]),
@@ -3234,7 +3250,7 @@ fn refetch_marks_new_rows_until_hovered() {
             uid_article("aaa", "First"),
             uid_article("bbb", "Second"),
         ],
-        Some(7),
+        Some(crate::config::DEFAULT_NEWS_MIN_SCORE),
     );
     assert!(
         app.is_unseen("AAPL", &app.feeds["AAPL"].articles[0]),
@@ -3270,7 +3286,7 @@ fn refetch_marks_new_rows_until_hovered() {
             uid_article("ddd", "Newer still"),
             uid_article("ccc", "Breaking story"),
         ],
-        Some(7),
+        Some(crate::config::DEFAULT_NEWS_MIN_SCORE),
     );
     assert!(
         app.is_unseen("AAPL", &app.feeds["AAPL"].articles[0]),
@@ -3288,14 +3304,19 @@ fn refetch_marks_new_rows_until_hovered() {
 fn pagination_and_filter_moves_never_mark() {
     let mut app = empty_app(vec!["AAPL".into()]);
     app.view_idx = ui::view_index(ui::ViewId::News);
-    head_fetch(&mut app, "AAPL", vec![uid_article("aaa", "First")], Some(7));
+    head_fetch(
+        &mut app,
+        "AAPL",
+        vec![uid_article("aaa", "First")],
+        Some(crate::config::DEFAULT_NEWS_MIN_SCORE),
+    );
     app.apply_alphai(alphai::Event::Feed {
         key: "AAPL".into(),
         articles: vec![uid_article("old1", "Older story")],
         side: None,
         next_cursor: None,
         mode: alphai::FeedMode::Append,
-        min_relevance: Some(7),
+        min_relevance: Some(crate::config::DEFAULT_NEWS_MIN_SCORE),
         categories: Default::default(),
     });
     assert!(
@@ -3342,7 +3363,12 @@ fn pagination_and_filter_moves_never_mark() {
 #[test]
 fn split_strip_shows_markers_without_clearing() {
     let mut app = empty_app(vec!["AAPL".into()]);
-    head_fetch(&mut app, "AAPL", vec![uid_article("aaa", "First")], Some(7));
+    head_fetch(
+        &mut app,
+        "AAPL",
+        vec![uid_article("aaa", "First")],
+        Some(crate::config::DEFAULT_NEWS_MIN_SCORE),
+    );
     head_fetch(
         &mut app,
         "AAPL",
@@ -3350,7 +3376,7 @@ fn split_strip_shows_markers_without_clearing() {
             uid_article("ccc", "Breaking story"),
             uid_article("aaa", "First"),
         ],
-        Some(7),
+        Some(crate::config::DEFAULT_NEWS_MIN_SCORE),
     );
     app.view_idx = ui::view_index(ui::ViewId::Split);
     let screen = render(&mut app);
@@ -3415,7 +3441,7 @@ fn delta_page(app: &mut App, key: &str, articles: Vec<Article>, cursor: &str) {
         side: None,
         next_cursor: Some(cursor.into()),
         mode: alphai::FeedMode::Merge,
-        min_relevance: Some(7),
+        min_relevance: Some(crate::config::DEFAULT_NEWS_MIN_SCORE),
         categories: Default::default(),
     });
 }
@@ -3475,7 +3501,12 @@ fn delta_merge_prepends_arrivals_and_dedupes() {
 fn delta_prime_is_a_baseline_and_later_polls_mark() {
     let mut app = empty_app(vec!["AAPL".into()]);
     app.view_idx = ui::view_index(ui::ViewId::News);
-    head_fetch(&mut app, "AAPL", vec![uid_article("aaa", "First")], Some(7));
+    head_fetch(
+        &mut app,
+        "AAPL",
+        vec![uid_article("aaa", "First")],
+        Some(crate::config::DEFAULT_NEWS_MIN_SCORE),
+    );
     delta_page(
         &mut app,
         "AAPL",
@@ -3510,7 +3541,7 @@ fn delta_prime_drops_rows_below_the_window() {
             timed_article("aaa", "Newest shown", "2026-09-08T13:41:00Z"),
             timed_article("bbb", "Oldest shown", "2026-08-27T16:33:00Z"),
         ],
-        Some(7),
+        Some(crate::config::DEFAULT_NEWS_MIN_SCORE),
     );
     delta_page(
         &mut app,
@@ -3571,7 +3602,7 @@ fn merge_keeps_the_row_under_the_cursor() {
         &mut app,
         "AAPL",
         vec![uid_article("aaa", "First"), uid_article("bbb", "Second")],
-        Some(7),
+        Some(crate::config::DEFAULT_NEWS_MIN_SCORE),
     );
     app.news_selected = 1;
     delta_page(&mut app, "AAPL", vec![], "d1");
@@ -4983,7 +5014,12 @@ fn earnings_card_renders_from_cache_and_never_fetches() {
     row.original.uid = "earn1".into();
     row.original.source_domain = "sec.gov".into();
     row.original.source = "SEC EDGAR 8-K".into();
-    head_fetch(&mut app, "NVDA", vec![row], Some(7));
+    head_fetch(
+        &mut app,
+        "NVDA",
+        vec![row],
+        Some(crate::config::DEFAULT_NEWS_MIN_SCORE),
+    );
 
     // Nothing cached yet: a pointer to the view, and no request.
     let screen = render_sized(&mut app, 110, 32);
@@ -5027,7 +5063,12 @@ fn news_row_marks_the_filing_itself() {
     filing.original.source_domain = "sec.gov".into();
     filing.original.source = "SEC EDGAR 8-K".into();
     let coverage = article("Nvidia beats again, says the street", "NVDA", 8, "positive");
-    head_fetch(&mut app, "NVDA", vec![filing, coverage], Some(7));
+    head_fetch(
+        &mut app,
+        "NVDA",
+        vec![filing, coverage],
+        Some(crate::config::DEFAULT_NEWS_MIN_SCORE),
+    );
     let screen = render_sized(&mut app, 110, 32);
     assert!(screen.contains("8-K"), "screen:\n{screen}");
     assert!(
