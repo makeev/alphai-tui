@@ -160,16 +160,19 @@ const CATPPUCCIN_FRAPPE: Palette = Palette {
     dim: rgb(0x626880),
 };
 
+/// Green and orange sit darker than catppuccin's latte (`#40a02b`,
+/// `#fe640b`): those are drawn for accents on the light base, and as a price
+/// rising or a warning they fell under 3:1 against it (`signal_colors_read_on_every_preset`).
 const CATPPUCCIN_LATTE: Palette = Palette {
     accent: rgb(0x8839ef),
     base: rgb(0xeff1f5),
     text: rgb(0x4c4f69),
     subtext: rgb(0x5c5f77),
     faint: rgb(0x7c7f93),
-    green: rgb(0x40a02b),
+    green: rgb(0x419433),
     red: rgb(0xd20f39),
     red_alt: rgb(0xe64553),
-    orange: rgb(0xfe640b),
+    orange: rgb(0xd65f1f),
     yellow: rgb(0xdf8e1d),
     violet: rgb(0x7287fd),
     cyan: rgb(0x04a5e5),
@@ -503,6 +506,24 @@ mod tests {
                 let d = delta_e(a, b);
                 assert!(d >= 5.5, "{name}: {what} is only {d:.1} ΔE apart");
             }
+        }
+    }
+
+    /// Signal colors carry meaning as glyphs, bars and the big figures of
+    /// the Insider tiles, so they must read as large text on both
+    /// backgrounds a panel can have, and the warn bar must stand apart from
+    /// the faint one it shares a bar with.
+    #[test]
+    fn signal_colors_read_on_every_preset() {
+        for (name, t) in PRESETS.iter().skip(1) {
+            for (bg_name, bg) in [("base", t.background), ("surface", t.surface)] {
+                for (slot, c) in [("warn", t.warn), ("pos", t.pos)] {
+                    let r = contrast(c, bg);
+                    assert!(r >= 3.0, "{name}: {slot} on {bg_name} is {r:.2}");
+                }
+            }
+            let d = delta_e(t.warn, t.faint);
+            assert!(d >= 20.0, "{name}: warn and faint are {d:.1} ΔE apart");
         }
     }
 

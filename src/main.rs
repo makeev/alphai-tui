@@ -7,6 +7,7 @@ mod config;
 mod domain;
 mod event;
 mod indicators;
+mod insider_decision;
 mod keymap;
 mod market;
 mod motion;

@@ -67,12 +67,14 @@ impl View for SplitView {
                 Layout::horizontal([Constraint::Percentage(45), Constraint::Percentage(55)])
                     .areas(area);
             table::render_table(f, left, app);
-            chart::render_chart(f, right, app);
+            let buttons = chart::render_chart(f, right, app);
+            app.hits.buttons.extend(buttons);
             return;
         }
         let [top, bottom] =
             Layout::vertical([Constraint::Percentage(70), Constraint::Percentage(30)]).areas(area);
-        chart::render_chart(f, top, app);
+        let buttons = chart::render_chart(f, top, app);
+        app.hits.buttons.extend(buttons);
         let [left, right] =
             Layout::horizontal([Constraint::Percentage(45), Constraint::Percentage(55)])
                 .areas(bottom);

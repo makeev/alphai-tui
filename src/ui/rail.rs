@@ -68,15 +68,26 @@ fn line_with_peers(
     let budget = width as usize;
     let mut spans = head(app, &symbol, width);
     let mut used = total_width(&spans);
+    // Zones are told apart by a thin rule, the parts of one zone by single
+    // spaces: the eye groups by the wider gap, so the gaps inside a zone
+    // must never be the wide ones. Borderless panels draw no lines, so
+    // there the gap alone separates; a narrow terminal keeps two spaces.
+    let separator = match (width >= 80, app.theme.panels) {
+        (false, _) => Span::raw("  "),
+        (true, crate::theme::Panels::Surface) => Span::raw("   "),
+        (true, _) => Span::styled(" │ ", app.theme.faint()),
+    };
 
     for alternatives in optional_zones(app, &symbol, now, width >= 80) {
         // Widest first: the first form that still fits goes in, and a zone
         // with no form that fits is skipped rather than ending the line.
         // A cheap zone behind an expensive one therefore survives.
-        if let Some(zone) = alternatives
+        let zone = alternatives
             .into_iter()
-            .find(|z| !z.is_empty() && used + total_width(z) <= budget)
-        {
+            .filter(|z| !z.is_empty())
+            .map(|z| separated(z, &separator))
+            .find(|z| used + total_width(z) <= budget);
+        if let Some(zone) = zone {
             used += total_width(&zone);
             spans.extend(zone);
         }
@@ -104,13 +115,8 @@ fn line_with_peers(
 fn head(app: &App, symbol: &str, width: u16) -> Vec<Span<'static>> {
     let theme = &app.theme;
     let stable = width >= 80;
-    let symbol_label = if stable {
-        pad_right(symbol, 7)
-    } else {
-        symbol.to_string()
-    };
     let mut out = vec![Span::styled(
-        format!(" {symbol_label} "),
+        format!(" {symbol} "),
         Style::new().bold().fg(theme.accent),
     )];
     if app.bare && width >= 60 {
@@ -121,9 +127,6 @@ fn head(app: &App, symbol: &str, width: u16) -> Vec<Span<'static>> {
     }
     match app.data.get(symbol) {
         Some(data) => {
-            if width >= 60 {
-                out.push(Span::styled("quote ", theme.subtle()));
-            }
             // The pulse is the same one the chart title and the table use,
             // so a live market now reads as live in every view.
             let price_start = total_width(&out);
@@ -139,7 +142,7 @@ fn head(app: &App, symbol: &str, width: u16) -> Vec<Span<'static>> {
             }
             if stable {
                 out.push(Span::raw(
-                    " ".repeat(12usize.saturating_sub(total_width(&out) - price_start)),
+                    " ".repeat(10usize.saturating_sub(total_width(&out) - price_start)),
                 ));
             }
             if let Some(age) = app.cached_age(symbol) {
@@ -175,16 +178,6 @@ fn optional_zones(
     let mut zones = Vec::new();
 
     if let (Some(change), Some(pct)) = (quote.change(), quote.change_pct()) {
-        let change_label = if stable {
-            format!("{change:+8.2}")
-        } else {
-            format!("{change:+.2}")
-        };
-        let pct_label = if stable {
-            format!("{pct:+7.2}%")
-        } else {
-            format!("{pct:+.2}%")
-        };
         let arrow = if change > 0.0 {
             "▲"
         } else if change < 0.0 {
@@ -192,29 +185,33 @@ fn optional_zones(
         } else {
             "·"
         };
+        let style = Style::new().fg(color);
         zones.push(vec![
-            vec![Span::styled(
-                format!("  {arrow} {change_label} {pct_label}"),
-                Style::new().fg(color),
-            )],
+            reserved(
+                vec![Span::styled(
+                    format!("{arrow} {change:+.2} {pct:+.2}%"),
+                    style,
+                )],
+                17,
+                stable,
+            ),
             // On a narrow terminal the percentage alone still says which
             // way the day is going, and the color says it without the
             // arrow: this zone must outlive the badges behind it.
-            vec![Span::styled(
-                format!("  {arrow} {pct_label}"),
-                Style::new().fg(color),
-            )],
-            vec![Span::styled(
-                format!("  {pct_label}"),
-                Style::new().fg(color),
-            )],
+            vec![Span::styled(format!("{arrow} {pct:+.2}%"), style)],
+            vec![Span::styled(format!("{pct:+.2}%"), style)],
         ]);
     }
     // Near-term events should remain visible before secondary quote context.
     zones.push(event_zone(app, symbol, now));
-    // Price provenance outranks holdings, session countdowns and charts:
-    // a recently fetched response can still carry an old trade.
-    zones.push(quote_context(app, quote));
+    // Price provenance outranks holdings, session countdowns and charts
+    // when the trade behind the price is old (a recently fetched response
+    // can still carry one); a current price keeps it at the end, where it
+    // does not crowd the numbers a reader came for.
+    let stale = quote_is_stale(quote, now);
+    if stale {
+        zones.push(quote_context(app, quote, now, stale));
+    }
     zones.push(extended_zone(quote, now, theme, stable));
     zones.push(position_zone(
         app,
@@ -225,7 +222,10 @@ fn optional_zones(
     ));
     zones.push(super::alerts::rail_zone(app, symbol));
     zones.push(session_zone(app, symbol, now, stable));
-    zones.push(range_zone(quote, &data.candles, color, theme, stable));
+    if !stale {
+        zones.push(quote_context(app, quote, now, stale));
+    }
+    zones.push(range_zone(quote, &data.candles, color, theme));
     let closes: Vec<f64> = data.candles.iter().map(|c| c.close).collect();
     if !closes.is_empty() {
         zones.push(vec![vec![
@@ -238,24 +238,43 @@ fn optional_zones(
     // gives their width back to everything above.
     if let Some((lo, hi)) = quote.fifty_two_week {
         zones.push(vec![vec![Span::styled(
-            format!(
-                "  52w {}–{}",
-                field(fmt_price(lo), 6, stable),
-                field(fmt_price(hi), 6, stable)
-            ),
+            format!("52w {}–{}", fmt_price(lo), fmt_price(hi)),
             theme.subtle(),
         )]]);
     }
     if let Some(volume) = quote.volume.filter(|v| *v > 0.0) {
         zones.push(vec![vec![Span::styled(
-            format!("  vol {}", field(fmt_volume(volume), 5, stable)),
+            format!("vol {}", fmt_volume(volume)),
             theme.subtle(),
         )]]);
     }
     zones
 }
 
-fn quote_context(app: &App, quote: &Quote) -> Vec<Vec<Span<'static>>> {
+/// The trade behind the headline price is old: more than 20 minutes during
+/// the regular session (or at any hour for crypto). A delayed feed's quarter
+/// of an hour is not old; a price that stopped moving is.
+fn quote_is_stale(quote: &Quote, now: DateTime<Utc>) -> bool {
+    let Some(ts) = quote.timing.regular else {
+        return false;
+    };
+    let old = now.timestamp().saturating_sub(ts) > 20 * 60;
+    if market::is_crypto(&quote.symbol) {
+        return old;
+    }
+    old && market::is_us_equity(&quote.symbol) && market::clock_at(now).session == Session::Open
+}
+
+/// Where the headline price comes from and when it traded, in the faint
+/// tier: `Tiingo 13 Nov 16:00`, the date only when it is not today. A
+/// `stale` trade (`quote_is_stale`, decided once by the caller, which also
+/// places the zone) takes the warning color and keeps a short form.
+fn quote_context(
+    app: &App,
+    quote: &Quote,
+    now: DateTime<Utc>,
+    stale: bool,
+) -> Vec<Vec<Span<'static>>> {
     let feed = quote.timing.regular_feed.label();
     let mut parts = Vec::new();
     if !feed.is_empty() {
@@ -265,18 +284,27 @@ fn quote_context(app: &App, quote: &Quote) -> Vec<Vec<Span<'static>>> {
         parts.push(note.to_string());
     }
     let source = parts.join(" · ");
+    let style = if stale {
+        Style::new().fg(app.theme.warn)
+    } else {
+        app.theme.faint()
+    };
     if let Some(ts) = quote.timing.regular {
         let us = market::is_us_equity(&quote.symbol);
-        parts.push(format!(
-            "{} {}",
-            super::time_axis::label(ts, "%d %b %H:%M", app.chart.timezone, us),
-            super::time_axis::zone_name(app.chart.timezone, us),
-        ));
+        let today = market::et_date(ts) == market::et_date(now.timestamp());
+        let format = if today { "%H:%M" } else { "%d %b %H:%M" };
+        parts.push(super::time_axis::label(ts, format, app.chart.timezone, us));
     }
-    [parts.join(" · "), source]
+    // The source alone, without the time, only where it warns: a current
+    // price's provenance either says when it traded or keeps quiet.
+    let mut forms = vec![parts.join(" ")];
+    if stale {
+        forms.push(source);
+    }
+    forms
         .into_iter()
         .filter(|s| !s.is_empty())
-        .map(|s| vec![Span::styled(format!("  {s}"), app.theme.subtle())])
+        .map(|s| vec![Span::styled(s, style)])
         .collect()
 }
 
@@ -312,24 +340,27 @@ fn position_zone(
     };
     let pnl = position.pnl(price);
     let style = Style::new().fg(move_color(Some(pnl), theme));
-    let money = field(fmt_signed(pnl), 10, stable);
+    let money = fmt_signed(pnl);
     let pct = position.pnl_pct(price);
+    let qty = Span::styled(format!("×{} ", position.qty), theme.subtle());
     let mut forms = Vec::new();
     if let Some(pct) = pct {
-        let pct = field(format!("{pct:+.2}%"), 8, stable);
-        forms.push(vec![Span::styled(
-            format!("  ×{} {money} {pct}", position.qty),
-            style,
-        )]);
-        forms.push(vec![Span::styled(format!("  {money} {pct}"), style)]);
-        forms.push(vec![Span::styled(format!("  {pct}"), style)]);
+        let pct = format!("{pct:+.2}%");
+        forms.push(reserved(
+            vec![qty, Span::styled(format!("{money} {pct}"), style)],
+            26,
+            stable,
+        ));
+        forms.push(vec![Span::styled(format!("{money} {pct}"), style)]);
+        forms.push(vec![Span::styled(pct, style)]);
     } else {
         // No cost basis to measure against, so the money is all there is.
-        forms.push(vec![Span::styled(
-            format!("  ×{} {money}", position.qty),
-            style,
-        )]);
-        forms.push(vec![Span::styled(format!("  {money}"), style)]);
+        forms.push(reserved(
+            vec![qty, Span::styled(money.clone(), style)],
+            18,
+            stable,
+        ));
+        forms.push(vec![Span::styled(money, style)]);
     }
     forms
 }
@@ -350,10 +381,10 @@ fn extended_zone(
     let Some(price) = quote.extended_price_at(now) else {
         if market::is_us_equity(&quote.symbol) && matches!(session, Session::Pre | Session::Post) {
             let name = if session == Session::Pre { "PRE" } else { "AH" };
-            return vec![vec![Span::styled(
-                format!("  {name} no data"),
-                Style::new().fg(theme.flat),
-            )]];
+            return vec![vec![
+                Span::styled(format!("{name} "), theme.subtle()),
+                Span::styled("no data", Style::new().fg(theme.flat)),
+            ]];
         }
         return Vec::new();
     };
@@ -375,59 +406,39 @@ fn extended_zone(
     } else {
         "AH"
     };
-    let detail = quote
-        .timing
-        .extended
-        .map(|ts| {
-            let age = now.timestamp().saturating_sub(ts).max(0) / 60;
-            let time = chrono::DateTime::from_timestamp(ts, 0)
-                .map(|t| {
-                    market::et_time(t)
-                        .format(if market::et_date(ts) == market::et_date(now.timestamp()) {
-                            "%H:%M ET"
-                        } else {
-                            "%d %b %H:%M ET"
-                        })
-                        .to_string()
-                })
-                .unwrap_or_default();
-            format!(
-                " · {} · {time} · {} old",
-                quote.timing.extended_feed.label(),
-                field(
-                    if age >= 1440 {
-                        format!("{}d{}h", age / 1440, age % 1440 / 60)
-                    } else if age >= 60 {
-                        format!("{}h{}m", age / 60, age % 60)
-                    } else {
-                        format!("{age}m")
-                    },
-                    6,
-                    stable
-                )
-            )
-        })
-        .unwrap_or_default();
-    let source = if quote.timing.extended.is_some() {
-        format!(" · {}", quote.timing.extended_feed.label())
-    } else {
-        String::new()
+    // The print's time (the date too when it is not today's) in the faint
+    // tier, never louder than the move itself. Which feed carried it is
+    // the chart title's business; here it only crowded the line.
+    let time = quote.timing.extended.and_then(|ts| {
+        let t = chrono::DateTime::from_timestamp(ts, 0)?;
+        let today = market::et_date(ts) == market::et_date(now.timestamp());
+        Some(
+            market::et_time(t)
+                .format(if today { "%H:%M" } else { "%d %b %H:%M" })
+                .to_string(),
+        )
+    });
+    let move_style = Style::new().fg(move_color(Some(change), theme));
+    let core = |with_price: bool| {
+        let mut spans = vec![Span::styled(format!("{label} "), theme.subtle())];
+        if with_price {
+            spans.push(Span::styled(
+                format!("{} ", fmt_price(price)),
+                Style::new().fg(theme.text),
+            ));
+        }
+        spans.push(Span::styled(format!("{pct:+.2}%"), move_style));
+        spans
     };
-    let style = Style::new().fg(move_color(Some(change), theme));
-    let price = field(fmt_price(price), 8, stable);
-    let change = field(format!("{change:+.2}"), 8, stable);
-    let pct = field(format!("{pct:+.2}%"), 8, stable);
-    vec![
-        vec![Span::styled(
-            format!("  {label} {price} {change} {pct}{detail}"),
-            style,
-        )],
-        vec![Span::styled(
-            format!("  {label} {price} {pct}{source}"),
-            style,
-        )],
-        vec![Span::styled(format!("  {label} {pct}{source}"), style)],
-    ]
+    let mut forms = Vec::new();
+    if let Some(time) = &time {
+        let mut timed = core(true);
+        timed.push(Span::styled(format!(" · {time}"), theme.faint()));
+        forms.push(reserved(timed, 30, stable));
+    }
+    forms.push(reserved(core(true), 17, stable));
+    forms.push(core(false));
+    forms
 }
 
 /// Session badge plus the countdown to the next bell. Crypto pairs trade
@@ -441,7 +452,7 @@ fn session_zone(
     let theme = &app.theme;
     if market::is_crypto(symbol) {
         return vec![vec![Span::styled(
-            "  ● 24/7".to_string(),
+            "● 24/7".to_string(),
             Style::new().fg(theme.pos),
         )]];
     }
@@ -452,35 +463,29 @@ fn session_zone(
         Session::Closed => theme.subtle(),
     };
     let label = clock.session.label();
-    let label = if stable {
-        pad_right(label, 8)
-    } else {
-        label.to_string()
-    };
     let countdown = clock.countdown();
-    let countdown = if stable {
-        pad_right(&countdown, 17)
-    } else {
-        countdown
-    };
-    let badge = Span::styled(format!("  {label}"), style);
+    let badge = Span::styled(label.to_string(), style);
     vec![
-        vec![
-            badge.clone(),
-            Span::styled(format!(" {countdown}"), theme.subtle()),
-        ],
+        reserved(
+            vec![
+                badge.clone(),
+                Span::styled(format!(" · {countdown}"), theme.faint()),
+            ],
+            26,
+            stable,
+        ),
         vec![badge],
     ]
 }
 
 /// Where the price sits between the session's low and high:
-/// `218.13├───●────┤227.42`.
+/// `218.13 ├───●────┤ 227.42`. Near the end of the line, so it needs no
+/// reserved width: only the sparkline sits behind it.
 fn range_zone(
     quote: &Quote,
     candles: &[Candle],
     color: Color,
     theme: &Theme,
-    stable: bool,
 ) -> Vec<Vec<Span<'static>>> {
     // The source's own figure first: it is the regular session's range by
     // definition, while the candles are whatever was fetched, which now
@@ -509,25 +514,19 @@ fn range_zone(
             ),
         ]
     };
-    let mut labelled = vec![Span::styled(
-        format!("  {}", field(fmt_price(lo), 6, stable)),
-        theme.subtle(),
-    )];
+    let mut labelled = vec![Span::styled(format!("{} ", fmt_price(lo)), theme.subtle())];
     labelled.extend(bars(""));
-    labelled.push(Span::styled(
-        field(fmt_price(hi), 6, stable),
-        theme.subtle(),
-    ));
+    labelled.push(Span::styled(format!(" {}", fmt_price(hi)), theme.subtle()));
     // The bare track keeps the position when the numbers do not fit; the
     // watchlist table carries the low and high anyway.
-    vec![labelled, bars("  ")]
+    vec![labelled, bars("")]
 }
 
 /// Low and high of the session the newest candle belongs to. Daily bars
 /// put one candle in a day, so this is that bar's own range; intraday bars
 /// fold into their New York date, extended-hours ones included (which is
 /// what a source that sends them is showing as the day anyway).
-fn day_range(candles: &[Candle]) -> Option<(f64, f64)> {
+pub(crate) fn day_range(candles: &[Candle]) -> Option<(f64, f64)> {
     let last = candles.last()?;
     let day = market::et_date(last.ts)?;
     let (lo, hi) = candles
@@ -573,6 +572,28 @@ fn peers(app: &App, selected: &str, room: usize, stable: bool) -> Vec<(usize, Ve
         out.push((idx, group));
     }
     out
+}
+
+/// A zone behind the separator, the leading spaces its builders still
+/// put in front of it taken off.
+fn separated(mut zone: Vec<Span<'static>>, separator: &Span<'static>) -> Vec<Span<'static>> {
+    if let Some(first) = zone.first_mut() {
+        let trimmed = first.content.trim_start().to_string();
+        first.content = trimmed.into();
+    }
+    zone.retain(|s| !s.content.is_empty());
+    zone.insert(0, separator.clone());
+    zone
+}
+
+/// A zone padded at its end to `reserve` cells on a wide rail, so the
+/// zones behind it stay put while its digits change; a longer zone grows.
+fn reserved(mut zone: Vec<Span<'static>>, reserve: usize, stable: bool) -> Vec<Span<'static>> {
+    let w = total_width(&zone);
+    if stable && w < reserve {
+        zone.push(Span::raw(" ".repeat(reserve - w)));
+    }
+    zone
 }
 
 fn total_width(spans: &[Span<'static>]) -> usize {

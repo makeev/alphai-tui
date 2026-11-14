@@ -2,9 +2,12 @@ mod alerts;
 mod calendar;
 mod design;
 mod events;
+mod insider;
+mod keycaps;
 mod motion;
 mod mouse;
 mod news_collapse;
+mod summary;
 mod themes;
 mod ticker_search;
 
@@ -92,8 +95,11 @@ fn empty_app_with_cmds(
 }
 
 /// Isolate feed-budget tests from the calendar's independent global fetch.
+/// Fresh empty calendars for the app's own clock: a test that freezes the
+/// clock freezes it first, or the window misses the frozen day and the
+/// calendar asks for itself again.
 fn cache_empty_calendar(app: &mut App) {
-    let today = crate::market::et_time(chrono::Utc::now()).date();
+    let today = crate::market::et_time(app.now()).date();
     app.calendar = Some(crate::app::CalendarSlot {
         events: Vec::new(),
         fetched: Instant::now(),
@@ -275,7 +281,9 @@ fn short_premarket_charts_use_the_plot_width_at_every_interval() {
             app.chart_style = style;
             let mut terminal = Terminal::new(TestBackend::new(160, 24)).unwrap();
             terminal
-                .draw(|f| ui::chart::render_chart(f, f.area(), &app))
+                .draw(|f| {
+                    ui::chart::render_chart(f, f.area(), &app);
+                })
                 .unwrap();
             let buffer = terminal.backend().buffer();
             let first_x = (1..159)
@@ -1671,12 +1679,12 @@ fn range_keys_cycle_presets_and_update_chart_title() {
     press(&mut app, KeyCode::Char('t'));
     assert_eq!((app.range, app.interval), (Range::D5, Interval::M15));
     let screen = render(&mut app);
-    assert!(screen.contains("5d / 15m"), "screen:\n{screen}");
+    assert!(screen.contains(" 5d/15m "), "screen:\n{screen}");
     // Wrap backwards past the first preset.
     press(&mut app, KeyCode::Char('T'));
     press(&mut app, KeyCode::Char('T'));
     assert_eq!((app.range, app.interval), (Range::Y1, Interval::D1));
-    assert!(render(&mut app).contains("1y / 1d"));
+    assert!(render(&mut app).contains(" 1y/1d "));
     // Old data stays on screen until the poller answers.
     assert!(app.data.contains_key("AAPL"));
 }
@@ -1776,7 +1784,7 @@ fn extended_candles_leave_at_once_and_arrive_with_the_poller() {
     press(&mut app, KeyCode::Char('E'));
     assert!(app.chart_window("AAPL").1);
     let screen = render(&mut app);
-    assert!(screen.contains("EXT: loading"), "screen:\n{screen}");
+    assert!(screen.contains("ext  loading"), "screen:\n{screen}");
 
     answer(&mut app, Sessions::Extended, extended);
     assert!(!app.chart_window("AAPL").1);
@@ -1789,7 +1797,9 @@ fn extended_candles_leave_at_once_and_arrive_with_the_poller() {
     );
     assert_eq!(app.data["AAPL"].candles.len(), 30);
     let screen = render(&mut app);
-    assert!(screen.contains("EXT: off"), "screen:\n{screen}");
+    // Off: the pill unlit and nothing after it.
+    assert!(screen.contains("⇧E   ext  "), "screen:\n{screen}");
+    assert!(!screen.contains("ext  loading"), "screen:\n{screen}");
 }
 
 /// Budget invariant: a range switch must wake only the price poller. The
@@ -1832,7 +1842,7 @@ fn split_view_combines_table_chart_and_news() {
         screen.contains('▀'),
         "no candle chart in split view:\n{screen}"
     );
-    assert!(screen.contains("News · AAPL"), "screen:\n{screen}");
+    assert!(screen.contains("News  f   AAPL"), "screen:\n{screen}");
     assert!(
         screen.contains("Apple beats expectations"),
         "screen:\n{screen}"
@@ -1890,19 +1900,20 @@ fn view_ids_are_unique_and_indexable() {
 }
 
 /// The footer renders the keys actually bound in the keymap, in the
-/// traditional shapes ("↑↓ select", "c/m/i/b/e/n chart").
+/// traditional shapes ("↑↓ select", "c/m/i/b/e/n chart"), each on its plate.
 #[test]
 fn footer_shows_bound_keys() {
     let mut app = fake_app();
     let screen = render(&mut app);
-    assert!(screen.contains("q quit"), "screen:\n{screen}");
-    assert!(screen.contains("tab/1-9 view"), "screen:\n{screen}");
-    assert!(screen.contains("↑↓ select"), "screen:\n{screen}");
-    assert!(screen.contains("c/m/i/b/e/n chart"), "screen:\n{screen}");
+    assert!(screen.contains("q  quit"), "screen:\n{screen}");
+    assert!(screen.contains("tab/1-9  view"), "screen:\n{screen}");
+    assert!(screen.contains("↑↓  select"), "screen:\n{screen}");
+    assert!(screen.contains("c/m/i/b/e/n  chart"), "screen:\n{screen}");
     app.view_idx = ui::view_index(ui::ViewId::News);
     let screen = render(&mut app);
-    assert!(screen.contains("⏎ open"), "screen:\n{screen}");
-    assert!(screen.contains("x layout"), "screen:\n{screen}");
+    assert!(screen.contains("⏎  open"), "screen:\n{screen}");
+    // The layout key lives in the list's title, beside the layouts.
+    assert!(screen.contains(" x   chart"), "screen:\n{screen}");
 }
 
 /// A `[keybindings]` remap flows through to the footer and to dispatch:
@@ -1926,8 +1937,8 @@ fn footer_and_dispatch_follow_a_remap() {
         ),
     );
     let screen = render(&mut app);
-    assert!(screen.contains("w open"), "screen:\n{screen}");
-    assert!(!screen.contains("⏎ open"), "screen:\n{screen}");
+    assert!(screen.contains("w  open"), "screen:\n{screen}");
+    assert!(!screen.contains("⏎  open"), "screen:\n{screen}");
     // The new key drives the action, the old one is gone.
     press(&mut app, KeyCode::Char('v'));
     assert!(
@@ -2021,7 +2032,7 @@ fn news_view_lists_articles_and_sentiment() {
         ),
     );
     let screen = render(&mut app);
-    assert!(screen.contains("News · AAPL"), "screen:\n{screen}");
+    assert!(screen.contains("News  f   AAPL"), "screen:\n{screen}");
     assert!(
         screen.contains("Apple beats expectations"),
         "screen:\n{screen}"
@@ -2106,6 +2117,10 @@ fn insider_view_shows_summary_and_filings() {
     // A legacy filing still derives the transaction side from its headline.
     assert!(screen.contains("SELL"), "screen:\n{screen}");
     assert!(screen.contains("Apple insider sold"), "screen:\n{screen}");
+    // Every filing shows by default: no size filter to name.
+    assert!(!screen.contains("score 1+"), "screen:\n{screen}");
+    app.insider_min_score = 4;
+    let screen = render(&mut app);
     assert!(
         screen.contains("score 4+"),
         "size filter missing from the title:\n{screen}"
@@ -2272,7 +2287,7 @@ fn insider_chart_panel_draws_and_cycles() {
     let mut app = insider_app_with_chart();
     let screen = render(&mut app);
     assert!(
-        screen.contains("Form 4 · 3m"),
+        screen.contains("Form 4  g   3m  12m  off"),
         "panel title missing:\n{screen}"
     );
     // Window totals in the title: both sides priced.
@@ -2282,16 +2297,16 @@ fn insider_chart_panel_draws_and_cycles() {
         screen.contains("3 events"),
         "event count missing:\n{screen}"
     );
-    // The three mark shapes: filled sell, hollow sale-to-issuer, filled buy.
+    // The three mark shapes: filled sell, sale-to-issuer, filled buy.
     assert!(
-        screen.contains("▽"),
+        screen.contains("◇"),
         "sale-to-issuer mark missing:\n{screen}"
     );
     // Log decade labels from $100K up to $10M.
     assert!(screen.contains("$10M"), "decade label missing:\n{screen}");
     assert!(screen.contains("$100K"), "decade label missing:\n{screen}");
     assert!(
-        screen.contains("▲ buy · ▼ sell · ▽ to issuer"),
+        screen.contains("▲ buy  ▼ plan sale  ◇ to issuer"),
         "legend missing:\n{screen}"
     );
     // Weekly bars: two-sided window renders block glyphs under the scatter.
@@ -2308,7 +2323,8 @@ fn insider_chart_panel_draws_and_cycles() {
 
     // g cycles 3m -> 12m -> off -> 3m; the panel yields its rows when off.
     press(&mut app, KeyCode::Char('g'));
-    assert!(render(&mut app).contains("Form 4 · 12m"));
+    assert_eq!(app.insider_chart, crate::app::InsiderChartWindow::M12);
+    assert!(render(&mut app).contains("Form 4  g   3m  12m  off"));
     press(&mut app, KeyCode::Char('g'));
     let screen = render(&mut app);
     assert!(
@@ -2316,7 +2332,8 @@ fn insider_chart_panel_draws_and_cycles() {
         "panel must hide when off:\n{screen}"
     );
     press(&mut app, KeyCode::Char('g'));
-    assert!(render(&mut app).contains("Form 4 · 3m"));
+    assert_eq!(app.insider_chart, crate::app::InsiderChartWindow::M3);
+    assert!(render(&mut app).contains("Form 4  g   3m  12m  off"));
 }
 
 /// Rows are scarce before they are gone: the weekly bars drop first, the
@@ -2327,7 +2344,7 @@ fn insider_chart_degrades_bars_then_panel() {
     // 24-row terminal: the panel fits only without its bars.
     let screen = render_sized(&mut app, 100, 24);
     assert!(
-        screen.contains("Form 4 · 3m"),
+        screen.contains("Form 4  g   3m  12m  off"),
         "short panel missing:\n{screen}"
     );
     assert!(
@@ -2361,8 +2378,9 @@ fn insider_score_keys_adjust_own_filter() {
     assert!(cmds.try_recv().is_err(), "matching filter refetched");
 
     let news_before = app.news_min_score;
+    let before = app.insider_min_score;
     press(&mut app, KeyCode::Char('+'));
-    assert_eq!(app.insider_min_score, 5);
+    assert_eq!(app.insider_min_score, before + 1);
     assert_eq!(
         app.news_min_score, news_before,
         "+ leaked into the news filter"
@@ -2377,7 +2395,7 @@ fn insider_score_keys_adjust_own_filter() {
         }) => {
             assert_eq!(symbol, "AAPL");
             assert_eq!(cursor, None);
-            assert_eq!(min_relevance, Some(5));
+            assert_eq!(min_relevance, Some(before + 1));
         }
         other => panic!("expected a filtered insider fetch, got {:?}", other.is_ok()),
     }
@@ -2391,15 +2409,15 @@ fn news_scope_cycles_and_relabels() {
     press(&mut app, KeyCode::Char('f'));
     assert_eq!(app.news_scope, NewsScope::Events);
     assert_eq!(app.news_cache_key(), "ev:AAPL");
-    assert!(render(&mut app).contains("Events · AAPL"));
+    assert!(render(&mut app).contains("AAPL  events  market"));
     press(&mut app, KeyCode::Char('f'));
     assert_eq!(app.news_scope, NewsScope::Market);
     assert_eq!(app.news_cache_key(), "*");
-    assert!(render(&mut app).contains("News · market"));
+    assert!(render(&mut app).contains("f   market"));
     press(&mut app, KeyCode::Char('f'));
     assert_eq!(app.news_scope, NewsScope::Trending);
     assert_eq!(app.news_cache_key(), TRENDING_KEY);
-    assert!(render(&mut app).contains("News · trending"));
+    assert!(render(&mut app).contains(" trending "));
     press(&mut app, KeyCode::Char('f'));
     assert_eq!(app.news_cache_key(), "AAPL");
 }
@@ -2443,7 +2461,7 @@ fn trending_view_lists_articles() {
         ),
     );
     let screen = render(&mut app);
-    assert!(screen.contains("News · trending"), "screen:\n{screen}");
+    assert!(screen.contains("f   trending"), "screen:\n{screen}");
     assert!(
         screen.contains("top 10 of the last 48h"),
         "screen:\n{screen}"
@@ -2565,7 +2583,10 @@ fn news_card_pane_shown_by_default() {
     );
     let screen = render(&mut app);
     // The full AI card sits next to the list without opening the overlay.
-    assert!(screen.contains(" card ·"), "card pane missing:\n{screen}");
+    assert!(
+        screen.contains(" card  pgup/pgdn  scroll"),
+        "card pane missing:\n{screen}"
+    );
     assert!(
         screen.contains("Trading value"),
         "card content missing:\n{screen}"
@@ -2595,11 +2616,17 @@ fn x_cycles_news_layout() {
     // Wide enough: the ticker's chart sits over the list, the card beside.
     let screen = render_sized(&mut app, 140, 40);
     assert!(screen.contains("╭ AAPL"), "chart missing:\n{screen}");
-    assert!(screen.contains(" card ·"), "card missing:\n{screen}");
+    assert!(
+        screen.contains(" card  pgup/pgdn  scroll"),
+        "card missing:\n{screen}"
+    );
     // Too narrow for three panes: it reads as Side, card and all.
     let screen = render_sized(&mut app, 110, 40);
     assert!(!screen.contains("╭ AAPL"), "chart squeezed in:\n{screen}");
-    assert!(screen.contains(" card ·"), "card missing:\n{screen}");
+    assert!(
+        screen.contains(" card  pgup/pgdn  scroll"),
+        "card missing:\n{screen}"
+    );
     // A market-wide feed has no one chart to belong to.
     app.news_scope = NewsScope::Market;
     app.feeds.insert(
@@ -2620,7 +2647,7 @@ fn x_cycles_news_layout() {
     assert_eq!(app.news_layout, NewsLayout::Stacked);
     let screen = render(&mut app);
     assert!(
-        screen.contains(" card ·"),
+        screen.contains(" card  pgup/pgdn  scroll"),
         "card pane missing in stacked:\n{screen}"
     );
     press(&mut app, KeyCode::Char('x'));
@@ -2711,12 +2738,12 @@ fn v_in_the_chart_layout_reads_under_the_chart() {
     let screen = render_sized(&mut app, 140, 40);
     assert!(screen.contains("╭ AAPL"), "chart gone:\n{screen}");
     assert!(
-        screen.contains(" article ·"),
+        screen.contains(" article  ↑↓  scroll"),
         "card not in place:\n{screen}"
     );
     assert!(!screen.contains(" Article "), "modal drawn too:\n{screen}");
     assert!(
-        !screen.contains("News · AAPL"),
+        !screen.contains("News  f   AAPL"),
         "list still shown:\n{screen}"
     );
     // Scrolling and closing are the overlay's own keys.
@@ -2945,7 +2972,7 @@ fn category_picker_keys() {
     press(&mut app, KeyCode::Char('C'));
     assert!(!app.category_picker.open);
     assert_eq!(app.news_categories, Categories::only([0]));
-    assert!(render(&mut app).contains("score 5+ · earnings"));
+    assert!(render(&mut app).contains("⇧C   earnings"));
 }
 
 /// The insider feed is one category, so C means nothing there.
@@ -3074,12 +3101,12 @@ fn narrow_news_view_hides_side_card() {
     // stays in both sizes, so it cannot be the needle.
     let wide = render_sized(&mut app, 100, 30);
     assert!(
-        wide.contains("pgup/pgdn scroll"),
+        wide.contains("pgup/pgdn  scroll"),
         "card pane missing at 100 cols:\n{wide}"
     );
     let narrow = render_sized(&mut app, 80, 30);
     assert!(
-        !narrow.contains("pgup/pgdn scroll"),
+        !narrow.contains("pgup/pgdn  scroll"),
         "card pane still there at 80 cols:\n{narrow}"
     );
     assert!(
@@ -3197,6 +3224,7 @@ fn head_fetch(app: &mut App, key: &str, articles: Vec<Article>, min_relevance: O
         mode: alphai::FeedMode::Replace,
         min_relevance,
         categories: Default::default(),
+        decision: None,
     });
 }
 
@@ -3218,6 +3246,7 @@ fn page_append_extends_list_and_dedupes() {
         mode: alphai::FeedMode::Append,
         min_relevance: Some(crate::config::DEFAULT_NEWS_MIN_SCORE),
         categories: Default::default(),
+        decision: None,
     });
     let b = &app.feeds["AAPL"];
     assert_eq!(b.articles.len(), 2, "page boundary duplicate not dropped");
@@ -3318,6 +3347,7 @@ fn pagination_and_filter_moves_never_mark() {
         mode: alphai::FeedMode::Append,
         min_relevance: Some(crate::config::DEFAULT_NEWS_MIN_SCORE),
         categories: Default::default(),
+        decision: None,
     });
     assert!(
         !app.is_unseen("AAPL", &app.feeds["AAPL"].articles[1]),
@@ -3351,6 +3381,7 @@ fn pagination_and_filter_moves_never_mark() {
         mode: alphai::FeedMode::Replace,
         min_relevance: Some(6),
         categories: Categories::without([category::find("crypto").unwrap()]),
+        decision: None,
     });
     assert!(
         !app.is_unseen("AAPL", &app.feeds["AAPL"].articles[1]),
@@ -3443,6 +3474,7 @@ fn delta_page(app: &mut App, key: &str, articles: Vec<Article>, cursor: &str) {
         mode: alphai::FeedMode::Merge,
         min_relevance: Some(crate::config::DEFAULT_NEWS_MIN_SCORE),
         categories: Default::default(),
+        decision: None,
     });
 }
 
@@ -3838,6 +3870,7 @@ fn head_refresh_still_waits_for_top_row() {
         mode: alphai::FeedMode::Merge,
         min_relevance: None,
         categories: Default::default(),
+        decision: None,
     });
     app.news_selected = 0;
     app.ensure_alphai_data();
@@ -4367,6 +4400,7 @@ fn insider_tick_polls_and_head_refresh_waits_for_top_row() {
         mode: alphai::FeedMode::Merge,
         min_relevance: None,
         categories: Default::default(),
+        decision: None,
     });
     app.news_selected = 0;
     app.ensure_alphai_data();
@@ -5199,22 +5233,69 @@ fn quote_rail_drops_zones_as_the_terminal_narrows() {
     for width in 12..160 {
         assert!(ui::rail::line(&app, width, now).width() <= width as usize);
     }
-    // Feed timing takes precedence over peers, ranges and sparklines.
+    // A current price's provenance yields to the session; peers, ranges
+    // and sparklines go first.
     let narrow = at(60);
-    assert!(narrow.contains("timing varies"), "{narrow}");
+    assert!(narrow.contains("● live"), "{narrow}");
+    assert!(!narrow.contains("timing varies"), "{narrow}");
     assert!(
         !narrow.contains("MSFT") && !narrow.contains("├"),
         "{narrow}"
     );
-    // At narrow widths, provenance outlives the session countdown.
+    // At narrow widths the countdown goes before the badge.
     assert!(!at(45).contains("closes in"), "{}", at(45));
-    assert!(at(45).contains("timing varies"), "{}", at(45));
+    assert!(at(45).contains("● live"), "{}", at(45));
     assert!(!at(25).contains("+14.50"), "{}", at(25));
     assert!(at(25).contains("+7.25%"), "{}", at(25));
     assert!(at(21).contains("+7.25%"), "{}", at(21));
     // Nothing left to drop: the symbol and its price are never cut.
     assert_eq!(at(12).trim(), "AAPL 214.50");
     assert!(at(12).chars().count() <= 12, "{}", at(12));
+}
+
+/// A price whose trade is old during the session says so ahead of the
+/// session badge, in the warning color; a current one keeps its source at
+/// the end, in the faint tier.
+#[test]
+fn quote_rail_puts_a_stale_price_up_front() {
+    let mut app = fake_app();
+    let now = market_open_moment();
+    let quote = &mut app.data.get_mut("AAPL").unwrap().quote;
+    quote.timing.regular = Some(now.timestamp() - 3_600);
+    let line = ui::rail::line(&app, 160, now);
+    let text = ui::rail::text(&line);
+    let source = text
+        .find("timing varies")
+        .unwrap_or_else(|| panic!("{text}"));
+    let badge = text.find("● live").unwrap_or_else(|| panic!("{text}"));
+    assert!(source < badge, "{text}");
+    let span = line
+        .spans
+        .iter()
+        .find(|s| s.content.contains("timing varies"))
+        .unwrap();
+    assert_eq!(span.style.fg, Some(app.theme.warn));
+
+    app.data.get_mut("AAPL").unwrap().quote.timing.regular = Some(now.timestamp() - 60);
+    let text = ui::rail::text(&ui::rail::line(&app, 160, now));
+    let source = text
+        .find("timing varies")
+        .unwrap_or_else(|| panic!("{text}"));
+    let badge = text.find("● live").unwrap();
+    assert!(badge < source, "{text}");
+}
+
+/// Zones sit between thin rules and nothing inside a zone is wider than
+/// the gap around it: the price, its move and the badges read as groups.
+#[test]
+fn quote_rail_separates_zones_with_rules() {
+    let app = fake_app();
+    let now = market_open_moment();
+    let text = ui::rail::text(&ui::rail::line(&app, 160, now));
+    assert!(text.starts_with(" AAPL 214.50 USD"), "{text}");
+    assert!(text.contains(" │ ▲ +14.50 +7.25%"), "{text}");
+    assert!(text.contains(" │ ● live · closes in"), "{text}");
+    assert!(!text.contains("quote"), "{text}");
 }
 
 /// Crypto has no opening bell, and a source that is real time says nothing
@@ -5775,7 +5856,9 @@ fn a_and_d_write_the_watchlist_straight_away() {
 }
 
 /// `alphai-tui TSLA` is a look at one ticker, not a new watchlist: a
-/// keypress in that session must not replace the saved list, and says so.
+/// keypress in that session must not replace the saved list. It still
+/// saves the ticker it adds or drops, one ticker at a time: someone who
+/// always starts the app on the same tickers lost every one they added.
 #[test]
 fn tickers_from_the_command_line_leave_the_saved_watchlist_alone() {
     let saved: Vec<String> = vec!["aapl".into(), "MSFT".into()];
@@ -5789,9 +5872,17 @@ fn tickers_from_the_command_line_leave_the_saved_watchlist_alone() {
     let dir = std::env::temp_dir().join(format!("alphai-tui-cli-list-{}", std::process::id()));
     let path = dir.join("config.toml");
     let _ = std::fs::remove_dir_all(&dir);
+    // The file keeps TSLA and ORCL; this session runs on AAPL and MSFT
+    // from the command line.
+    let file = Config {
+        watchlist: vec!["TSLA".into(), "ORCL".into()],
+        ..Config::default()
+    };
+    crate::config::save_to(&path, &file).unwrap();
+    let on_disk = || crate::config::load_from(&path).unwrap().unwrap().watchlist;
     let mut app = fake_app();
     app.config_path = Some(path.clone());
-    app.config.watchlist = vec!["TSLA".into()];
+    app.config.watchlist = file.watchlist.clone();
     app.watchlist_saved = false;
 
     press(&mut app, KeyCode::Char('a'));
@@ -5800,10 +5891,20 @@ fn tickers_from_the_command_line_leave_the_saved_watchlist_alone() {
     }
     press(&mut app, KeyCode::Enter);
     assert_eq!(app.symbols, vec!["AAPL", "MSFT", "NVDA"]);
-    assert!(!path.exists(), "nothing was written");
-    let (notice, _) = app.notice.clone().expect("the reader is told");
-    assert!(notice.contains("not saved"), "{notice}");
-    assert_eq!(app.config.watchlist, vec!["TSLA"]);
+    assert_eq!(on_disk(), ["TSLA", "ORCL", "NVDA"], "only NVDA joins");
+    assert!(app.notice.is_none(), "{:?}", app.notice);
+    // A second one too, not just the last.
+    press(&mut app, KeyCode::Char('a'));
+    for c in "AMD".chars() {
+        press(&mut app, KeyCode::Char(c));
+    }
+    press(&mut app, KeyCode::Enter);
+    assert_eq!(on_disk(), ["TSLA", "ORCL", "NVDA", "AMD"]);
+    // Dropping a ticker the file keeps drops it there; one it does not
+    // keep changes nothing.
+    app.selected = 0;
+    press(&mut app, KeyCode::Char('d'));
+    assert_eq!(on_disk(), ["TSLA", "ORCL", "NVDA", "AMD"]);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -5877,6 +5978,70 @@ fn keypress_saves_keep_what_another_pane_wrote() {
     press(&mut app, KeyCode::Enter);
     assert!(!app.settings.open, "{:?}", app.settings.message);
     assert_eq!(held(&on_disk()), ["TSLA", "AAPL", "MSFT"]);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Two panes on one config, and Save in the settings screen of the pane
+/// that started first: the ticker the other pane added since is the
+/// reader's data, like a holding, and Save keeps it rather than writing
+/// this pane's older list over it.
+#[test]
+fn settings_save_keeps_the_tickers_another_pane_added() {
+    let dir = std::env::temp_dir().join(format!("alphai-tui-save-list-{}", std::process::id()));
+    let path = dir.join("config.toml");
+    let _ = std::fs::remove_dir_all(&dir);
+    let mut app = fake_app();
+    app.config_path = Some(path.clone());
+    // Both panes started on AAPL and MSFT; the other one then added AMD.
+    app.config.watchlist = vec!["AAPL".into(), "MSFT".into()];
+    let other = Config {
+        watchlist: vec!["AAPL".into(), "MSFT".into(), "AMD".into()],
+        ..Config::default()
+    };
+    crate::config::save_to(&path, &other).unwrap();
+    let on_disk = || crate::config::load_from(&path).unwrap().unwrap();
+
+    // This pane adds its own ticker, then saves the settings.
+    press(&mut app, KeyCode::Char('a'));
+    for c in "nvda".chars() {
+        press(&mut app, KeyCode::Char(c));
+    }
+    press(&mut app, KeyCode::Enter);
+    assert_eq!(on_disk().watchlist, ["AAPL", "MSFT", "AMD", "NVDA"]);
+    press(&mut app, KeyCode::Char('s'));
+    while !matches!(settings_rows()[app.settings.cursor], SettingsRow::Save) {
+        press(&mut app, KeyCode::Down);
+    }
+    press(&mut app, KeyCode::Enter);
+    assert!(!app.settings.open, "{:?}", app.settings.message);
+    assert_eq!(on_disk().watchlist, ["AAPL", "MSFT", "AMD", "NVDA"]);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A session on tickers from the command line keeps them with Save: that is
+/// what Save is for there.
+#[test]
+fn settings_save_keeps_a_command_line_list_on_purpose() {
+    let dir = std::env::temp_dir().join(format!("alphai-tui-save-cli-{}", std::process::id()));
+    let path = dir.join("config.toml");
+    let _ = std::fs::remove_dir_all(&dir);
+    let mut app = fake_app();
+    app.config_path = Some(path.clone());
+    let saved = Config {
+        watchlist: vec!["TSLA".into()],
+        ..Config::default()
+    };
+    crate::config::save_to(&path, &saved).unwrap();
+    app.config.watchlist = vec!["TSLA".into()];
+    app.watchlist_saved = false;
+    press(&mut app, KeyCode::Char('s'));
+    while !matches!(settings_rows()[app.settings.cursor], SettingsRow::Save) {
+        press(&mut app, KeyCode::Down);
+    }
+    press(&mut app, KeyCode::Enter);
+    assert!(!app.settings.open, "{:?}", app.settings.message);
+    let on_disk = crate::config::load_from(&path).unwrap().unwrap();
+    assert_eq!(on_disk.watchlist, ["AAPL", "MSFT"]);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -6107,7 +6272,7 @@ fn extended_hours_explain_why_they_cannot_draw() {
     app.source_extended = false;
     app.view_idx = ui::view_index(ui::ViewId::Chart);
     let screen = render(&mut app);
-    assert!(screen.contains("EXT: n/a"), "screen:\n{screen}");
+    assert!(screen.contains("ext  n/a"), "screen:\n{screen}");
 
     let mut app = fake_app();
     let notice = |app: &App| app.notice.as_ref().map(|(n, _)| n.clone());

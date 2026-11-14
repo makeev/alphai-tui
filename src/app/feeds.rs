@@ -23,6 +23,7 @@ use chrono::{DateTime, Utc};
 
 use crate::alphai::{self, Article, FeedMode, FeedPayload, InsiderTrades, SentimentSummary, Sort};
 use crate::category::Categories;
+use crate::insider_decision::InsiderDecision;
 use crate::ui;
 
 use super::{App, CalendarSlot, EarningsSlot, NewsScope};
@@ -96,6 +97,13 @@ pub struct FeedBundle {
     /// Category filter the head fetch carried; every category for feeds
     /// that cannot filter on it. Stale on a mismatch, like `min_score`.
     pub categories: Categories,
+    /// Sale-label filter an insider head fetch carried; None for the news
+    /// feeds. Stale on a mismatch, like `min_score`.
+    pub decision: Option<InsiderDecision>,
+    /// Rows were dropped locally to follow a filter change before its
+    /// refetch landed, so the list is no longer the full answer `decision`
+    /// names: stale whatever the filter, until a head fetch replaces it.
+    pub partial: bool,
     /// When the head fetch behind this bundle landed: the age of the side
     /// payload, and what the periodic full refresh is measured against.
     pub fetched: Instant,
@@ -121,6 +129,8 @@ impl FeedBundle {
             poll_stopped: false,
             min_score: None,
             categories: Categories::default(),
+            decision: None,
+            partial: false,
             fetched: now,
             polled: now,
         }
@@ -202,6 +212,8 @@ impl App {
                 symbol: self.selected_symbol().to_string(),
                 cursor: None,
                 min_relevance: Some(self.insider_min_score),
+                decision: self.insider_decision,
+                side: true,
                 sort: Sort::Published,
             },
         }
@@ -227,6 +239,8 @@ impl App {
                 symbol: self.selected_symbol().to_string(),
                 cursor: Some(cursor),
                 min_relevance: Some(self.insider_min_score),
+                decision: self.insider_decision,
+                side: false,
                 sort: Sort::Published,
             },
         }
@@ -263,6 +277,8 @@ impl App {
                 symbol: self.selected_symbol().to_string(),
                 cursor,
                 min_relevance: Some(self.insider_min_score),
+                decision: self.insider_decision,
+                side: false,
                 sort: Sort::Ingested,
             },
         })
@@ -356,6 +372,10 @@ impl App {
             | alphai::Event::Error { key, .. } => Some(key),
             _ => None,
         };
+        // Whether this answers a head fetch that skipped the chart bundle on
+        // purpose (only the label filter moved): retired with the request,
+        // whatever came back.
+        let side_skipped = feed_key.is_some_and(|k| self.insider_side_skipped.remove(k));
         if let Some(key) = feed_key
             && self.discarded_news_requests.remove(key)
         {
@@ -374,6 +394,7 @@ impl App {
                 mode,
                 min_relevance,
                 categories,
+                decision,
             } => {
                 self.inflight.remove(&key);
                 self.alphai_errors.remove(&key);
@@ -430,9 +451,68 @@ impl App {
                     // it and let the missing bundle refetch its head.
                     _ if mode == FeedMode::Merge => {}
                     _ => {
+                        // A head fetch that skipped the chart bundle (only
+                        // the label filter moved) or lost it keeps the one
+                        // the feed already holds. Only a skipped bundle keeps
+                        // its age, so the regular full refresh renews it on
+                        // time; one that failed to load starts a fresh age,
+                        // or every frame would find the head due again.
+                        // Insider feeds only: a news feed's sentiment rollup
+                        // that failed to load stays gone, as it always has.
+                        let kept = match (&side, self.feeds.get_mut(&key)) {
+                            (None, Some(old)) if key.starts_with("ins:") && old.side.is_some() => {
+                                Some((old.side.take(), side_skipped.then_some(old.fetched)))
+                            }
+                            _ => None,
+                        };
                         let mut b = FeedBundle::new(articles, side, next_cursor);
+                        if let Some((side, fetched)) = kept {
+                            b.side = side;
+                            if let Some(fetched) = fetched {
+                                b.fetched = fetched;
+                            }
+                        } else if side_skipped && b.side.is_none() {
+                            // Skipped with nothing to inherit (`r` dropped
+                            // the bundle meanwhile): the head is due at once,
+                            // so the next tick brings it whole, chart
+                            // included. Once: that fetch asks for the bundle.
+                            let due = self.alphai_ttl * (SIDE_REFRESH_FACTOR + 1);
+                            b.fetched = Instant::now().checked_sub(due).unwrap_or(b.fetched);
+                        }
+                        // The server labels Form 4 sales: remembered for the
+                        // session, so a ticker without sales keeps the
+                        // labelled view and its filter.
+                        if b.articles
+                            .iter()
+                            .any(|a| a.insider.as_ref().is_some_and(|i| i.decision.is_some()))
+                            || b.insider_trades().is_some_and(|t| {
+                                t.chart_events.iter().any(|e| e.decision.is_some())
+                            })
+                        {
+                            self.insider_labels_seen = true;
+                        }
                         b.min_score = min_relevance;
                         b.categories = categories;
+                        b.decision = decision;
+                        // A server that does not know the filter answers
+                        // with every row: say so and fall back to all,
+                        // rather than labelling a mixed list "routine".
+                        if let Some(filter) = decision.filter(|f| *f != InsiderDecision::All)
+                            && b.articles.iter().any(|a| {
+                                a.insider.as_ref().is_some_and(|i| {
+                                    i.side.as_deref() == Some("sell")
+                                        && !filter.keeps(i.decision.as_deref())
+                                })
+                            })
+                        {
+                            self.insider_decision = InsiderDecision::All;
+                            b.decision = Some(InsiderDecision::All);
+                            self.notice = Some((
+                                "this AlphAI server does not filter insider sales by label yet"
+                                    .to_string(),
+                                Instant::now(),
+                            ));
+                        }
                         // Unseen markers: the first sight of a feed is a
                         // baseline, and a refetch caused by moving a filter
                         // is the reader slicing differently, so both count
@@ -440,7 +520,9 @@ impl App {
                         // refetch leaves genuinely new uids outside
                         // `feed_seen` and they render marked until hovered.
                         let filter_moved = self.feeds.get(&key).is_some_and(|old| {
-                            old.min_score != min_relevance || old.categories != categories
+                            old.min_score != min_relevance
+                                || old.categories != categories
+                                || old.decision != decision
                         });
                         let first_sight = !self.feed_seen.contains_key(&key);
                         // The article under the cursor stays under it: a
@@ -550,6 +632,19 @@ impl App {
             }
             alphai::Event::Error { key, error } => {
                 self.inflight.remove(&key);
+                // A server without the label filter answers it with a 400;
+                // retrying would only repeat it. Back to all, and say why.
+                if key.starts_with("ins:")
+                    && self.insider_decision != InsiderDecision::All
+                    && error.contains("API 400")
+                {
+                    self.insider_decision = InsiderDecision::All;
+                    self.notice = Some((
+                        "this AlphAI server does not filter insider sales by label yet".to_string(),
+                        Instant::now(),
+                    ));
+                    return;
+                }
                 self.alphai_errors.insert(key, error);
             }
         }
@@ -605,6 +700,29 @@ impl App {
             FeedKind::News => (None, Categories::default()),
             FeedKind::Insider => (Some(self.insider_min_score), Categories::default()),
         };
+        let wanted_decision = (kind == FeedKind::Insider).then_some(self.insider_decision);
+        // The people mode reads only the chart bundle the feed already
+        // holds: while there is one, nothing is refetched or polled behind
+        // it (a filter change there filters locally).
+        let people = kind == FeedKind::Insider && self.insider_people;
+        // Rows fetched under another label filter (a key press, an answer to
+        // a filter since moved, a ticker cached under an older filter) leave
+        // the list at once, before the refetch is even sent: the list never
+        // shows rows its pill excludes. Every row belongs under all.
+        if kind == FeedKind::Insider && !people {
+            let filter = self.insider_decision;
+            if let Some(b) = self.feeds.get_mut(&key)
+                && filter != InsiderDecision::All
+                && b.decision.is_some_and(|d| d != filter)
+            {
+                b.articles.retain(|a| {
+                    filter.keeps(a.insider.as_ref().and_then(|i| i.decision.as_deref()))
+                });
+                // If the refetch fails and the filter comes back, these rows
+                // must not pass for the list they were cut from.
+                b.partial = true;
+            }
+        }
         if self.inflight.contains(&key) || self.alphai_errors.contains_key(&key) {
             return;
         }
@@ -617,9 +735,15 @@ impl App {
         let ttl = self.alphai_ttl;
         let cmd = match self.feeds.get(&key) {
             None => Some(self.head_cmd(kind)),
+            // Without a chart bundle there is nothing to list people from:
+            // the feed runs as it would, and the head fetch brings one.
+            Some(b) if people && b.insider_trades().is_some() => None,
             Some(b) => {
+                let decision_moved = b.partial
+                    || matches!((b.decision, wanted_decision), (Some(have), Some(want)) if have != want);
                 let filter_moved = matches!((b.min_score, wanted), (Some(have), Some(want)) if have != want)
-                    || b.categories != wanted_categories;
+                    || b.categories != wanted_categories
+                    || decision_moved;
                 // A polling feed keeps its rows current by merging arrivals,
                 // so its head fetch is only there to renew the side payload
                 // (the sentiment rollup, the Form 4 chart) and to re-anchor
@@ -632,7 +756,14 @@ impl App {
                     ttl
                 };
                 if filter_moved || (at_top && b.fetched.elapsed() > head_ttl) {
-                    Some(self.head_cmd(kind))
+                    let mut cmd = self.head_cmd(kind);
+                    // The chart bundle is the whole year whatever the label
+                    // filter: a filter change refetches the list alone.
+                    if decision_moved && let alphai::Cmd::FetchInsider { side, .. } = &mut cmd {
+                        *side = false;
+                        self.insider_side_skipped.insert(key.clone());
+                    }
+                    Some(cmd)
                 } else if !b.poll_stopped && b.polled.elapsed() > ttl {
                     // Merging keeps the loaded pages and the cursor, so this
                     // one runs wherever the reader is: scrolling down used to
@@ -749,6 +880,7 @@ impl App {
         self.alphai_errors.clear();
         self.inflight.clear();
         self.discarded_news_requests.clear();
+        self.insider_side_skipped.clear();
     }
 
     /// Save applies grouping to both news scopes. Discard their pages and

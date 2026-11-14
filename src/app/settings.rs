@@ -426,17 +426,24 @@ impl App {
         }
         self.set_collapse_news(self.settings.collapse_news_choice);
 
+        // A session on the saved list keeps the file's list (another pane
+        // may have added to it since this one started; this pane's own `a`
+        // and `d` are written already). One started from the command line
+        // saves the list on screen: that is what Save is for there.
+        let list_from_disk = self.watchlist_saved;
         // The list on screen is the saved one from here on, so `a` and `d`
         // write it through even in a session started from the command line.
         self.watchlist_saved = true;
         let live = &self.symbols;
         let pending = &self.pending_edits;
         let saved = match self.config_path.as_deref() {
-            Some(path) => config::save_whole(path, &mut cfg, self.on_defaults, |cfg| {
-                for edit in pending {
-                    edit.apply(cfg, live);
-                }
-            }),
+            Some(path) => {
+                config::save_whole(path, &mut cfg, self.on_defaults, list_from_disk, |cfg| {
+                    for edit in pending {
+                        edit.apply(cfg, live);
+                    }
+                })
+            }
             None => config::save_at(None, &cfg).map(|()| None),
         };
         match saved {

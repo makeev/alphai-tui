@@ -266,6 +266,12 @@ pub struct UiConfig {
     /// Startup window of the Insider view's chart panel: "3m" (default),
     /// "12m" or "off"; the g key cycles it live.
     pub insider_chart: Option<String>,
+    /// Startup filter of the Insider view on the sale label: "all"
+    /// (default), "discretionary" or "routine"; the f key cycles it live.
+    pub insider_decision: Option<String>,
+    /// Startup layout of the Summary view: "cards" (default), "heatmap" or
+    /// "compare"; the x key cycles it live.
+    pub summary_layout: Option<String>,
     /// How long fetched AlphAI data (news, sentiment, insider) stays fresh
     /// before the visible view re-fetches it. Seconds; raw i64 for the same
     /// warning-not-error reason as the scores.
@@ -386,9 +392,11 @@ pub const RIGHT_MARGIN_RANGE: RangeInclusive<i64> = 0..=50;
 pub const DEFAULT_NEWS_MIN_SCORE: u8 = 5;
 
 /// Startup default of the insider score filter. Insider rows are scored from
-/// the event's dollar value, so this is a trade-size filter; 4 matches the
-/// server default and keeps every filing the feed used to show.
-pub const DEFAULT_INSIDER_MIN_SCORE: u8 = 4;
+/// the event's dollar value, so this is a trade-size filter. 1 shows every
+/// filing: the list then matches the Form 4 chart above it, which always
+/// shows the whole year. 4 (the server's default) until 0.42.0, which hid a
+/// director's small plan purchases from the list while the chart drew them.
+pub const DEFAULT_INSIDER_MIN_SCORE: u8 = 1;
 
 /// Accepted `[ui] alphai_ttl_secs` values. The floor keeps a typo (or "5"
 /// meant as minutes) from burning the free request budget; the ceiling is
@@ -414,6 +422,8 @@ pub struct UiDefaults {
     pub insider_min_score: u8,
     pub news_categories: Categories,
     pub insider_chart: InsiderChartWindow,
+    pub insider_decision: crate::insider_decision::InsiderDecision,
+    pub summary_layout: crate::app::SummaryLayout,
     pub alphai_ttl: Duration,
 }
 
@@ -433,6 +443,8 @@ impl Default for UiDefaults {
             insider_min_score: DEFAULT_INSIDER_MIN_SCORE,
             news_categories: Categories::default(),
             insider_chart: InsiderChartWindow::default(),
+            insider_decision: Default::default(),
+            summary_layout: Default::default(),
             alphai_ttl: alphai::CACHE_TTL,
         }
     }
@@ -749,6 +761,22 @@ fn resolve_ui(raw: Option<&UiConfig>, warnings: &mut Vec<String>) -> UiDefaults 
             )),
         }
     }
+    if let Some(layout) = &raw.summary_layout {
+        match crate::app::SummaryLayout::from_name(layout) {
+            Some(l) => out.summary_layout = l,
+            None => warnings.push(format!(
+                "[ui] summary_layout: unknown \"{layout}\" (cards, heatmap or compare), keeping cards"
+            )),
+        }
+    }
+    if let Some(filter) = &raw.insider_decision {
+        match crate::insider_decision::InsiderDecision::from_config(filter) {
+            Some(f) => out.insider_decision = f,
+            None => warnings.push(format!(
+                "[ui] insider_decision: unknown \"{filter}\" (all, discretionary or routine), keeping all"
+            )),
+        }
+    }
     out.news_min_score = min_score(
         raw.news_min_score,
         out.news_min_score,
@@ -1025,6 +1053,10 @@ pub fn update(p: &Path, missing: &Config, change: impl Fn(&mut Config)) -> Resul
 /// Save in the settings screen: writes `cfg` whole, under the lock. The
 /// holdings are not on that screen, so they come from the file as it is
 /// now, with `pending` (the keypress edits that never reached it) on top.
+/// So does the watchlist when `list_from_disk`: `a` and `d` already wrote
+/// this pane's changes, and the file may hold tickers another pane added
+/// since, which the screen's older list would drop. A session on tickers
+/// from the command line saves its own list on purpose and passes false.
 /// A file that does not load is copied aside first, and the copy's path
 /// returned, since what is on screen is about to replace it.
 /// `on_defaults` is a session that started on a file that did not load:
@@ -1035,6 +1067,7 @@ pub fn save_whole(
     p: &Path,
     cfg: &mut Config,
     on_defaults: bool,
+    list_from_disk: bool,
     pending: impl Fn(&mut Config),
 ) -> Result<Option<PathBuf>> {
     let _lock = lock(p)?;
@@ -1045,6 +1078,9 @@ pub fn save_whole(
         ),
         Ok(Some(on_disk)) => {
             cfg.positions = on_disk.positions;
+            if list_from_disk && !on_disk.watchlist.is_empty() {
+                cfg.watchlist = on_disk.watchlist;
+            }
             pending(cfg);
             None
         }
@@ -1241,6 +1277,8 @@ avg_price = 100
                 news_categories: Some(toml::Value::Array(vec!["earnings".into(), "m&a".into()])),
                 news_exclude_categories: None,
                 insider_chart: Some("12m".into()),
+                insider_decision: Some("routine".into()),
+                summary_layout: Some("heatmap".into()),
                 alphai_ttl_secs: Some(120),
                 quote_rail: Some(false),
                 bare: Some(true),

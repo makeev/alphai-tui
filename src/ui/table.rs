@@ -6,9 +6,11 @@ use ratatui::widgets::{Cell, Row, Table};
 
 use crate::app::App;
 use crate::domain::fmt_price;
+use crate::keymap::Action;
 use crate::portfolio::{fmt_money, fmt_signed};
 use crate::ui::chart::move_color;
 use crate::ui::hits::{Hits, ListKind};
+use crate::ui::keycap;
 use crate::ui::{View, ViewId};
 
 pub struct TableView;
@@ -269,7 +271,18 @@ pub fn render_table(f: &mut Frame, area: Rect, app: &mut App) {
         widths.push(Constraint::Length(cols.spark));
         header.push(Cell::from("Spark"));
     }
-    let block = app.theme.panel_titled(" Watchlist ");
+    // Removing is a key only: a stray click must not drop a saved ticker.
+    let (block, buttons) = keycap::heading_with_actions(
+        app,
+        area,
+        " Watchlist ",
+        &[
+            (Action::AddTicker, "add", true),
+            (Action::RemoveTicker, "remove", false),
+            (Action::FindTicker, "find", true),
+        ],
+    );
+    app.hits.buttons.extend(buttons);
     let rows_area = Hits::rows_area(block.inner(area), 1);
     let table = Table::new(rows, widths)
         .header(Row::new(header).style(Style::new().bold().underlined()))

@@ -5,6 +5,111 @@ the crates.io releases; from 0.7.0 on each one is also a git tag and a
 GitHub release with prebuilt binaries. The Homebrew tap, the AUR and the
 apt repository joined later, and carry every version since.
 
+## 0.42.0 - 2026-11-14
+
+- The Insider view shows AlphAI's new sale label on every Form 4 sale:
+  `▼ discretionary` when the insider chose to sell, `▾` routine when the
+  sale followed from a 10b5-1 plan or from paperwork such as the tax due on
+  vesting (the reason is named: `10b5-1 plan`, `tax on vesting`, ...), and
+  `? unclear` when the filing does not tell. A tax sale outside a plan no
+  longer reads as a choice. The card gives the label and its reason in full.
+- `f` in the Insider view filters the filings: all, discretionary or
+  routine. The server filters, so a filtered page is a full one; changing
+  the filter costs one request, and `[ui] insider_decision` sets the start.
+- The view's header counts the last 12 months in dollars by label, with a
+  bar of the share the insiders chose to sell, who chose to sell and who
+  sold routinely. On a terminal of at least 120×47 (120×45 bare) the same numbers show as
+  three tiles in big figures: discretionary sales, routine sales, purchases.
+- `x` switches the Insider view to people: everyone who traded in the last
+  12 months, what they chose to sell, sold routinely and bought, their share
+  of the dollars sold and their last trade, with the selected person's
+  filings beside the table and their marks lit on the chart. It costs no
+  request; its footer names its own keys (`↑↓ person`, `x filings`). The
+  list's title carries the switch (`x filings people`) beside the filter
+  (`f all discretionary routine`), and a click on any of those pills works
+  like its key.
+- The Form 4 chart marks discretionary sales `▼`, routine ones `▾` and
+  shares handed back to the issuer `◇` (was `▽`); its weekly bars split the
+  two kinds of sale on a square-root scale. A legend in its top right
+  corner names each kind of mark on screen, its glyph in the mark's own
+  color. A mark drawn over another no longer inherits its dimming. The filing list drops the side column (the mark says it) for the
+  stake and the role.
+- The Insider footer shows `f filter` and `x people` instead of `1-9 view`
+  and `r refresh`, which still work and are in the help.
+- `catppuccin-latte` darkens its green and orange to `#419433` and
+  `#d65f1f`: as price-up and warning colors they fell under 3:1 against the
+  light background.
+- The Insider list shows every filing by default (`insider_min_score` 1,
+  was 4), so it matches the chart above it: small purchases under a plan
+  scored 3 used to be drawn on the chart and missing from the list. With
+  `+` raised, the list says how many of the chart's filings it hides. `+`
+  and `-` also work in the people mode; the list refetches when it returns.
+- Officer titles shorten to their letters in the role column (Chief
+  Infrastructure Officer: CIO).
+- `_` (shift with `-`) lowers the score filter too, in every view where `-`
+  does, the way `+` and `=` both raise it.
+- Keys are drawn as keycaps, on their own plate, in the footer and in the
+  panel titles beside the choices they cycle, so a mode no longer hides
+  behind a letter in the footer. A click on a keycap or a choice works like
+  the key (quit and `d` excepted). A capital key reads `⇧E`.
+  - Chart: the presets behind `t` (`1d 5d/15m 1mo 6mo 1y`), the `⇧E ext`
+    switch with its source, and the chart's switches on its bottom edge
+    (`c candles m MA e SMA i RSI b vol n news`), each lit while on. They
+    replace `(t: interval)`, `(Shift+E: off)` and the `c/m/i/b/e/n` riddle.
+  - News and the Split strip: the four scopes behind `f`, a score stepper
+    (`- score 5+ +`) and the categories behind `C`; in News the three
+    layouts behind `x` at the right end.
+  - Insider: the filter and the switch between filings and people, the
+    score stepper, and the Form 4 chart's window behind `g` (`3m 12m off`).
+  - Calendar: `f all reports macro`. Watchlist: `a add d remove / find`.
+    Portfolio: `p position`. Earnings: `← NVDA →`. The article card names
+    its scroll and expand keys the same way.
+  - The header's right end: `s settings` and `? help`, bare plates on a
+    narrow terminal; without an AlphAI key it reads `alphai: no key`
+    beside the `s` plate.
+  - The footers of News and Chart drop `x layout` and `t preset`, whose
+    keys now sit in the titles; every footer still fits 110 columns.
+- The quote rail reads in groups: thin rules between its parts, single
+  spaces inside them (the wide padding inside the price and its move made
+  the parts run together), color only on the numbers that move, times and
+  sources faint. `quote` and the extended print's feed and age are gone;
+  the print keeps its time (`AH 112.80 -2.66% · 19:59`). The quote's own
+  source and time follow the session badge, and move ahead in the warning
+  color when the trade is more than 20 minutes old during the session.
+- The price chart keeps a key in its top right corner: the kinds of news
+  mark it draws (`▲ bullish ▼ bearish ◆ neutral △ event`, `• news` in line
+  mode) and a swatch for each session shade on screen (`pre`, `post`).
+- A trade co-filed by two owners (a fund and its general partner) counts
+  once in the year's sums, on the chart and among the people, as it does in
+  the list; one sale still waiting for its label no longer turns the view
+  back to the look from before labels.
+- `a` and `d` save their ticker in a session started on tickers from the
+  command line too. Such a session used to save nothing while the config
+  held a different list, so starting the app on the same tickers every
+  time lost every ticker added since; now `alphai-tui TSLA` and `a NVDA`
+  add NVDA to the saved list, and TSLA stays out of it.
+- Save in the settings screen keeps the tickers another running copy of
+  the app added since this one started; it used to write this window's
+  older watchlist over them. Save in a session started on tickers from the
+  command line still writes that session's whole list, on purpose.
+- A server from before the sale label keeps the previous look.
+- The Summary view is rebuilt. A line over it sums up the day: the session
+  and its countdown, how many tickers are up and down and the average
+  move, the portfolio's day, the next macro release and the watchlist's
+  reports due within the week.
+- Cards fill the screen: each ticker's path through the window with the
+  previous close dashed, the extended sessions shaded, its news marks and
+  its alert level, the window's high and low, and a line of facts (the
+  window's move, the position, the alert, the day's range). The extended
+  print rides the top border, the latest story and a report due within two
+  weeks the bottom one. A watchlist longer than the cards that fit gets one
+  line per ticker with a sparkline instead of pages of cards.
+- `x` in Summary cycles to a heat map (tiles tinted by the day's move, the
+  move in big figures) and to a comparison of every ticker in percent of
+  the window's start, labelled at the line's end. `f` orders the tickers by
+  the day's move. Both are pills on the day's line; `[ui] summary_layout`
+  sets the start. No new requests.
+
 ## 0.41.0 - 2026-11-13
 
 - News rows from 8-K filings, 6-K earnings releases and PR Newswire name the

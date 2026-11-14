@@ -144,6 +144,7 @@ fn late_news_replies_cannot_restore_the_previous_grouping() {
                     mode,
                     min_relevance: Some(crate::config::DEFAULT_NEWS_MIN_SCORE),
                     categories: Categories::default(),
+                    decision: None,
                 }
             };
             app.apply_alphai(event);
@@ -196,6 +197,7 @@ fn grouping_choice_reaches_head_paging_and_delta_in_both_scopes() {
                 mode: alphai::FeedMode::Append,
                 min_relevance: Some(crate::config::DEFAULT_NEWS_MIN_SCORE),
                 categories: Categories::default(),
+                decision: None,
             });
             let bundle = app.feeds.get_mut(&key).unwrap();
             bundle.polled = Instant::now() - std::time::Duration::from_secs(600);
@@ -253,6 +255,7 @@ fn changed_representative_is_one_story_across_pages_and_updates_only_when_groupe
                 mode,
                 min_relevance: Some(crate::config::DEFAULT_NEWS_MIN_SCORE),
                 categories: Categories::default(),
+                decision: None,
             });
             let bundle = &app.feeds["AAPL"];
             assert_eq!(bundle.articles.len(), if collapse { 2 } else { 3 });

@@ -241,6 +241,7 @@ fn events_feed(app: &mut App, symbol: &str, rows: Vec<Article>, next: Option<&st
         mode: alphai::FeedMode::Replace,
         min_relevance: None,
         categories: Categories::default(),
+        decision: None,
     });
 }
 
@@ -311,7 +312,7 @@ fn the_events_scope_renders_as_the_tickers_ledger() {
         None,
     );
     let screen = render_sized(&mut app, 185, 40);
-    assert!(screen.contains("Events · CRWV"), "screen:\n{screen}");
+    assert!(screen.contains("CRWV  events  market"), "screen:\n{screen}");
     assert!(screen.contains("corporate events"), "screen:\n{screen}");
     assert!(screen.contains("8-K guide↑"), "screen:\n{screen}");
     assert!(

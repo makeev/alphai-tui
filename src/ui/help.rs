@@ -54,11 +54,8 @@ static ROWS: &[Row] = &[
     Row::Act(Action::Open, "open source or the event's earnings"),
     Row::Act(Action::Card, "article or Calendar event details"),
     Row::Group("News & Insider"),
-    Row::Act(
-        Action::CycleScope,
-        "news scope / Calendar: All, Reports, Macro",
-    ),
-    Row::Act(Action::CycleLayout, "news layout: side, chart or stacked"),
+    Row::Act(Action::CycleScope, "news scope · filters · Summary order"),
+    Row::Act(Action::CycleLayout, "layout: News · Insider · Summary"),
     Row::Act(Action::ScoreUp, "raise the feed score filter"),
     Row::Act(Action::ScoreDown, "lower the feed score filter"),
     Row::Act(Action::Categories, "pick the news categories to show"),

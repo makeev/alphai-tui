@@ -27,7 +27,7 @@ fn palette_app() -> App {
 /// A preset must render with the same colors on any terminal. Even one
 /// reset background can expose a white hole in a dark theme; reset text
 /// can turn dark terminal text invisible on a dark selection or modal.
-fn assert_explicit_colors(buffer: &Buffer, context: &str) {
+pub(super) fn assert_explicit_colors(buffer: &Buffer, context: &str) {
     for y in buffer.area.top()..buffer.area.bottom() {
         for x in buffer.area.left()..buffer.area.right() {
             let cell = &buffer[(x, y)];

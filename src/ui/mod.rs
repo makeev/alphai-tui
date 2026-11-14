@@ -1,5 +1,6 @@
 pub mod alerts;
 pub mod article;
+pub mod bigtext;
 pub mod calendar;
 pub mod categories;
 pub mod chart;
@@ -8,6 +9,7 @@ pub mod help;
 pub mod hits;
 pub mod insider;
 pub mod insider_chart;
+pub mod keycap;
 pub mod news;
 pub mod news_marks;
 pub mod portfolio;
@@ -102,6 +104,12 @@ pub trait View: Sync {
         DEFAULT_HINTS
     }
 
+    /// The hints for the view's current mode; a view with modes (the
+    /// Insider view's people) overrides this, the rest keep `hints`.
+    fn hints_for(&self, _app: &App) -> &'static [Hint] {
+        self.hints()
+    }
+
     /// The AlphAI feed to keep fresh while this view is visible (drives
     /// the demand-driven fetch, TTL refresh and the r retry). The
     /// request-budget guards stay in `App`.
@@ -188,9 +196,10 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     .areas(f.area());
 
     if chrome_h > 0 {
-        let (line, pills) = header_line(app, header);
+        let (line, pills, buttons) = header_line(app, header);
         f.render_widget(line, header);
         app.hits.pills = pills;
+        app.hits.buttons.extend(buttons);
     }
     if rail_h > 0 {
         rail::render(f, rail_area, app);
@@ -198,7 +207,9 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     app.article_overlay.inline = false;
     VIEWS[app.view_idx].render(f, body, app);
     if chrome_h > 0 {
-        f.render_widget(footer_line(app), footer);
+        let (line, buttons) = footer_line(app, footer);
+        f.render_widget(line, footer);
+        app.hits.buttons.extend(buttons);
     }
     if app.article_overlay.open && !app.article_overlay.inline {
         article::render(f, app);
@@ -262,84 +273,159 @@ pub(crate) fn centered(r: Rect, width: u16, height: u16) -> Rect {
 }
 
 /// The header, plus where each view pill landed for the mouse.
-fn header_line(app: &App, area: Rect) -> (Paragraph<'static>, Vec<(Rect, usize)>) {
-    let width = area.width;
-    let mut spans = vec![Span::styled(
-        " alphai-tui ",
-        Style::new().bold().fg(app.theme.accent),
-    )];
-    let mut pills = Vec::new();
-    let source = format!(" · {} {}", app.source_name, app.refresh_marker());
-    let key_state = if app.alphai_enabled {
-        " · alphai ✓"
-    } else {
-        " · alphai: no key (s)"
-    };
-    let status_room = spans.iter().map(Span::width).sum::<usize>()
-        + Span::raw(&source).width()
-        + Span::raw(key_state).width();
-    // The header is navigation and connection context. Quote timestamps
-    // belong to their prices; chart controls belong to the chart.
-    let named: usize = VIEWS.iter().map(|v| v.title().len() + 4).sum();
-    let compact = named + status_room > width as usize;
-    for (i, view) in VIEWS.iter().enumerate() {
-        let active = i == app.view_idx;
-        let style = if active {
-            Style::new().fg(app.theme.accent_text).bg(app.theme.accent)
-        } else {
-            app.theme.subtle()
-        };
-        let label = if compact && !active {
-            if width < 80 {
-                format!(" {}", i + 1)
+/// What the header draws: the line, the view pills by index, and the
+/// keycaps on its right end a click presses.
+type Header = (
+    Paragraph<'static>,
+    Vec<(Rect, usize)>,
+    Vec<(Rect, hits::Button)>,
+);
+
+fn header_line(app: &App, area: Rect) -> Header {
+    let width = area.width as usize;
+    let theme = &app.theme;
+    // The view pills, named or by number only.
+    let views = |compact: bool| {
+        let mut spans = vec![Span::styled(
+            " alphai-tui ",
+            Style::new().bold().fg(theme.accent),
+        )];
+        let mut pills = Vec::new();
+        for (i, view) in VIEWS.iter().enumerate() {
+            let active = i == app.view_idx;
+            let style = if active {
+                Style::new().fg(theme.accent_text).bg(theme.accent)
             } else {
-                format!(" {} ", i + 1)
-            }
-        } else {
-            format!(" {}:{} ", i + 1, view.title())
-        };
-        let x = spans.iter().map(Span::width).sum::<usize>() as u16;
-        let w = Span::raw(&label).width() as u16;
-        pills.push((Rect::new(area.x.saturating_add(x), area.y, w, 1), i));
-        spans.push(Span::styled(label, style));
-    }
-    let used = spans.iter().map(Span::width).sum::<usize>();
-    let status = if used + Span::raw(format!("{source}{key_state}")).width() <= width as usize {
-        format!("{source}{key_state}")
-    } else {
-        source
+                theme.subtle()
+            };
+            let label = if compact && !active {
+                if width < 80 {
+                    format!(" {}", i + 1)
+                } else {
+                    format!(" {} ", i + 1)
+                }
+            } else {
+                format!(" {}:{} ", i + 1, view.title())
+            };
+            let x = spans.iter().map(Span::width).sum::<usize>() as u16;
+            let w = Span::raw(&label).width() as u16;
+            pills.push((Rect::new(area.x.saturating_add(x), area.y, w, 1), i));
+            spans.push(Span::styled(label, style));
+        }
+        (spans, pills)
     };
-    let status_w = Span::raw(&status).width();
-    if used + status_w <= width as usize {
-        spans.push(Span::raw(" ".repeat(width as usize - used - status_w)));
-        spans.push(Span::styled(status, app.theme.subtle()));
+    // The connection status and, where it fits, the keys to the settings
+    // (where the source and the key are changed) and the help, as keycaps
+    // with their words or bare.
+    let source = format!(" · {} {}", app.source_name, app.refresh_marker());
+    let settings = app.keymap.labels(&[Action::Settings]);
+    let help = app.keymap.labels(&[Action::Help]);
+    let status = |keys: Option<bool>, with_state: bool| {
+        let mut spans = Vec::new();
+        let mut pills = keycap::Pills::new();
+        let named_key = keys.is_some() && !settings.is_empty();
+        let state = match (with_state, app.alphai_enabled) {
+            (false, _) => "",
+            (true, true) => " · alphai ✓",
+            (true, false) if named_key => " · alphai: no key",
+            (true, false) => " · alphai: no key (s)",
+        };
+        spans.push(Span::styled(format!("{source}{state}"), theme.subtle()));
+        if let Some(words) = keys {
+            for (key, action, word) in [
+                (&settings, Action::Settings, "settings"),
+                (&help, Action::Help, "help"),
+            ] {
+                if key.is_empty() {
+                    continue;
+                }
+                let button = Some(hits::Button::Key(action));
+                spans.push(Span::raw(" "));
+                keycap::push_cap(&mut spans, &mut pills, key, button, theme);
+                if words {
+                    let word = format!(" {word}");
+                    keycap::push_pill(&mut spans, &mut pills, word, theme.subtle(), button);
+                }
+            }
+            spans.push(Span::raw(" "));
+        }
+        (spans, pills)
+    };
+    let forms = [
+        (false, Some(true), true),
+        (false, Some(false), true),
+        (true, Some(true), true),
+        (true, Some(false), true),
+        (false, None, true),
+        (true, None, true),
+        (true, None, false),
+    ];
+    let width_of = |spans: &[Span]| spans.iter().map(Span::width).sum::<usize>();
+    for (compact, keys, with_state) in forms {
+        let (mut spans, pills) = views(compact);
+        let (right, right_pills) = status(keys, with_state);
+        let used = width_of(&spans);
+        let right_w = width_of(&right);
+        if used + right_w <= width {
+            spans.push(Span::raw(" ".repeat(width - used - right_w)));
+            spans.extend(right);
+            let x0 = area.x + (width - right_w) as u16;
+            let buttons = keycap::place(right_pills, x0, area.y, area.right());
+            return (Paragraph::new(Line::from(spans)), pills, buttons);
+        }
     }
-    (Paragraph::new(Line::from(spans)), pills)
+    let (spans, pills) = views(true);
+    (Paragraph::new(Line::from(spans)), pills, Vec::new())
 }
 
 #[cfg(test)]
 mod tests;
 
-/// The current view's hints with their live keys. Split out of
-/// `footer_line` so a test can measure it: the whole line has to fit the
-/// 110-column terminal the README promises.
-fn hints_text(app: &App) -> String {
-    let parts: Vec<String> = VIEWS[app.view_idx]
-        .hints()
-        .iter()
-        .map(|h| {
-            let keys = if h.actions.is_empty() {
-                h.fixed.to_string()
-            } else {
-                app.keymap.labels(h.actions)
-            };
-            format!("{keys} {}", h.label)
-        })
-        .collect();
-    format!(" {}", parts.join(" · "))
+/// The current view's hints as the footer draws them: each key on its
+/// keycap plate with its word beside it, and the hints a click can press
+/// (one action, never quit) as pills, offsets from the line's start.
+fn hint_spans(app: &App) -> (Vec<Span<'static>>, keycap::Pills) {
+    let cap = keycap::cap_style(&app.theme);
+    let word = app.theme.subtle();
+    let mut spans = Vec::new();
+    let mut pills = keycap::Pills::new();
+    for (i, h) in VIEWS[app.view_idx].hints_for(app).iter().enumerate() {
+        let keys = if h.actions.is_empty() {
+            h.fixed.to_string()
+        } else {
+            keycap::label(&app.keymap.labels(h.actions))
+        };
+        if i > 0 {
+            spans.push(Span::styled(" ", word));
+        }
+        let at = spans.iter().map(Span::width).sum::<usize>() as u16;
+        spans.push(Span::styled(format!(" {keys} "), cap));
+        spans.push(Span::styled(format!(" {}", h.label), word));
+        if let [action] = h.actions
+            && *action != Action::Quit
+        {
+            let width = spans.iter().map(Span::width).sum::<usize>() as u16 - at;
+            pills.push((at, width, hits::Button::Key(*action)));
+        }
+    }
+    (spans, pills)
 }
 
-fn footer_line(app: &App) -> Paragraph<'static> {
+/// The current view's hints with their live keys, as plain text. Split
+/// out of `footer_line` so a test can measure it: the whole line has to
+/// fit the 110-column terminal the README promises.
+#[cfg(test)]
+fn hints_text(app: &App) -> String {
+    hint_spans(app)
+        .0
+        .iter()
+        .map(|s| s.content.as_ref())
+        .collect()
+}
+
+/// The footer and the hints on it a click presses.
+fn footer_line(app: &App, area: Rect) -> (Paragraph<'static>, Vec<(Rect, hits::Button)>) {
+    let mut pills = keycap::Pills::new();
     let hints = if app.prompt.open {
         match app.prompt.kind {
             PromptKind::Ticker => " type a ticker · enter add · esc cancel".to_string(),
@@ -364,22 +450,28 @@ fn footer_line(app: &App) -> Paragraph<'static> {
     } else if app.category_picker.open {
         " ↑↓ move · space toggle · o only this · a all · enter apply · esc cancel".to_string()
     } else {
-        hints_text(app)
+        String::new()
     };
-    let mut spans = vec![Span::styled(hints, app.theme.subtle())];
+    let mut spans = if hints.is_empty() {
+        let (spans, hint_pills) = hint_spans(app);
+        pills = hint_pills;
+        spans
+    } else {
+        vec![Span::styled(hints, app.theme.subtle())]
+    };
     // What the app did on its own outranks what a source is complaining
     // about: after a fallback the errors are gone anyway, and the notice is
     // the only place the swap is explained. It goes in front of the hints
     // for its minute, since behind them it started past column 95 and a
     // common terminal cut it off.
+    let mut shift = 0;
     if let Some(notice) = app.notice() {
-        spans.insert(
-            0,
-            Span::styled(
-                ellipsize(&format!(" {notice} "), 120),
-                Style::new().fg(app.theme.warn).add_modifier(Modifier::BOLD),
-            ),
+        let notice = Span::styled(
+            ellipsize(&format!(" {notice} "), 120),
+            Style::new().fg(app.theme.warn).add_modifier(Modifier::BOLD),
         );
+        shift = notice.width() as u16;
+        spans.insert(0, notice);
     } else if let Some((symbol, error)) = app.errors.iter().next() {
         let msg = ellipsize(&format!("  {symbol}: {error}"), 120);
         spans.push(Span::styled(
@@ -389,5 +481,6 @@ fn footer_line(app: &App) -> Paragraph<'static> {
                 .add_modifier(Modifier::BOLD),
         ));
     }
-    Paragraph::new(Line::from(spans))
+    let hits = keycap::place(pills, area.x + shift, area.y, area.right());
+    (Paragraph::new(Line::from(spans)), hits)
 }

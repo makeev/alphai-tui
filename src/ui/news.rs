@@ -11,7 +11,9 @@ use crate::app::{App, FeedKind, NewsLayout, NewsScope};
 use crate::category::{self, Categories};
 use crate::keymap::Action;
 use crate::theme::Theme;
+use crate::ui::hits::Button;
 use crate::ui::hits::{ListKind, Modal, Scroll};
+use crate::ui::keycap::{self, Pills, Title};
 use crate::ui::{Hint, View, ViewId};
 
 /// Below this width the Side layout drops the card pane so the list keeps
@@ -47,7 +49,8 @@ impl View for NewsView {
             Hint::act(&[Action::PriceAlert], "alert"),
             Hint::act(&[Action::Open], "open"),
             Hint::act(&[Action::Card], "card"),
-            Hint::act(&[Action::CycleLayout], "layout"),
+            // The layout's key sits in the list's title beside the three
+            // layouts, which leaves the footer inside 110 columns.
             Hint::act(&[Action::CycleScope], "scope"),
             Hint::act(&[Action::ScoreUp, Action::ScoreDown], "score"),
             Hint::act(&[Action::Categories], "category"),
@@ -71,14 +74,17 @@ impl View for NewsView {
         let scope = app.news_scope;
         let symbol = app.selected_symbol().to_string();
         let label = scope.label(&symbol).to_string();
-        let mut block = app.theme.panel_titled(news_title(
-            scope,
-            &label,
-            app.news_min_score,
-            app.news_categories,
-        ));
+        // The title is fitted to the pane it ends up on: the whole view
+        // while loading, the list's own column once there are rows.
+        let theme = app.theme;
+        let title = NewsTitle::of(app, &symbol, true);
+        let titled = |pane: Rect| title.panel(pane, &theme);
+        let (block, gate_buttons) = titled(area);
 
+        // Loading or failed, the scope and layout pills still answer: a
+        // scope that has nothing yet must not trap the mouse in it.
         if render_gate(f, area, &block, app, &key) {
+            app.hits.buttons.extend(gate_buttons);
             return;
         }
         let bundle = &app.feeds[&key];
@@ -95,7 +101,9 @@ impl View for NewsView {
         f.render_widget(head_line(app, sentiment), head);
 
         if bundle.articles.is_empty() {
-            let msg = empty_feed_message(scope, &label, app.news_min_score, app.news_categories);
+            let msg = empty_feed_message(app, scope, &label);
+            let (block, buttons) = titled(main);
+            app.hits.buttons.extend(buttons);
             f.render_widget(
                 Paragraph::new(Line::from(msg).style(app.theme.subtle())).block(block),
                 main,
@@ -119,7 +127,8 @@ impl View for NewsView {
                 .min(main.height.saturating_sub(CHART_LIST_MIN_HEIGHT));
             let [chart, card] =
                 Layout::vertical([Constraint::Length(chart_h), Constraint::Min(0)]).areas(main);
-            crate::ui::chart::render_price_chart(f, chart, app);
+            let buttons = crate::ui::chart::render_price_chart(f, chart, app);
+            app.hits.buttons.extend(buttons);
             let selected = bundle
                 .articles
                 .get(app.news_selected.min(bundle.articles.len() - 1));
@@ -149,12 +158,14 @@ impl View for NewsView {
             NewsPanes::Chart { chart, list, card } => {
                 // Prices come from the poller, marks from this very bundle:
                 // the chart costs no request of its own.
-                crate::ui::chart::render_price_chart(f, chart, app);
+                let buttons = crate::ui::chart::render_price_chart(f, chart, app);
+                app.hits.buttons.extend(buttons);
                 (list, Some(card), false)
             }
         };
 
-        let theme = app.theme;
+        let (mut block, buttons) = titled(list_area);
+        app.hits.buttons.extend(buttons);
         let at_edge = app.news_selected + 1 >= bundle.articles.len();
         if let Some(hint) = feed_bottom_hint(
             bundle.gated,
@@ -302,25 +313,200 @@ pub(crate) fn feed_bottom_hint(
     })
 }
 
-/// Block title of a news list: the scope label plus the active filters
-/// (trending is server-curated, there is no filter to show).
-fn news_title(scope: NewsScope, label: &str, min_score: u8, categories: Categories) -> String {
-    match (scope, categories.label()) {
-        (NewsScope::Trending, _) => format!(" News · {label} "),
-        (NewsScope::Events, _) => format!(" Events · {label} "),
-        (_, Some(picked)) => format!(" News · {label} · score {min_score}+ · {picked} "),
-        (_, None) => format!(" News · {label} · score {min_score}+ "),
+/// What a news list's title shows: the scope among the four, the score
+/// between its keys and the categories (where the scope filters), and in
+/// the News view the layout. Every choice names its key and takes a click.
+struct NewsTitle<'a> {
+    scope: NewsScope,
+    symbol: &'a str,
+    min_score: u8,
+    categories: Categories,
+    /// The layout switch: the News view only, the Split strip has none.
+    layout: Option<NewsLayout>,
+    keys: NewsKeys,
+}
+
+struct NewsKeys {
+    scope: String,
+    layout: String,
+    categories: String,
+    score: (String, String),
+}
+
+impl NewsTitle<'_> {
+    fn of<'a>(app: &App, symbol: &'a str, layout: bool) -> NewsTitle<'a> {
+        NewsTitle {
+            scope: app.news_scope,
+            symbol,
+            min_score: app.news_min_score,
+            categories: app.news_categories,
+            layout: layout.then_some(app.news_layout),
+            keys: NewsKeys {
+                scope: app.keymap.labels(&[Action::CycleScope]),
+                layout: app.keymap.labels(&[Action::CycleLayout]),
+                categories: app.keymap.labels(&[Action::Categories]),
+                score: keycap::score_keys(app),
+            },
+        }
+    }
+
+    /// The panel on `area` with the widest title forms that fit it, and
+    /// the cells of their pills.
+    fn panel(&self, area: Rect, theme: &Theme) -> (Block<'static>, Vec<(Rect, Button)>) {
+        let (left, right) = self.fitted(area.width, theme);
+        keycap::panel(theme, area, left, right)
+    }
+
+    /// Wide to narrow: the whole scope row before the layout row shrinks,
+    /// the categories' key before the scopes collapse to the current one,
+    /// and the plain text of old where no key fits.
+    fn fitted(&self, width: u16, theme: &Theme) -> (Title, Option<Title>) {
+        let forms = [
+            (self.left(true, true, true, theme), self.right(true, theme)),
+            (self.left(true, true, true, theme), self.right(false, theme)),
+            (
+                self.left(false, true, true, theme),
+                self.right(false, theme),
+            ),
+            (
+                self.left(false, false, true, theme),
+                self.right(false, theme),
+            ),
+            (self.left(false, false, true, theme), None),
+            (self.left(false, false, false, theme), None),
+        ];
+        keycap::fit(width, forms).unwrap_or_else(|| (self.plain(theme), None))
+    }
+
+    fn scope_label(&self, scope: NewsScope, alone: bool) -> String {
+        match scope {
+            NewsScope::Ticker => self.symbol.to_string(),
+            NewsScope::Events if alone => format!("{} events", self.symbol),
+            NewsScope::Events => "events".to_string(),
+            NewsScope::Market => "market".to_string(),
+            NewsScope::Trending => "trending".to_string(),
+        }
+    }
+
+    /// The left title: every scope or only the current one, the
+    /// categories' key or only a picked filter's name, the score between
+    /// its keys or as text.
+    fn left(&self, all_scopes: bool, category_key: bool, stepper: bool, theme: &Theme) -> Title {
+        let heading = Style::new().fg(theme.accent).add_modifier(Modifier::BOLD);
+        let mut spans = vec![Span::styled(" News ", heading)];
+        let mut pills = Pills::new();
+        let cycle = Some(Button::Key(Action::CycleScope));
+        if self.keys.scope.is_empty() {
+            spans.push(Span::styled("· ", theme.faint()));
+        } else {
+            keycap::push_keycap(&mut spans, &mut pills, &self.keys.scope, cycle, theme);
+        }
+        if all_scopes {
+            let choices = [
+                NewsScope::Ticker,
+                NewsScope::Events,
+                NewsScope::Market,
+                NewsScope::Trending,
+            ]
+            .map(|s| {
+                (
+                    self.scope_label(s, false),
+                    Button::NewsScope(s),
+                    s == self.scope,
+                )
+            });
+            keycap::push_choices(&mut spans, &mut pills, choices, theme);
+        } else {
+            let label = format!(" {} ", self.scope_label(self.scope, true));
+            keycap::push_pill(
+                &mut spans,
+                &mut pills,
+                label,
+                keycap::lit_style(theme),
+                cycle,
+            );
+        }
+        spans.push(Span::raw(" "));
+        // Events and Trending take no score and no categories.
+        if matches!(self.scope, NewsScope::Ticker | NewsScope::Market) {
+            spans.push(Span::styled("· ", theme.faint()));
+            if stepper {
+                let keys = (self.keys.score.0.as_str(), self.keys.score.1.as_str());
+                keycap::push_score_stepper(
+                    &mut spans,
+                    &mut pills,
+                    self.min_score,
+                    keys,
+                    heading,
+                    theme,
+                );
+                spans.push(Span::raw(" "));
+            } else {
+                spans.push(Span::styled(format!("score {}+ ", self.min_score), heading));
+            }
+            let picked = self.categories.label();
+            if category_key && !self.keys.categories.is_empty() {
+                spans.push(Span::styled("· ", theme.faint()));
+                let open = Some(Button::Key(Action::Categories));
+                let key = &self.keys.categories;
+                keycap::push_keycap(&mut spans, &mut pills, key, open, theme);
+                let (label, style) = match picked {
+                    Some(picked) => (picked, keycap::lit_style(theme)),
+                    None => ("all categories".to_string(), theme.subtle()),
+                };
+                keycap::push_pill(&mut spans, &mut pills, format!(" {label} "), style, open);
+                spans.push(Span::raw(" "));
+            } else if let Some(picked) = picked {
+                spans.push(Span::styled(format!("· {picked} "), heading));
+            }
+        }
+        (Line::from(spans), pills)
+    }
+
+    fn right(&self, all_layouts: bool, theme: &Theme) -> Option<Title> {
+        let current = self.layout?;
+        let mut spans = vec![Span::raw(" ")];
+        let mut pills = Pills::new();
+        let cycle = Some(Button::Key(Action::CycleLayout));
+        if !self.keys.layout.is_empty() {
+            keycap::push_keycap(&mut spans, &mut pills, &self.keys.layout, cycle, theme);
+        }
+        if all_layouts {
+            let choices = NewsLayout::ALL
+                .map(|l| (l.name().to_string(), Button::NewsLayout(l), l == current));
+            keycap::push_choices(&mut spans, &mut pills, choices, theme);
+        } else {
+            let label = format!(" {} ", current.name());
+            keycap::push_pill(
+                &mut spans,
+                &mut pills,
+                label,
+                keycap::lit_style(theme),
+                cycle,
+            );
+        }
+        spans.push(Span::raw(" "));
+        Some((Line::from(spans), pills))
+    }
+
+    /// The title before keys were drawn: where nothing else fits.
+    fn plain(&self, theme: &Theme) -> Title {
+        let label = self.scope.label(self.symbol);
+        let score = self.min_score;
+        let text = match (self.scope, self.categories.label()) {
+            (NewsScope::Trending, _) => format!(" News · {label} "),
+            (NewsScope::Events, _) => format!(" Events · {label} "),
+            (_, Some(picked)) => format!(" News · {label} · score {score}+ · {picked} "),
+            (_, None) => format!(" News · {label} · score {score}+ "),
+        };
+        (theme.heading(text), Pills::new())
     }
 }
 
 /// What an empty list says: which filters emptied it and the keys that
 /// loosen them.
-fn empty_feed_message(
-    scope: NewsScope,
-    label: &str,
-    min_score: u8,
-    categories: Categories,
-) -> String {
+fn empty_feed_message(app: &App, scope: NewsScope, label: &str) -> String {
+    let (min_score, categories) = (app.news_min_score, app.news_categories);
     if scope == NewsScope::Trending {
         return "no trending stories right now".to_string();
     }
@@ -331,20 +517,24 @@ fn empty_feed_message(
     let mut keys = Vec::new();
     if min_score > 1 {
         filters.push(format!("score {min_score}+"));
-        keys.push("- lowers the score");
+        if let Some(key) = keycap::key_word(app, Action::ScoreDown) {
+            keys.push(format!("{key} lowers the score"));
+        }
     }
     if let Some(picked) = categories.label() {
         filters.push(picked);
-        keys.push("C changes the categories");
+        if let Some(key) = keycap::key_word(app, Action::Categories) {
+            keys.push(format!("{key} changes the categories"));
+        }
     }
-    if filters.is_empty() {
-        format!("no recent news for {label}")
-    } else {
-        format!(
+    match (filters.is_empty(), keys.is_empty()) {
+        (true, _) => format!("no recent news for {label}"),
+        (false, true) => format!("no recent news for {label} with {}", filters.join(" · ")),
+        (false, false) => format!(
             "no recent news for {label} with {} ({})",
             filters.join(" · "),
             keys.join(", ")
-        )
+        ),
     }
 }
 
@@ -355,12 +545,13 @@ pub fn render_panel(f: &mut Frame, area: Rect, app: &mut App) {
     let key = app.news_cache_key();
     let scope = app.news_scope;
     let label = scope.label(app.selected_symbol()).to_string();
-    let block = app.theme.panel_titled(news_title(
-        scope,
-        &label,
-        app.news_min_score,
-        app.news_categories,
-    ));
+    let symbol = app.selected_symbol().to_string();
+    let (block, buttons) = NewsTitle::of(app, &symbol, false).panel(area, &app.theme);
+    // The strip has no cursor of its own, but its scope and score keys
+    // act on its feed.
+    if app.alphai_enabled {
+        app.hits.buttons.extend(buttons);
+    }
 
     if !app.alphai_enabled {
         let line = Line::from(
@@ -380,7 +571,7 @@ pub fn render_panel(f: &mut Frame, area: Rect, app: &mut App) {
     }
     let bundle = &app.feeds[&key];
     if bundle.articles.is_empty() {
-        let msg = empty_feed_message(scope, &label, app.news_min_score, app.news_categories);
+        let msg = empty_feed_message(app, scope, &label);
         f.render_widget(
             Paragraph::new(Line::from(msg).style(app.theme.subtle())).block(block),
             area,
@@ -676,14 +867,13 @@ pub fn display_impact<'a>(a: &'a Article, ticker: &str) -> Option<&'a crate::alp
 
 /// A panel title that is a heading plus a dim key hint, e.g.
 /// " article · ⏎ open · v card ".
-pub(crate) fn hint_title(heading: &str, hint: &str, theme: &Theme) -> Line<'static> {
-    Line::from(vec![
-        Span::styled(
-            heading.to_string(),
-            Style::new().fg(theme.accent).add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(hint.to_string(), theme.subtle()),
-    ])
+pub(crate) fn hint_title(heading: &str, hints: &[(&str, &str)], theme: &Theme) -> Line<'static> {
+    let mut spans = vec![Span::styled(
+        heading.to_string(),
+        Style::new().fg(theme.accent).add_modifier(Modifier::BOLD),
+    )];
+    keycap::push_hints(&mut spans, hints, theme);
+    Line::from(spans)
 }
 
 /// Short attribution kept at the top of an article card.

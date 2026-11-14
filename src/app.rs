@@ -4,6 +4,7 @@
 
 mod alerts;
 mod feeds;
+mod insider;
 mod mouse;
 pub(crate) mod report_calendar;
 mod runtime;
@@ -258,6 +259,68 @@ pub struct CalendarSlot {
     pub to: NaiveDate,
 }
 
+/// What the Summary view draws (`x` cycles it, `[ui] summary_layout`
+/// starts it): a card per ticker, a heat map of the day's moves, or every
+/// ticker on one chart in percent of the window's start.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SummaryLayout {
+    #[default]
+    Cards,
+    Heatmap,
+    Compare,
+}
+
+impl SummaryLayout {
+    pub const ALL: [Self; 3] = [Self::Cards, Self::Heatmap, Self::Compare];
+
+    pub fn next(self) -> Self {
+        let i = Self::ALL.iter().position(|l| *l == self).unwrap_or(0);
+        Self::ALL[(i + 1) % Self::ALL.len()]
+    }
+
+    /// The name `[ui] summary_layout` spells it with, and its pill.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Cards => "cards",
+            Self::Heatmap => "heatmap",
+            Self::Compare => "compare",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|l| l.name().eq_ignore_ascii_case(name.trim()))
+    }
+}
+
+/// The Summary view's order (`f` cycles it, session only): the watchlist's
+/// own, or by the day's move, biggest gain first.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SummaryOrder {
+    #[default]
+    List,
+    Change,
+}
+
+impl SummaryOrder {
+    pub const ALL: [Self; 2] = [Self::List, Self::Change];
+
+    pub fn next(self) -> Self {
+        match self {
+            Self::List => Self::Change,
+            Self::Change => Self::List,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::List => "list",
+            Self::Change => "change",
+        }
+    }
+}
+
 /// The default combos the t and T keys cycle through (`[chart] presets`
 /// overrides them); wraps at the ends. A startup combo not in the table
 /// (e.g. -r 3mo) jumps to the first preset on t and to the last on T.
@@ -425,6 +488,8 @@ pub struct App {
     pub news_selected: usize,
     pub news_scope: NewsScope,
     pub news_layout: NewsLayout,
+    pub summary_layout: SummaryLayout,
+    pub summary_order: SummaryOrder,
     /// Group ticker and market news by story; changed on Save in settings.
     pub collapse_news: bool,
     /// Requests still in flight when grouping changed. Their replies must
@@ -445,6 +510,21 @@ pub struct App {
     pub news_categories: Categories,
     /// Window of the Insider view's chart panel (g cycles off/3m/12m).
     pub insider_chart: InsiderChartWindow,
+    /// The Insider view's filter on the sale label (f cycles all,
+    /// discretionary, routine; sent to the server). Seeded from `[ui]
+    /// insider_decision`, then session-only.
+    pub insider_decision: crate::insider_decision::InsiderDecision,
+    /// The Insider view's people mode (x toggles filings / people): the
+    /// trailing year by reporting owner, from the chart bundle it holds.
+    pub insider_people: bool,
+    /// Cursor of the people table, and its scroll state.
+    pub insider_person: usize,
+    /// Whether any insider answer this session carried a sale label: the
+    /// server labels, so a ticker without sales keeps the labelled view.
+    pub insider_labels_seen: bool,
+    /// Insider keys whose head fetch in flight skipped the chart bundle.
+    pub insider_side_skipped: HashSet<String>,
+    pub insider_people_state: ratatui::widgets::TableState,
     /// The Insider view's card column beside the filing list; v toggles it.
     /// Session-only, on at start.
     pub insider_card: bool,
@@ -492,9 +572,10 @@ pub struct App {
     /// The watchlist as the price poller sees it; kept in step with
     /// `symbols` by `add_symbol` and `remove_selected_symbol`.
     pub shared_symbols: SharedSymbols,
-    /// Whether `a` and `d` write the watchlist to the config. False for a
-    /// session started on tickers from the command line while the file
-    /// holds a list of its own (see `persist_watchlist`).
+    /// Whether the list on screen is the saved one. False for a session
+    /// started on tickers from the command line while the file holds a list
+    /// of its own: Save in the settings screen then writes the screen's
+    /// list on purpose, where otherwise it keeps the file's.
     pub watchlist_saved: bool,
     pub config: Config,
     pub config_path: Option<PathBuf>,
@@ -586,12 +667,20 @@ impl App {
             news_selected: 0,
             news_scope: init.ui.news_scope,
             news_layout: init.ui.news_layout,
+            summary_layout: init.ui.summary_layout,
+            summary_order: SummaryOrder::default(),
             collapse_news: init.ui.collapse_news,
             discarded_news_requests: HashSet::new(),
             news_min_score: init.ui.news_min_score,
             insider_min_score: init.ui.insider_min_score,
             news_categories: init.ui.news_categories,
             insider_chart: init.ui.insider_chart,
+            insider_decision: init.ui.insider_decision,
+            insider_people: false,
+            insider_person: 0,
+            insider_labels_seen: false,
+            insider_side_skipped: HashSet::new(),
+            insider_people_state: Default::default(),
             insider_card: true,
             insider_card_fits: false,
             show_rail: init.ui.quote_rail,
@@ -965,6 +1054,15 @@ impl App {
             }
             return false;
         }
+        let Some(action) = self.keymap.resolve(&key) else {
+            return false;
+        };
+        self.run_action(action)
+    }
+
+    /// What a bound key does in the current view, from the keyboard or from
+    /// a click on the keycap or hint that names it. Returns true to quit.
+    pub(crate) fn run_action(&mut self, action: Action) -> bool {
         let news_view = ui::VIEWS[self.view_idx].navigates_articles();
         let chart_view = ui::VIEWS[self.view_idx].has_chart_panel();
         let earnings_view = ui::VIEWS[self.view_idx].shows_earnings();
@@ -973,9 +1071,9 @@ impl App {
         let lr_ticker = news_view || earnings_view;
         let news_feed = ui::VIEWS[self.view_idx].feed_shown() == Some(FeedKind::News);
         let any_feed = ui::VIEWS[self.view_idx].feed_shown().is_some();
-        let Some(action) = self.keymap.resolve(&key) else {
-            return false;
-        };
+        let insider_view = self.view_id() == ui::ViewId::Insider;
+        let insider_people = insider_view && self.insider_people;
+        let summary_view = self.view_id() == ui::ViewId::Summary;
         match action {
             Action::Quit => return true,
             Action::AddTicker => {
@@ -1000,6 +1098,22 @@ impl App {
                 }
             }
             Action::Refresh => self.manual_refresh(),
+            // Insider: f filters by the sale label, x switches between the
+            // filings and the people. The people mode owns the cursor keys
+            // (they would page the feed otherwise); +/- still move the size
+            // filter there, and the list refetches when the filings return.
+            Action::CycleScope if insider_view => self.cycle_insider_decision(),
+            Action::CycleLayout if insider_view => {
+                self.insider_people = !self.insider_people;
+            }
+            Action::Up if insider_people => self.move_insider_person(-1),
+            Action::Down if insider_people => self.move_insider_person(1),
+            Action::PageUp if insider_people => self.move_insider_person(-10),
+            Action::PageDown if insider_people => self.move_insider_person(10),
+            Action::Open if insider_people => self.open_insider_person(),
+            // The card belongs to the filings; the people mode has its own
+            // pane.
+            Action::Card if insider_people => {}
             Action::Up if calendar_view => self.move_calendar(-1),
             Action::Down if calendar_view => self.move_calendar(1),
             Action::PageUp if calendar_view => self.move_calendar(-10),
@@ -1015,6 +1129,12 @@ impl App {
                             scroll: 0,
                         });
             }
+            // Summary: x picks the layout, f the order; the cursor walks the
+            // tickers in the order on screen.
+            Action::CycleLayout if summary_view => self.summary_layout = self.summary_layout.next(),
+            Action::CycleScope if summary_view => self.summary_order = self.summary_order.next(),
+            Action::Up if summary_view => self.move_summary(-1),
+            Action::Down if summary_view => self.move_summary(1),
             Action::CycleScope if calendar_view => {
                 self.calendar_filter = self.calendar_filter.next()
             }
@@ -1056,8 +1176,7 @@ impl App {
             Action::PageUp if news_view => self.card_scroll = self.card_scroll.saturating_sub(10),
             Action::PageDown if news_view => self.card_scroll = self.card_scroll.saturating_add(10),
             Action::CycleLayout if self.view_id() == ui::ViewId::News => {
-                self.news_layout = self.news_layout.next();
-                self.card_scroll = 0;
+                self.set_news_layout(self.news_layout.next());
             }
             Action::Open if news_view => {
                 if let Some(a) = self
@@ -1089,11 +1208,7 @@ impl App {
                     ..Default::default()
                 };
             }
-            Action::CycleScope if news_feed => {
-                self.news_scope = self.news_scope.next();
-                self.news_selected = 0;
-                self.card_scroll = 0;
-            }
+            Action::CycleScope if news_feed => self.set_news_scope(self.news_scope.next()),
             Action::InsiderChart if self.view_id() == ui::ViewId::Insider => {
                 self.insider_chart = self.insider_chart.next();
             }
@@ -1368,18 +1483,13 @@ impl App {
 
     /// Writes the watchlist through after `a` or `d`, the way a holding is:
     /// a ticker someone added is their data, and losing it on quit read as
-    /// a bug. A session started on tickers from the command line is left
-    /// alone while the file holds another list, or `alphai-tui TSLA` and
-    /// one keypress would replace the saved watchlist with two tickers.
-    /// Save in the settings screen still keeps such a list on purpose.
+    /// a bug. The edit is that one ticker, so a session started on tickers
+    /// from the command line saves it too: `alphai-tui TSLA` and `a NVDA`
+    /// add NVDA to the saved list and leave TSLA out of it. (It used to
+    /// save nothing there, from when an edit wrote the whole list and would
+    /// have replaced the saved one; a reader who always starts the app on
+    /// the same tickers then lost every ticker they added.)
     fn persist_watchlist(&mut self, edit: config::Edit) {
-        if !self.watchlist_saved {
-            self.notice = Some((
-                "Tickers from the command line are not saved (s, then Save, keeps them)".into(),
-                Instant::now(),
-            ));
-            return;
-        }
         if let Err(e) = self.save_edit(edit) {
             self.notice = Some((
                 format!("Watchlist kept for this session only: {e}"),
@@ -1443,6 +1553,8 @@ impl App {
         self.news_selected = 0;
         self.card_scroll = 0;
         self.earnings_scroll = 0;
+        self.insider_person = 0;
+        *self.insider_people_state.offset_mut() = 0;
     }
 
     /// Every symbol the poller fetches: the watchlist plus anything held
@@ -1662,15 +1774,57 @@ impl App {
         false
     }
 
-    /// t / T: jump to the next/previous range/interval preset and wake the
-    /// price poller. Only `refresh.notify_one()` here: `manual_refresh()`
-    /// would also drop the visible AlphAI bundle and burn a request from
-    /// its budget for what is purely a price-history change.
+    /// ↑↓ in Summary: the next ticker in the order the view shows them.
+    fn move_summary(&mut self, dir: isize) {
+        let order = ui::summary::order(self);
+        let Some(pos) = order.iter().position(|&i| i == self.selected) else {
+            return;
+        };
+        let next = pos
+            .saturating_add_signed(dir)
+            .min(order.len().saturating_sub(1));
+        if order[next] != self.selected {
+            self.select_symbol(order[next]);
+        }
+    }
+
+    /// t / T: jump to the next/previous range/interval preset.
     fn cycle_range(&mut self, dir: isize) {
         let (range, interval) = next_preset(&self.chart.presets, (self.range, self.interval), dir);
+        self.set_window(range, interval);
+    }
+
+    /// A chart window, from `t`/`T` or a click on its preset, and a wake for
+    /// the price poller. Only `refresh.notify_one()` (in `push_params`):
+    /// `manual_refresh()` would also drop the visible AlphAI bundle and burn
+    /// a request from its budget for what is purely a price-history change.
+    pub(crate) fn set_window(&mut self, range: Range, interval: Interval) {
+        if (range, interval) == (self.range, self.interval) {
+            return;
+        }
         self.range = range;
         self.interval = interval;
         self.push_params();
+    }
+
+    /// The News scope, from `f` or a click on its pill: the list starts
+    /// over at its first row.
+    pub(crate) fn set_news_scope(&mut self, scope: NewsScope) {
+        if scope == self.news_scope {
+            return;
+        }
+        self.news_scope = scope;
+        self.news_selected = 0;
+        self.card_scroll = 0;
+    }
+
+    /// The News layout, from `x` or a click on its pill.
+    pub(crate) fn set_news_layout(&mut self, layout: NewsLayout) {
+        if layout == self.news_layout {
+            return;
+        }
+        self.news_layout = layout;
+        self.card_scroll = 0;
     }
 
     /// Why `E` cannot change the chart in front of the reader, if it

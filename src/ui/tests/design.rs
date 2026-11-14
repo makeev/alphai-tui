@@ -21,7 +21,7 @@ fn quote_and_bar_keep_their_own_price_feed_and_clock() {
     }
     let screen = render_sized(&mut app, 160, 40);
     let rail = screen.lines().nth(1).unwrap();
-    for part in ["quote 220.25 EUR", "IEX", "30 Sep 10:30 ET"] {
+    for part in ["220.25 EUR", "IEX 30 Sep 10:30"] {
         assert!(rail.contains(part), "{rail}");
     }
     let bar = screen.lines().find(|l| l.contains("Last bar")).unwrap();
@@ -87,7 +87,7 @@ fn a_market_filing_names_its_company_before_the_trade_and_ai_analysis() {
                 "AAPL",
                 None,
                 Some("stake -1.9% · 16 tranches".into()),
-                "",
+                &[],
                 &mut 0,
                 &Theme::default(),
             )

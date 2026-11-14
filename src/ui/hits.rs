@@ -22,6 +22,8 @@ pub enum ListKind {
     /// view on that row.
     NewsStrip,
     Portfolio,
+    /// The Insider view's people mode: one row per reporting owner.
+    People,
     /// Rows of the agenda table, including its separators: the row index
     /// maps through `Hits::calendar_rows` to an agenda index.
     Calendar,
@@ -38,6 +40,34 @@ pub enum Scroll {
     Card,
     /// The earnings read (`earnings_scroll`).
     Earnings,
+}
+
+/// A pill in a panel title that acts on a click.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Button {
+    /// The Insider list's label filter: this filter.
+    InsiderFilter(crate::insider_decision::InsiderDecision),
+    /// The Insider mode switch: the people (true) or the filings.
+    InsiderPeople(bool),
+    /// The score stepper of the visible feed: lower (-1) or raise (1).
+    Score(i8),
+    /// Whatever the key bound to this action does: a keycap or a footer
+    /// hint. Never `Quit`, which no click should do by accident.
+    Key(crate::keymap::Action),
+    /// A chart preset, by its index in the preset table.
+    Preset(usize),
+    /// The News scope pill.
+    NewsScope(crate::app::NewsScope),
+    /// The News layout pill.
+    NewsLayout(crate::app::NewsLayout),
+    /// The Calendar filter pill.
+    CalendarFilter(crate::ui::calendar::Filter),
+    /// The Form 4 chart's window pill.
+    InsiderWindow(crate::app::InsiderChartWindow),
+    /// The Summary layout pill.
+    SummaryLayout(crate::app::SummaryLayout),
+    /// The Summary order pill.
+    SummaryOrder(crate::app::SummaryOrder),
 }
 
 /// The overlay on top of the view, when one is open.
@@ -71,6 +101,8 @@ pub struct Hits {
     pub scrolls: Vec<(Rect, Scroll)>,
     /// The Summary cards, by watchlist index.
     pub cards: Vec<(Rect, usize)>,
+    /// Title pills that act on a click.
+    pub buttons: Vec<(Rect, Button)>,
     /// Agenda index of each row the Calendar table drew, in table order;
     /// `None` for a separator row.
     pub calendar_rows: Vec<Option<usize>>,
@@ -124,6 +156,10 @@ impl Hits {
 
     pub fn card_at(&self, pos: Position) -> Option<usize> {
         at(&self.cards, pos)
+    }
+
+    pub fn button_at(&self, pos: Position) -> Option<Button> {
+        at(&self.buttons, pos)
     }
 
     /// Whether `pos` is outside the open overlay's box. False with no

@@ -21,6 +21,7 @@ use serde::de::DeserializeOwned;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
 use crate::category::Categories;
+use crate::insider_decision::InsiderDecision;
 use crate::poller::SourceEvent;
 
 pub mod earnings_calendar;
@@ -281,9 +282,13 @@ impl Client {
         cursor: Option<&str>,
         page_size: Option<u8>,
         min_relevance: Option<u8>,
+        decision: Option<&str>,
         sort: Sort,
     ) -> Result<NewsPage> {
         let mut query: Vec<(&str, &str)> = vec![("symbol", symbol)];
+        if let Some(d) = decision {
+            query.push(("decision", d));
+        }
         if let Some(c) = cursor {
             query.push(("cursor", c));
         }
@@ -461,11 +466,16 @@ pub enum Cmd {
     /// cursor pages. `min_relevance` works as in `FetchNews` (insider
     /// scores track the trade size, so this is effectively a size filter).
     /// `sort` works as in `FetchNews`, and a delta fetch skips the chart
-    /// bundle the same way.
+    /// bundle the same way. `decision` filters by the sale label and is
+    /// echoed back like the score; `side` false skips the chart bundle on a
+    /// head fetch too, when only the filter moved (the bundle is the whole
+    /// year regardless of the filter, and the app keeps the one it holds).
     FetchInsider {
         symbol: String,
         cursor: Option<String>,
         min_relevance: Option<u8>,
+        decision: InsiderDecision,
+        side: bool,
         sort: Sort,
     },
     /// Fetch one ticker's earnings reads and its next report date.
@@ -504,6 +514,9 @@ pub enum Event {
         /// The category filter this fetch carried, recorded for the same
         /// reason; every category for feeds that cannot filter on it.
         categories: Categories,
+        /// The sale-label filter an insider fetch carried, recorded the same
+        /// way; None for the news feeds.
+        decision: Option<InsiderDecision>,
     },
     /// A load-more failed. The shown feed stays; `gated` marks the archive
     /// horizon (terminal for this feed, offer an upgrade instead of a retry).
@@ -585,7 +598,7 @@ pub const CALENDAR_LOOKBACK_DAYS: i64 = 7;
 /// Which paginated feed a page fetch targets, each with its filters.
 enum Feed<'a> {
     News(Option<&'a str>, NewsFilters),
-    Insider(&'a str, Option<u8>),
+    Insider(&'a str, Option<u8>, Option<&'static str>),
     Events(&'a str),
 }
 
@@ -612,9 +625,9 @@ async fn fetch_feed_page(
             Feed::News(symbol, filters) => {
                 client.news(*symbol, cursor, Some(50), *filters, sort).await
             }
-            Feed::Insider(symbol, min) => {
+            Feed::Insider(symbol, min, decision) => {
                 client
-                    .insider_news(symbol, cursor, Some(50), *min, sort)
+                    .insider_news(symbol, cursor, Some(50), *min, *decision, sort)
                     .await
             }
             Feed::Events(symbol) => client.events(symbol, cursor, Some(50)).await,
@@ -637,9 +650,9 @@ async fn fetch_feed_page(
                 .news(*symbol, cursor, Some(PAGE_SIZE), *filters, sort)
                 .await
         }
-        Feed::Insider(symbol, min) => {
+        Feed::Insider(symbol, min, decision) => {
             client
-                .insider_news(symbol, cursor, Some(PAGE_SIZE), *min, sort)
+                .insider_news(symbol, cursor, Some(PAGE_SIZE), *min, *decision, sort)
                 .await
         }
         Feed::Events(symbol) => client.events(symbol, cursor, Some(PAGE_SIZE)).await,
@@ -751,6 +764,7 @@ pub async fn run(
                         mode,
                         min_relevance,
                         categories,
+                        decision: None,
                     },
                     Err(e) => error_event(key, e, mode, cursor.as_deref()),
                 };
@@ -774,6 +788,7 @@ pub async fn run(
                         mode: FeedMode::Replace,
                         min_relevance: None,
                         categories: Categories::default(),
+                        decision: None,
                     },
                     Err(e) => Event::Error {
                         key,
@@ -808,6 +823,7 @@ pub async fn run(
                         mode,
                         min_relevance: None,
                         categories: Categories::default(),
+                        decision: None,
                     },
                     Err(e) => error_event(key, e, mode, cursor.as_deref()),
                 };
@@ -819,6 +835,8 @@ pub async fn run(
                 symbol,
                 cursor,
                 min_relevance,
+                decision,
+                side,
                 sort,
             } => {
                 let key = insider_key(&symbol);
@@ -827,29 +845,17 @@ pub async fn run(
                     continue;
                 };
                 let mode = feed_mode(sort, cursor.as_deref());
+                let feed = Feed::Insider(&symbol, min_relevance, decision.param());
                 let (page, trades) = match mode {
-                    FeedMode::Replace => {
+                    FeedMode::Replace if side => {
                         let (p, t) = tokio::join!(
-                            fetch_feed_page(
-                                client,
-                                Feed::Insider(&symbol, min_relevance),
-                                None,
-                                sort,
-                                &mut page50,
-                            ),
+                            fetch_feed_page(client, feed, None, sort, &mut page50),
                             client.insider_trades(&symbol)
                         );
                         (p, t.ok())
                     }
                     _ => (
-                        fetch_feed_page(
-                            client,
-                            Feed::Insider(&symbol, min_relevance),
-                            cursor.as_deref(),
-                            sort,
-                            &mut page50,
-                        )
-                        .await,
+                        fetch_feed_page(client, feed, cursor.as_deref(), sort, &mut page50).await,
                         None,
                     ),
                 };
@@ -862,6 +868,7 @@ pub async fn run(
                         mode,
                         min_relevance,
                         categories: Categories::default(),
+                        decision: Some(decision),
                     },
                     Err(e) => error_event(key, e, mode, cursor.as_deref()),
                 };
@@ -1187,6 +1194,14 @@ pub struct InsiderEvent {
     /// "YYYY-MM-DD".
     #[serde(default)]
     pub transaction_date: Option<String>,
+    /// Sales only: whether the insider chose to sell (`discretionary`), sold
+    /// under a plan or for paperwork (`plan_like`), or the filing does not
+    /// tell (`unknown`); None on purchases, other codes and older servers.
+    #[serde(default, deserialize_with = "lenient_opt_string")]
+    pub decision: Option<String>,
+    /// What decided the label (`tax_withholding`, `open_market`, ...).
+    #[serde(default, deserialize_with = "lenient_opt_string")]
+    pub decision_reason: Option<String>,
 }
 
 impl InsiderEvent {
@@ -1543,6 +1558,37 @@ pub struct TradeEvent {
     /// list (selection highlight, stake/tranches in the detail pane).
     #[serde(default)]
     pub news_uid: Option<String>,
+    /// The sale label, as on the feed row (`InsiderEvent::decision`).
+    #[serde(default, deserialize_with = "lenient_opt_string")]
+    pub decision: Option<String>,
+    #[serde(default, deserialize_with = "lenient_opt_string")]
+    pub decision_reason: Option<String>,
+    /// The reporting owner, as filed ("Last First Middle"): the people
+    /// mode groups the year by it.
+    #[serde(default, deserialize_with = "lenient_string")]
+    pub insider_name: String,
+    #[serde(default, deserialize_with = "lenient_string")]
+    pub insider_title: String,
+    #[serde(default)]
+    pub is_officer: bool,
+    #[serde(default)]
+    pub is_director: bool,
+    #[serde(default)]
+    pub is_ten_percent_owner: bool,
+    #[serde(default, deserialize_with = "lenient_opt_string")]
+    pub avg_price_usd: Option<String>,
+    /// Whether the event has an AlphAI article; events older than about six
+    /// months mostly do not.
+    #[serde(default)]
+    pub has_article: bool,
+    /// A co-filed copy of another event (the same trade reported by a fund
+    /// and its general partner): the feed shows the original only.
+    #[serde(default, deserialize_with = "lenient_opt_string")]
+    pub duplicate_of: Option<String>,
+    #[serde(default, deserialize_with = "lenient_opt_string")]
+    pub news_title: Option<String>,
+    #[serde(default, deserialize_with = "lenient_opt_string")]
+    pub news_published: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -2502,7 +2548,7 @@ mod tests {
         let senti = client.sentiment("NVDA").await.unwrap();
         assert!(senti.days > 0);
         let filings = client
-            .insider_news("NVDA", None, None, Some(4), Sort::Published)
+            .insider_news("NVDA", None, None, Some(4), None, Sort::Published)
             .await
             .unwrap();
         assert!(!filings.results.is_empty(), "empty NVDA insider feed");
@@ -2628,7 +2674,7 @@ mod tests {
         // which is where it matters most: a Form 4 is filed days after its
         // trade and enters the feed below the published head.
         let insider_delta = client
-            .insider_news("NVDA", None, Some(PAGE_SIZE), Some(4), Sort::Ingested)
+            .insider_news("NVDA", None, Some(PAGE_SIZE), Some(4), None, Sort::Ingested)
             .await
             .unwrap();
         assert!(

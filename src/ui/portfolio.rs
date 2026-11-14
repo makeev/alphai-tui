@@ -179,10 +179,9 @@ pub(crate) fn render_portfolio_at(f: &mut Frame, area: Rect, app: &mut App, now:
     push(true, W_PCT, "P&L%");
     push(cols.weight, W_WEIGHT, "Wt%");
 
-    let block = app
-        .theme
-        .panel_titled(" Portfolio ")
-        .title_bottom(footnote(app, &totals, area.width));
+    let (block, buttons) = portfolio_panel(app, area);
+    app.hits.buttons.extend(buttons);
+    let block = block.title_bottom(footnote(app, &totals, area.width));
     let rows_area = Hits::rows_area(block.inner(area), 1);
     let table = Table::new(rows, widths)
         .header(Row::new(header).style(Style::new().bold().underlined()))
@@ -359,7 +358,7 @@ fn mixed_currencies(app: &App) -> bool {
 /// No positions yet. The view is always in the tab cycle, so this is the
 /// screen most people see first: it has to say how to fill it, both from
 /// the keyboard and from the config.
-fn render_empty(f: &mut Frame, area: Rect, app: &App) {
+fn render_empty(f: &mut Frame, area: Rect, app: &mut App) {
     let key = app.keymap.action_labels(Action::Position);
     let lines = vec![
         Line::from(""),
@@ -378,10 +377,25 @@ fn render_empty(f: &mut Frame, area: Rect, app: &App) {
         Line::from("   qty = 12").style(app.theme.subtle()),
         Line::from("   avg_price = 182.31").style(app.theme.subtle()),
     ];
-    f.render_widget(
-        Paragraph::new(lines).block(app.theme.panel_titled(" Portfolio ")),
+    let (block, buttons) = portfolio_panel(app, area);
+    app.hits.buttons.extend(buttons);
+    f.render_widget(Paragraph::new(lines).block(block), area);
+}
+
+/// The Portfolio panel with the key that edits a position in its corner.
+fn portfolio_panel(
+    app: &App,
+    area: Rect,
+) -> (
+    ratatui::widgets::Block<'static>,
+    Vec<(Rect, crate::ui::hits::Button)>,
+) {
+    crate::ui::keycap::heading_with_actions(
+        app,
         area,
-    );
+        " Portfolio ",
+        &[(Action::Position, "position", true)],
+    )
 }
 
 /// Right-aligned cell content (numbers line up under each other).

@@ -14,7 +14,20 @@ use ratatui::widgets::Paragraph;
 
 use crate::alphai::{InsiderTrades, TradeEvent, fmt_usd};
 use crate::app::InsiderChartWindow;
+use crate::insider_decision::{self, Kind, Rollup};
+use crate::keymap::Action;
 use crate::theme::Theme;
+use crate::ui::hits::Button;
+use crate::ui::keycap::{self, Pills};
+
+/// What the chart singles out: the filing under the list's cursor, or every
+/// event of the person under the people mode's cursor.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Highlight<'a> {
+    None,
+    Uid(&'a str),
+    Person(&'a str),
+}
 
 /// Scatter rows inside the panel; the log decades map onto these.
 const SCATTER_ROWS: u16 = 5;
@@ -44,16 +57,23 @@ struct Mark<'a> {
     event: &'a TradeEvent,
 }
 
+/// Draws the panel and returns the cells of its window pills for the
+/// mouse. `key` names the key that cycles the window.
+#[allow(clippy::too_many_arguments)]
 pub fn render(
     f: &mut Frame,
     area: Rect,
     trades: &InsiderTrades,
     window: InsiderChartWindow,
-    selected_uid: Option<&str>,
+    highlight: Highlight,
+    labelled: bool,
     today: NaiveDate,
+    key: &str,
     theme: &Theme,
-) {
-    let Some(days) = window.days() else { return };
+) -> Vec<(Rect, Button)> {
+    let Some(days) = window.days() else {
+        return Vec::new();
+    };
     let label = window.label();
     // The window never claims history from before coverage began.
     let mut start = today - Days::new(u64::from(days.saturating_sub(1)));
@@ -63,9 +83,12 @@ pub fn render(
         start = cov;
     }
 
+    // A co-filed copy of a trade already drawn (`duplicate_of`) would put
+    // a second mark on the first and double its dollars.
     let in_window: Vec<&TradeEvent> = trades
         .chart_events
         .iter()
+        .filter(|e| e.duplicate_of.is_none())
         .filter(|e| {
             e.transaction_date
                 .as_deref()
@@ -86,12 +109,52 @@ pub fn render(
         })
         .collect();
 
-    let block = theme
-        .panel()
-        .title(title(&in_window, label, theme))
-        .title_bottom(
-            Line::from(" ▲ buy · ▼ sell · ▽ to issuer · dim = plan ").style(theme.subtle()),
-        );
+    // With sale labels the chart speaks in them; a server from before the
+    // label keeps the plain buy/sell picture, plan sales dimmed.
+    // The view decides (its year, and whether the server labels at all):
+    // a window without sales on a labelling server keeps the labelled
+    // legend under the labelled header.
+    let rollup = Rollup::over(trades.chart_events.iter(), start, today);
+    let labelled = labelled || rollup.has_decisions;
+    let sums = if labelled {
+        labelled_title(&rollup, label, theme)
+    } else {
+        title(&in_window, label, theme)
+    };
+    // The window as pills behind its key in place of the bare label: the
+    // sums follow from the first separator on.
+    let mut spans = vec![Span::styled(
+        " Form 4 ",
+        Style::new().fg(theme.accent).add_modifier(Modifier::BOLD),
+    )];
+    let mut pills = Pills::new();
+    if !key.is_empty() {
+        let cycle = Some(Button::Key(Action::InsiderChart));
+        keycap::push_keycap(&mut spans, &mut pills, key, cycle, theme);
+    }
+    let choices = [
+        InsiderChartWindow::M3,
+        InsiderChartWindow::M12,
+        InsiderChartWindow::Off,
+    ]
+    .map(|w| (w.label().to_string(), Button::InsiderWindow(w), w == window));
+    keycap::push_choices(&mut spans, &mut pills, choices, theme);
+    spans.push(Span::raw(" "));
+    spans.extend(sums.spans.into_iter().skip(1));
+    let head = Line::from(spans);
+    let hits = keycap::place_left(pills, area);
+    // The legend sits in the top right corner beside the sums, or on the
+    // bottom edge where the top has no room for it: the two titles are
+    // laid out independently and would overwrite each other.
+    let legend = legend(&marks, labelled, theme);
+    let mut block = theme.panel().title(head.clone());
+    if legend.width() > 0 {
+        if head.width() + 1 + legend.width() <= usize::from(area.width.saturating_sub(2)) {
+            block = block.title(legend.right_aligned());
+        } else {
+            block = block.title_bottom(legend);
+        }
+    }
     let inner = block.inner(area);
     f.render_widget(block, area);
 
@@ -107,7 +170,7 @@ pub fn render(
                 ..inner
             },
         );
-        return;
+        return hits;
     }
 
     // Left gutter sized to the widest decade label, like the candle chart.
@@ -120,7 +183,7 @@ pub fn render(
         .unwrap_or(0) as u16
         + 1;
     if inner.width <= gutter + 4 || inner.height < SCATTER_ROWS + 1 {
-        return; // too small: leave the bare block
+        return hits; // too small: leave the bare block
     }
     let with_bars = inner.height > SCATTER_ROWS + BARS_ROWS;
     let plot = Rect {
@@ -154,34 +217,56 @@ pub fn render(
         buf.set_string(x, row, &text, dim);
     }
 
-    // Scatter: selected mark drawn last so its inverted cell always wins;
-    // a taken cell nudges the mark up, then down, then overwrites.
+    // Scatter: the highlighted marks drawn last so they always win their
+    // cell, discretionary sales after routine ones for the same reason; a
+    // taken cell nudges the mark up, then down, then overwrites.
     let mut taken = vec![false; plot.width as usize * SCATTER_ROWS as usize];
-    let selected =
-        |e: &TradeEvent| selected_uid.is_some_and(|uid| e.news_uid.as_deref() == Some(uid));
-    let (chosen, rest): (Vec<&Mark>, Vec<&Mark>) = marks.iter().partition(|m| selected(m.event));
-    for mark in rest.iter().chain(chosen.iter()) {
+    let chosen = |e: &TradeEvent| match highlight {
+        Highlight::None => false,
+        Highlight::Uid(uid) => e.news_uid.as_deref() == Some(uid),
+        Highlight::Person(name) => e.insider_name == name,
+    };
+    let kind_of = |e: &TradeEvent| {
+        insider_decision::kind(
+            e.side.as_deref(),
+            e.transaction_code.as_deref(),
+            e.decision.as_deref(),
+        )
+    };
+    let mut order: Vec<&Mark> = marks.iter().collect();
+    order.sort_by_key(|m| (chosen(m.event), kind_of(m.event) == Kind::Discretionary));
+    let person = matches!(highlight, Highlight::Person(_));
+    for mark in order {
         let x = col(mark.date);
         let ideal = value_row(mark.value, lo_exp, hi_exp, SCATTER_ROWS);
         let row = nudge(&taken, plot.width, x - plot.x, ideal, SCATTER_ROWS);
         taken[row as usize * plot.width as usize + (x - plot.x) as usize] = true;
-        let (glyph, color) = match (
-            mark.event.transaction_code.as_deref(),
-            mark.event.side.as_deref(),
-        ) {
-            (Some("D"), _) => ('▽', theme.neg),
-            (_, Some("buy")) => ('▲', theme.pos),
-            (_, Some("sell")) => ('▼', theme.neg),
-            _ => ('·', theme.flat),
-        };
-        let mut style = Style::new().fg(color);
-        if mark.event.is_10b5_1 {
-            style = style.add_modifier(Modifier::DIM);
-        }
-        if selected(mark.event) {
+        let kind = kind_of(mark.event);
+        let glyph = insider_decision::glyph(kind);
+        let mut style = mark_style(kind, labelled, mark.event.is_10b5_1, theme);
+        if person {
+            // The person's events keep their colors (their routine sales
+            // too); everyone else's step back to the faint tier, which
+            // reads on every theme where a dimmed color would not.
+            if chosen(mark.event) {
+                // Routine marks are faint by default; the person's own step
+                // up to body text, or on the ANSI theme (where subtle and
+                // faint are the same DIM) they would not stand out at all.
+                if kind == Kind::Routine {
+                    style = Style::new().fg(theme.text);
+                }
+            } else {
+                style = theme.faint();
+            }
+        } else if chosen(mark.event) {
             style = style.add_modifier(Modifier::REVERSED | Modifier::BOLD);
         }
         if let Some(cell) = buf.cell_mut((x, plot.y + row)) {
+            // A mark that overwrites another replaces its look: set_style
+            // only adds modifiers, and a routine mark's DIM (the faint tier
+            // on the ANSI theme) would dim the discretionary one on top.
+            cell.modifier = Modifier::empty();
+            cell.fg = ratatui::style::Color::Reset;
             cell.set_char(glyph).set_style(style);
         }
     }
@@ -193,7 +278,11 @@ pub fn render(
             height: BARS_ROWS,
             ..plot
         };
-        render_bars(buf, bars, trades, start, today, gutter, &col, theme);
+        if labelled {
+            render_label_bars(buf, bars, trades, start, today, gutter, &col, theme);
+        } else {
+            render_bars(buf, bars, trades, start, today, gutter, &col, theme);
+        }
     }
 
     // Month ticks along the bottom row, thinned to whatever fits.
@@ -212,6 +301,263 @@ pub fn render(
         }
         buf.set_string(x, axis_y, &text, dim);
         last_end = x + len;
+    }
+    hits
+}
+
+/// Panel title with sale labels: the window's discretionary and routine
+/// sales, and its purchases, each by dollars and count.
+fn labelled_title(r: &Rollup, label: &str, theme: &Theme) -> Line<'static> {
+    let mut spans = vec![Span::styled(
+        format!(" Form 4 · {label} "),
+        Style::new().fg(theme.accent).add_modifier(Modifier::BOLD),
+    )];
+    let mut part = |glyph: &str, glyph_style: Style, text: String, text_style: Style| {
+        spans.push(Span::styled("· ", theme.faint()));
+        spans.push(Span::styled(format!("{glyph} "), glyph_style));
+        spans.push(Span::styled(format!("{text} "), text_style));
+    };
+    let money = insider_decision::money;
+    if r.discretionary.count > 0 {
+        part(
+            "▼",
+            Style::new().fg(theme.warn),
+            format!("{} ×{}", money(r.discretionary.usd), r.discretionary.count),
+            Style::new().fg(theme.text).add_modifier(Modifier::BOLD),
+        );
+    }
+    if r.routine.count > 0 {
+        part(
+            "▾",
+            theme.subtle(),
+            format!("{} ×{}", money(r.routine.usd), r.routine.count),
+            theme.subtle(),
+        );
+    }
+    if r.unclear.count > 0 {
+        part(
+            "?",
+            Style::new().fg(theme.text),
+            format!("{} ×{}", money(r.unclear.usd), r.unclear.count),
+            Style::new().fg(theme.text),
+        );
+    }
+    if r.buys.count > 0 {
+        part(
+            "▲",
+            Style::new().fg(theme.pos),
+            format!("{} ×{}", money(r.buys.usd), r.buys.count),
+            Style::new().fg(theme.pos),
+        );
+    }
+    Line::from(spans)
+}
+
+/// A mark's style, shared by the scatter and its legend so the legend's
+/// glyph looks exactly like the marks it names. Without sale labels the
+/// picture is plain buy and sell, plan sales dimmed.
+fn mark_style(kind: Kind, labelled: bool, plan: bool, theme: &Theme) -> Style {
+    if labelled {
+        return match kind {
+            Kind::Discretionary => Style::new().fg(theme.warn).add_modifier(Modifier::BOLD),
+            Kind::Routine => theme.faint(),
+            Kind::Unclear => Style::new().fg(theme.text),
+            Kind::Buy => Style::new().fg(theme.pos),
+            Kind::ToIssuer => theme.subtle(),
+            Kind::Sold => Style::new().fg(theme.neg),
+            Kind::Other => Style::new().fg(theme.flat),
+        };
+    }
+    let style = match kind {
+        Kind::Buy => Style::new().fg(theme.pos),
+        Kind::Other => Style::new().fg(theme.flat),
+        _ => Style::new().fg(theme.neg),
+    };
+    if plan {
+        style.add_modifier(Modifier::DIM)
+    } else {
+        style
+    }
+}
+
+/// The legend: one entry per kind of mark the window draws, its glyph in
+/// the mark's own style and a word beside it, so every color on the chart
+/// is named. Kinds the window lacks stay out: it is a key to what is on
+/// screen, kept short for a corner.
+fn legend(marks: &[Mark], labelled: bool, theme: &Theme) -> Line<'static> {
+    let kind_of = |m: &Mark| {
+        insider_decision::kind(
+            m.event.side.as_deref(),
+            m.event.transaction_code.as_deref(),
+            m.event.decision.as_deref(),
+        )
+    };
+    let has = |kind: Kind, plan: Option<bool>| {
+        marks
+            .iter()
+            .any(|m| kind_of(m) == kind && plan.is_none_or(|p| m.event.is_10b5_1 == p))
+    };
+    let mut entries: Vec<(Kind, bool, &str)> = Vec::new();
+    if labelled {
+        for (kind, word) in [
+            (Kind::Discretionary, "discretionary"),
+            (Kind::Routine, "routine"),
+            (Kind::Unclear, "unclear"),
+            (Kind::Sold, "unlabelled"),
+            (Kind::Buy, "buy"),
+            (Kind::ToIssuer, "to issuer"),
+            (Kind::Other, "other"),
+        ] {
+            if has(kind, None) {
+                entries.push((kind, false, word));
+            }
+        }
+    } else {
+        for (kind, plan, word) in [
+            (Kind::Buy, None, "buy"),
+            (Kind::Sold, Some(false), "sell"),
+            (Kind::Sold, Some(true), "plan sale"),
+            (Kind::ToIssuer, None, "to issuer"),
+            (Kind::Other, None, "other"),
+        ] {
+            if has(kind, plan) {
+                entries.push((kind, plan == Some(true), word));
+            }
+        }
+    }
+    if entries.is_empty() {
+        return Line::default();
+    }
+    let mut spans = Vec::new();
+    for (kind, plan, word) in entries {
+        spans.push(Span::raw(" "));
+        spans.push(Span::styled(
+            insider_decision::glyph(kind).to_string(),
+            mark_style(kind, labelled, plan, theme),
+        ));
+        spans.push(Span::styled(format!(" {word} "), theme.subtle()));
+    }
+    Line::from(spans)
+}
+
+/// Weekly bars with sale labels: dollars on a square-root scale (one
+/// fund's exit would flatten every other week on a linear one), the
+/// discretionary part in the warn color from the base, the routine part
+/// above it shaded `▒` in whole cells (no background to split a cell on
+/// ANSI themes). Purchases grow up from the middle when the window has
+/// both sides, sales hang down from it.
+#[allow(clippy::too_many_arguments)]
+fn render_label_bars(
+    buf: &mut ratatui::buffer::Buffer,
+    area: Rect,
+    trades: &InsiderTrades,
+    start: NaiveDate,
+    today: NaiveDate,
+    gutter: u16,
+    col: &dyn Fn(NaiveDate) -> u16,
+    theme: &Theme,
+) {
+    let weeks = insider_decision::weekly(trades.chart_events.iter(), start, today);
+    let vmax = weeks
+        .iter()
+        .fold(0.0_f64, |m, w| m.max(w.sells()).max(w.buys));
+    if vmax <= 0.0 {
+        return;
+    }
+    let two_sided = weeks.iter().any(|w| w.buys > 0.0) && weeks.iter().any(|w| w.sells() > 0.0);
+    let (buy_h, sell_y, sell_h) = if two_sided {
+        let half = area.height / 2;
+        (half, area.y + half, area.height - half)
+    } else {
+        (0, area.y, area.height)
+    };
+    // Half-rows a value fills, never zero for a traded week.
+    let sub = |v: f64, rows: u16| -> usize {
+        if v <= 0.0 {
+            return 0;
+        }
+        (((v / vmax).sqrt() * rows as f64 * 2.0).round() as usize).clamp(1, rows as usize * 2)
+    };
+    let put =
+        |buf: &mut ratatui::buffer::Buffer, x0: u16, x1: u16, y: u16, ch: char, style: Style| {
+            for x in x0..=x1 {
+                if let Some(cell) = buf.cell_mut((x, y)) {
+                    cell.set_char(ch).set_style(style);
+                }
+            }
+        };
+    for w in &weeks {
+        let week_end = w.start + Days::new(6);
+        let c0 = col(w.start.max(start));
+        let mut c1 = col(week_end.min(today));
+        if c1 > c0 {
+            c1 -= 1; // gap column so neighbouring weeks never fuse
+        }
+        let warn = Style::new().fg(theme.warn);
+        if two_sided {
+            // Purchases up from the middle line.
+            let f = sub(w.buys, buy_h);
+            for row in 0..buy_h {
+                let lower = (buy_h - 1 - row) as usize * 2;
+                let ch = match f.saturating_sub(lower) {
+                    0 => continue,
+                    1 => '▄',
+                    _ => '█',
+                };
+                put(buf, c0, c1, area.y + row, ch, Style::new().fg(theme.pos));
+            }
+        }
+        let total = sub(w.sells(), sell_h);
+        if total == 0 {
+            continue;
+        }
+        let share = w.discretionary / w.sells();
+        // Cells from the base outward: the base is the bottom on a one-sided
+        // chart and the middle line on a two-sided one.
+        let row_at = |i: usize| {
+            if two_sided {
+                sell_y + i as u16
+            } else {
+                sell_y + sell_h - 1 - i as u16
+            }
+        };
+        if share >= 1.0 {
+            // Only choices: half-row steps, like the plain bars.
+            for i in 0..total.div_ceil(2) {
+                let half = i + 1 == total.div_ceil(2) && total % 2 == 1;
+                let ch = match (half, two_sided) {
+                    (false, _) => '█',
+                    (true, false) => '▄',
+                    (true, true) => '▀',
+                };
+                put(buf, c0, c1, row_at(i), ch, warn);
+            }
+            continue;
+        }
+        // Both kinds (or routine alone): whole cells, split by the rounded
+        // share. A minority gets a cell of its own only when the bar has
+        // two or more, so a $1M choice beside $9M of routine does not paint
+        // the week as a choice.
+        let cells = total.div_ceil(2).max(1);
+        let disc_cells = if share <= 0.0 {
+            0
+        } else if cells >= 2 {
+            ((cells as f64 * share).round() as usize).clamp(1, cells - 1)
+        } else {
+            usize::from(share >= 0.5)
+        };
+        for i in 0..cells {
+            if i < disc_cells {
+                put(buf, c0, c1, row_at(i), '█', warn);
+            } else {
+                put(buf, c0, c1, row_at(i), '▒', theme.faint());
+            }
+        }
+    }
+    let text = fmt_usd(&vmax.to_string());
+    let len = text.chars().count() as u16;
+    if len < gutter {
+        buf.set_string(area.x - 1 - len, area.y, &text, theme.subtle());
     }
 }
 

@@ -13,7 +13,7 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Cell, Paragraph, Row, Table};
+use ratatui::widgets::{Block, Cell, Paragraph, Row, Table};
 
 use crate::alphai::{self, CalendarEvent};
 use crate::app::App;
@@ -21,7 +21,8 @@ use crate::config::ChartTimezone;
 use crate::keymap::Action;
 use crate::market;
 use crate::theme::Theme;
-use crate::ui::hits::{Hits, ListKind};
+use crate::ui::hits::{Button, Hits, ListKind};
+use crate::ui::keycap;
 use crate::ui::{Hint, View, ViewId, time_axis};
 
 static HINTS: &[Hint] = &[
@@ -360,7 +361,7 @@ pub(crate) fn build_agenda(
     rows
 }
 
-#[derive(Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum Filter {
     #[default]
     All,
@@ -840,19 +841,68 @@ fn statuses(app: &App, rows: &[AgendaRow], now: DateTime<Utc>) -> [String; 2] {
     [macro_line, reports::status(app, rows)]
 }
 
+/// The agenda's panel: the filter as pills behind its key (a click picks
+/// one) and the window it covers, narrowing to the current filter alone.
+fn calendar_panel(app: &App, area: Rect) -> (Block<'static>, Vec<(Rect, Button)>) {
+    let theme = &app.theme;
+    let key = app.keymap.labels(&[Action::CycleScope]);
+    let current = app.calendar_filter;
+    let form = |all: bool, window: bool| -> keycap::Title {
+        let mut spans = vec![theme.heading(" Calendar ").spans.remove(0)];
+        let mut pills = keycap::Pills::new();
+        let cycle = Some(Button::Key(Action::CycleScope));
+        if key.is_empty() {
+            spans.push(Span::styled("· ", theme.faint()));
+        } else {
+            keycap::push_keycap(&mut spans, &mut pills, &key, cycle, theme);
+        }
+        if all {
+            let choices = [Filter::All, Filter::Reports, Filter::Macro].map(|f| {
+                (
+                    f.label().to_lowercase(),
+                    Button::CalendarFilter(f),
+                    f == current,
+                )
+            });
+            keycap::push_choices(&mut spans, &mut pills, choices, theme);
+        } else {
+            let label = format!(" {} ", current.label().to_lowercase());
+            keycap::push_pill(
+                &mut spans,
+                &mut pills,
+                label,
+                keycap::lit_style(theme),
+                cycle,
+            );
+        }
+        spans.push(Span::raw(" "));
+        if window {
+            spans.push(Span::styled("· past 7d · next 45d ", theme.subtle()));
+        }
+        (Line::from(spans), pills)
+    };
+    let forms = [
+        (form(true, true), None),
+        (form(true, false), None),
+        (form(false, false), None),
+    ];
+    let (left, _) = keycap::fit(area.width, forms).unwrap_or_else(|| {
+        let text = format!(" Calendar · {} ", current.label());
+        (
+            (
+                theme.heading(fit(&text, area.width.saturating_sub(2))),
+                keycap::Pills::new(),
+            ),
+            None,
+        )
+    });
+    keycap::panel(theme, area, left, None)
+}
+
 pub(crate) fn render_calendar_at(f: &mut Frame, area: Rect, app: &mut App, now: DateTime<Utc>) {
     let zone = time_axis::zone_name(app.chart.timezone, true);
-    let title = if area.width >= 58 {
-        format!(
-            " Calendar · {} · past 7d · next 45d ",
-            app.calendar_filter.label()
-        )
-    } else {
-        format!(" Calendar · {} ", app.calendar_filter.label())
-    };
-    let mut block = app
-        .theme
-        .panel_titled(fit(&title, area.width.saturating_sub(2)));
+    let (mut block, buttons) = calendar_panel(app, area);
+    app.hits.buttons.extend(buttons);
     if area.width >= 38 {
         block = block.title_bottom(
             Line::from(fit(

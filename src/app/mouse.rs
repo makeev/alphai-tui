@@ -11,7 +11,7 @@ use crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKin
 use ratatui::layout::Position;
 
 use super::{App, ArticleOverlay, HelpOverlay};
-use crate::ui::hits::{ListKind, Scroll};
+use crate::ui::hits::{Button, ListKind, Scroll};
 use crate::ui::{self, ViewId};
 
 /// Lines a wheel notch moves a text pane; lists move one row.
@@ -122,6 +122,11 @@ impl App {
                     self.move_calendar(dir.into());
                     true
                 }
+                ListKind::People => {
+                    let before = self.insider_person;
+                    self.move_insider_person(dir.into());
+                    before != self.insider_person
+                }
                 ListKind::NewsStrip | ListKind::Categories | ListKind::TickerSearch => false,
             };
         }
@@ -129,6 +134,33 @@ impl App {
             return self.wheel_watchlist(dir);
         }
         false
+    }
+
+    /// A click on a title pill, a keycap or a footer hint: what its key
+    /// does, or the value the pill names.
+    fn press(&mut self, button: Button) {
+        match button {
+            Button::InsiderFilter(filter) => self.set_insider_decision(filter),
+            Button::InsiderPeople(people) => self.insider_people = people,
+            Button::Score(delta) => self.adjust_min_score(delta),
+            Button::Key(action) => {
+                // A click never quits, whatever a remap put on the hint.
+                if action != crate::keymap::Action::Quit {
+                    self.run_action(action);
+                }
+            }
+            Button::Preset(idx) => {
+                if let Some(&(range, interval)) = self.chart.presets.get(idx) {
+                    self.set_window(range, interval);
+                }
+            }
+            Button::NewsScope(scope) => self.set_news_scope(scope),
+            Button::NewsLayout(layout) => self.set_news_layout(layout),
+            Button::CalendarFilter(filter) => self.calendar_filter = filter,
+            Button::InsiderWindow(window) => self.insider_chart = window,
+            Button::SummaryLayout(layout) => self.summary_layout = layout,
+            Button::SummaryOrder(order) => self.summary_order = order,
+        }
     }
 
     fn wheel_watchlist(&mut self, dir: i16) -> bool {
@@ -194,6 +226,10 @@ impl App {
             self.switch_view(idx);
             return true;
         }
+        if let Some(button) = self.hits.button_at(pos) {
+            self.press(button);
+            return true;
+        }
         if let Some(idx) = self
             .hits
             .peer_at(pos)
@@ -233,6 +269,13 @@ impl App {
                     self.news_selected = row;
                     self.card_scroll = 0;
                 }
+                true
+            }
+            ListKind::People => {
+                if row >= self.insider_people_list().len() || row == self.insider_person {
+                    return false;
+                }
+                self.insider_person = row;
                 true
             }
             ListKind::NewsStrip => {

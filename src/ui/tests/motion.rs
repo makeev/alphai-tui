@@ -110,7 +110,7 @@ fn quote_rail_keeps_context_in_place_across_digit_and_countdown_changes() {
     let now = market_open_moment();
     let positions = |app: &App, now| {
         let line = ui::rail::text(&ui::rail::line(app, 240, now));
-        ["quote", "timing varies", "● live", "├"].map(|s| {
+        ["▲", "● live", "timing varies", "├"].map(|s| {
             let index = line
                 .find(s)
                 .unwrap_or_else(|| panic!("missing {s}: {line}"));

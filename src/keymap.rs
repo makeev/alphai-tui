@@ -154,7 +154,9 @@ fn default_keys(action: Action) -> Vec<KeyCombo> {
         Action::CycleLayout => vec![ch('x')],
         // '=' is unshifted '+' on most layouts; both raise the filter.
         Action::ScoreUp => vec![ch('+'), ch('=')],
-        Action::ScoreDown => vec![ch('-')],
+        // '_' is '-' with shift held, the way '+' is '=' with shift: both
+        // filter keys work whichever way the hand is on the key.
+        Action::ScoreDown => vec![ch('-'), ch('_')],
         // g for graph: the Form 4 chart panel of the Insider view.
         Action::InsiderChart => vec![ch('g')],
         Action::ChartStyle => vec![ch('c')],
@@ -522,6 +524,9 @@ mod tests {
             map.resolve(&KeyEvent::from(KeyCode::Char('-'))),
             Some(Action::ScoreDown)
         );
+        // And '-' held with shift, which arrives as '_'.
+        let shifted_minus = KeyEvent::new(KeyCode::Char('_'), KeyModifiers::SHIFT);
+        assert_eq!(map.resolve(&shifted_minus), Some(Action::ScoreDown));
         // The footer shows the two filter keys as one glyph pair.
         assert_eq!(map.labels(&[Action::ScoreUp, Action::ScoreDown]), "+-");
     }

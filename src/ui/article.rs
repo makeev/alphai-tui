@@ -75,7 +75,7 @@ pub fn render_pane(
         symbol,
         earnings,
         None,
-        "· pgup/pgdn scroll · v expand ",
+        &[("pgup/pgdn", "scroll"), ("v", "expand")],
         scroll,
         theme,
     );
@@ -92,7 +92,7 @@ pub fn render_pane_with(
     symbol: &str,
     earnings: Option<&EarningsRead>,
     extra: Option<String>,
-    hint: &str,
+    hint: &[(&str, &str)],
     scroll: &mut u16,
     theme: &Theme,
 ) {
@@ -125,7 +125,7 @@ pub fn render_reading(
 ) {
     let block = theme.panel().title(news::hint_title(
         " article ",
-        "· ↑↓ scroll · ⏎ open · v back ",
+        &[("↑↓", "scroll"), ("⏎", "open"), ("v", "back")],
         theme,
     ));
     let Some(a) = article else {
@@ -198,7 +198,7 @@ fn card_lines(
         Line::from(title).bold(),
         Line::from(news::source_meta(a).join(" · ")).style(theme.subtle()),
     ];
-    lines.extend(trade_lines(a, extra, theme));
+    lines.extend(trade_lines(a, extra, width as usize, theme));
     lines.extend(event_lines(a, width as usize, theme));
     let selected = a.enrichment.ai_trading_insights.as_ref().and_then(|i| {
         i.ticker_analysis
@@ -407,7 +407,12 @@ fn impact_lines(t: &TickerAnalysis, theme: &Theme) -> Vec<Line<'static>> {
 }
 
 /// Facts extracted from Form 4, kept separate from AI interpretation.
-fn trade_lines(a: &Article, extra: Option<&str>, theme: &Theme) -> Vec<Line<'static>> {
+fn trade_lines(
+    a: &Article,
+    extra: Option<&str>,
+    width: usize,
+    theme: &Theme,
+) -> Vec<Line<'static>> {
     let Some(t) = &a.insider else {
         return extra
             .map(|s| vec![Line::from(s.to_string())])
@@ -426,10 +431,56 @@ fn trade_lines(a: &Article, extra: Option<&str>, theme: &Theme) -> Vec<Line<'sta
     if let Some(v) = &t.total_value_usd {
         head.push(Span::raw(format!(" {}", alphai::fmt_usd(v))).bold());
     }
-    if t.is_10b5_1 {
+    // The sale label, its glyph in the meaning color and its word in a text
+    // tier (the warn color does not read as text on light themes). The
+    // reason says why on the next line; the 10b5-1 mark stays only where
+    // the label does not already say it (a discretionary sale next to a
+    // plan tranche).
+    let kind = crate::insider_decision::kind(
+        t.side.as_deref(),
+        t.transaction_code.as_deref(),
+        t.decision.as_deref(),
+    );
+    let labelled = t.decision.is_some();
+    if let Some(decision) = t.decision.as_deref() {
+        let (glyph_style, word_style) = match kind {
+            crate::insider_decision::Kind::Discretionary => (
+                Style::new().fg(theme.warn),
+                Style::new().fg(theme.text).bold(),
+            ),
+            crate::insider_decision::Kind::Unclear => {
+                (Style::new().fg(theme.text), Style::new().fg(theme.text))
+            }
+            _ => (theme.subtle(), theme.subtle()),
+        };
+        head.push(Span::styled(" · ", theme.faint()));
+        head.push(Span::styled(
+            format!("{} ", crate::insider_decision::glyph(kind)),
+            glyph_style,
+        ));
+        head.push(Span::styled(
+            crate::insider_decision::decision_label(decision).into_owned(),
+            word_style,
+        ));
+    }
+    if t.is_10b5_1 && (!labelled || kind == crate::insider_decision::Kind::Discretionary) {
         head.push(Span::styled(" · 10b5-1 plan", theme.subtle()));
     }
     let mut lines = vec![Line::from(head)];
+    if labelled {
+        let why = match t.decision_reason.as_deref() {
+            Some(reason) => {
+                let short = crate::insider_decision::reason_label(reason);
+                match crate::insider_decision::reason_text(reason) {
+                    Some(long) => format!("{short}: {long}"),
+                    None => short.into_owned(),
+                }
+            }
+            None => "the filing does not let us tell".to_string(),
+        };
+        // Under its own column when it wraps, like an event's facts.
+        lines.extend(hanging("why  ".into(), 5, &why, width, theme));
+    }
     if let Some(extra) = extra {
         lines.push(Line::from(extra.to_string()));
     }

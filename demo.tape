@@ -67,15 +67,19 @@ Sleep 3.5s
 Type "v"
 Sleep 1s
 
-# f cycles the scope: market-wide, with reprints collapsed
+# f cycles the scope: the ticker's corporate events, market-wide with
+# reprints collapsed, trending, and back to the ticker
 Type "f"
-Sleep 4.5s
+Sleep 3.5s
 Type "f"
-Sleep 3s
+Sleep 4s
+Type "f"
+Sleep 2.5s
 Type "f"
 Sleep 1.5s
 
-# Insider: a year of SEC Form 4 filings for AVGO, chart and stream
+# Insider: a year of SEC Form 4 filings for AVGO, each sale labelled by
+# why the insider sold, chart and stream
 Right
 Sleep 500ms
 Type "5"
@@ -91,9 +95,14 @@ Sleep 5s
 PageDown
 Sleep 3s
 
-# Summary: the whole watchlist as charts at once
+# Summary: the day's line over the watchlist as cards, then the heat map
 Type "7"
 Sleep 4s
+Type "x"
+Sleep 3s
+Type "x"
+Type "x"
+Sleep 500ms
 
 # Portfolio: the holdings, what they are worth and what they made
 Type "8"

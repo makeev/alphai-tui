@@ -4,7 +4,7 @@
 #
 # One take is one launch, which is one price request per ticker (the poll
 # interval is parked at 900s on purpose: Yahoo rate-limits by IP, and a
-# second poll would double the bill) plus about eighteen AlphAI requests
+# second poll would double the bill) plus about twenty AlphAI requests
 # for the feeds, the earnings reads and the macro calendar. The company
 # dates are fetched one at a time while Calendar is open.
 #
@@ -82,8 +82,13 @@ Sleep 5s
 Escape
 Sleep 2s
 
-# f cycles the scope: the whole market with reprints collapsed, then the
-# 48-hour trending top 10, then back to the ticker.
+# f cycles the scope: the ticker's corporate events, the whole market
+# with reprints collapsed, the 48-hour trending top 10, then back to the
+# ticker. The scopes are pills in the list's title.
+Type "f"
+Sleep 7s
+Screenshot assets/events.png
+Sleep 5s
 Type "f"
 Sleep 7s
 Screenshot assets/market.png
@@ -112,16 +117,14 @@ Screenshot assets/chart.png
 Sleep 5s
 
 # 5:Insider, on AVGO, which files Form 4s at a steady clip. g opens the
-# window to twelve months and - drops the trade-size filter, which is what
-# a year of one company's filings actually looks like.
+# chart to twelve months: every filing of the year as a mark labelled by
+# why the insider sold, the list showing every filing as the chart does.
 Type "5"
 Sleep 2s
 Right
 Sleep 8s
 Type "g"
-Sleep 3s
-Type "-"
-Sleep 6s
+Sleep 4s
 Screenshot assets/insider.png
 Sleep 5s
 
@@ -133,11 +136,22 @@ Sleep 8s
 Screenshot assets/earnings.png
 Sleep 5s
 
-# 7:Summary, the whole watchlist as charts at once.
+# 7:Summary under the day's line: the watchlist as cards, then x to the
+# heat map and to every ticker on one chart, and back to the cards.
 Type "7"
 Sleep 4s
 Screenshot assets/summary.png
 Sleep 5s
+Type "x"
+Sleep 2s
+Screenshot assets/heatmap.png
+Sleep 5s
+Type "x"
+Sleep 2s
+Screenshot assets/compare.png
+Sleep 5s
+Type "x"
+Sleep 1s
 
 # 8:Portfolio, the holdings from the throwaway config above.
 Type "8"

@@ -13,6 +13,8 @@ use crate::indicators;
 use crate::keymap::Action;
 use crate::market;
 use crate::theme::Theme;
+use crate::ui::hits::Button;
+use crate::ui::keycap::{self, Pills, Title};
 use crate::ui::{Hint, View, ViewId};
 use crate::ui::{
     news_marks,
@@ -49,7 +51,8 @@ impl View for ChartView {
                 ],
                 "chart",
             ),
-            Hint::act(&[Action::NextPreset], "preset"),
+            // The preset's key leads the presets in the chart's title, so
+            // the footer leaves it out and stays inside 110 columns.
             Hint::act(&[Action::Refresh], "refresh"),
             Hint::act(&[Action::Settings], "settings"),
             Hint::act(&[Action::Help], "help"),
@@ -62,7 +65,8 @@ impl View for ChartView {
     }
 
     fn render(&self, f: &mut Frame, area: Rect, app: &mut App) {
-        render_chart(f, area, app);
+        let buttons = render_chart(f, area, app);
+        app.hits.buttons.extend(buttons);
     }
 }
 
@@ -95,18 +99,28 @@ fn panel_split(height: u16, volume: bool, rsi: bool) -> (u16, u16) {
 /// close line via the `c` toggle, optional 20/100 moving average overlays
 /// (`m`, simple or exponential by `e`), a volume panel (`b`) and an RSI(14)
 /// panel (`i`). Shared by ChartView and SplitView.
-pub fn render_chart(f: &mut Frame, area: Rect, app: &App) {
-    render_chart_with(f, area, app, app.show_volume, app.show_rsi);
+pub fn render_chart(f: &mut Frame, area: Rect, app: &App) -> Vec<(Rect, Button)> {
+    render_chart_with(f, area, app, app.show_volume, app.show_rsi, true)
 }
 
 /// The price panel alone, for the News chart layout: it shares the screen
 /// with the list and the card, and the keys that toggle the lower panels
 /// do not reach it there, so it keeps every row for the candles.
-pub fn render_price_chart(f: &mut Frame, area: Rect, app: &App) {
-    render_chart_with(f, area, app, false, false);
+pub fn render_price_chart(f: &mut Frame, area: Rect, app: &App) -> Vec<(Rect, Button)> {
+    render_chart_with(f, area, app, false, false, false)
 }
 
-fn render_chart_with(f: &mut Frame, area: Rect, app: &App, show_volume: bool, show_rsi: bool) {
+/// The chart and the cells of its title pills for the mouse. `tools` puts
+/// the indicator keys on the bottom border: where they act (Chart, Split).
+fn render_chart_with(
+    f: &mut Frame,
+    area: Rect,
+    app: &App,
+    show_volume: bool,
+    show_rsi: bool,
+    tools: bool,
+) -> Vec<(Rect, Button)> {
+    let mut hits = Vec::new();
     let symbol = app.selected_symbol().to_string();
 
     let Some(data) = app.data.get(&symbol) else {
@@ -118,7 +132,7 @@ fn render_chart_with(f: &mut Frame, area: Rect, app: &App, show_volume: bool, sh
             Paragraph::new(msg).block(app.theme.panel_titled(format!(" {symbol} "))),
             area,
         );
-        return;
+        return hits;
     };
     if data.candles.len() < 2 {
         f.render_widget(
@@ -126,7 +140,7 @@ fn render_chart_with(f: &mut Frame, area: Rect, app: &App, show_volume: bool, sh
                 .block(app.theme.panel_titled(format!(" {symbol} "))),
             area,
         );
-        return;
+        return hits;
     }
 
     let drawn = Drawn::of(app, &symbol);
@@ -143,7 +157,9 @@ fn render_chart_with(f: &mut Frame, area: Rect, app: &App, show_volume: bool, sh
     ])
     .areas(area);
 
-    let geom = render_price_candles(f, price_area, app, &symbol, data, drawn, cut);
+    let geom = render_price_candles(
+        f, price_area, app, &symbol, data, drawn, cut, tools, &mut hits,
+    );
     if let Some(geom) = geom {
         if volume_h > 0 {
             render_volume_candles(f, volume_area, &geom, single_venue, &app.chart, &app.theme);
@@ -152,6 +168,7 @@ fn render_chart_with(f: &mut Frame, area: Rect, app: &App, show_volume: bool, sh
             render_rsi(f, rsi_area, data, cut, &geom, &app.chart, &app.theme);
         }
     }
+    hits
 }
 
 /// The window the chart draws a ticker's rows on: the one they were fetched
@@ -224,7 +241,7 @@ fn chart_title(
     show_quote: bool,
     width: u16,
     note: Option<&str>,
-) -> Line<'static> {
+) -> Title {
     let (q, theme) = (&data.quote, &app.theme);
     let mut spans = vec![Span::styled(
         format!(" {symbol} "),
@@ -246,92 +263,33 @@ fn chart_title(
             ));
         }
     }
-    spans.push(Span::styled(
-        format!("· {} / {} ", drawn.range.as_str(), drawn.interval.as_str()),
-        theme.subtle(),
-    ));
-    // Only the sessions switch pending shows in the EXT label below. A
-    // refused window says so: the footer carries the error, and "loading"
-    // would be a promise the next poll may not keep.
-    let loading = drawn.pending && (drawn.range, drawn.interval) != (app.range, app.interval);
-    let failed = drawn.pending && app.window_failed(symbol);
-    if loading {
-        let window = format!("{} / {}", app.range.as_str(), app.interval.as_str());
-        spans.push(if failed {
-            Span::styled(format!("{window} failed "), Style::new().fg(theme.error))
+    // Every preset as a pill where the title has room for them and for the
+    // session switch after them, else the current one behind its key.
+    let room = usize::from(width.saturating_sub(2));
+    let build = |all_presets: bool| {
+        let (mut spans, mut pills) = (spans.clone(), Pills::new());
+        push_presets(&mut spans, &mut pills, app, all_presets);
+        push_window_state(&mut spans, app, symbol, drawn, note);
+        let mut with_ext = (spans.clone(), pills.clone());
+        push_ext(&mut with_ext.0, &mut with_ext.1, app, symbol, data, drawn);
+        (spans, pills, with_ext)
+    };
+    let width_of = |spans: &[Span]| spans.iter().map(Span::width).sum::<usize>();
+    let (mut spans, mut pills) = {
+        let (spans, pills, with_ext) = build(true);
+        if width_of(&with_ext.0) <= room {
+            with_ext
         } else {
-            Span::styled(format!("loading {window} "), Style::new().fg(theme.accent))
-        });
-    }
-    if let Some(note) = note {
-        spans.push(Span::styled(format!("{note} "), theme.subtle()));
-    }
-    if drawn.interval != Interval::D1 && market::is_us_equity(symbol) {
-        let mut feeds = Vec::new();
-        let cut = visible_from(&data.candles, drawn.range);
-        for c in &data.candles[cut..] {
-            if market::window_at(c.ts).is_some_and(|w| w.session != market::Session::Open)
-                && !feeds.contains(&c.feed)
-            {
-                feeds.push(c.feed);
+            let (narrow, narrow_pills, narrow_ext) = build(false);
+            if width_of(&narrow_ext.0) <= room {
+                narrow_ext
+            } else if width_of(&spans) <= room {
+                (spans, pills)
+            } else {
+                (narrow, narrow_pills)
             }
         }
-        let text = if drawn.pending && !loading {
-            if failed {
-                "EXT: failed"
-            } else {
-                "EXT: loading"
-            }
-            .to_string()
-        } else if !app.source_extended {
-            // Not "no data", which reads as a gap the next poll may fill.
-            "EXT: n/a".to_string()
-        } else if drawn.sessions == Sessions::Regular {
-            "EXT: off".to_string()
-        } else if feeds.is_empty() {
-            "EXT: no data".to_string()
-        } else {
-            format!(
-                "EXT: {}",
-                feeds
-                    .iter()
-                    .map(|f| f.label())
-                    .collect::<Vec<_>>()
-                    .join(" / ")
-            )
-        };
-        spans.push(Span::styled(
-            format!("{text} "),
-            Style::new().fg(theme.flat),
-        ));
-        let key = app.keymap.labels(&[Action::ToggleExtended]);
-        if !key.is_empty() {
-            let key = if key.len() == 1 && key.chars().all(|c| c.is_ascii_uppercase()) {
-                format!("Shift+{key}")
-            } else {
-                key
-            };
-            let action = if app.sessions == Sessions::Extended {
-                "off"
-            } else {
-                "on"
-            };
-            push_title_span(
-                &mut spans,
-                Span::styled(format!("({key}: {action}) "), theme.subtle()),
-                width,
-            );
-        }
-    }
-    let key = app.keymap.labels(&[Action::NextPreset]);
-    if !key.is_empty() {
-        push_title_span(
-            &mut spans,
-            Span::styled(format!("({key}: interval) "), theme.subtle()),
-            width,
-        );
-    }
-    // Keep the session switch ahead of optional legends on narrow charts.
+    };
     if app.show_sma {
         for (period, color) in [
             (app.chart.sma_fast, theme.sma_fast),
@@ -349,7 +307,243 @@ fn chart_title(
             }
         }
     }
+    pills.retain(|(at, w, _)| usize::from(at + w) <= room);
+    (Line::from(spans), pills)
+}
+
+/// The chart presets behind the key that cycles them: all of them as pills
+/// (a click picks one), or only the current window. A window outside the
+/// table (`-r 3mo`) is lit on its own ahead of them.
+fn push_presets(spans: &mut Vec<Span<'static>>, pills: &mut Pills, app: &App, all: bool) {
+    let theme = &app.theme;
+    spans.push(Span::styled("· ", theme.faint()));
+    let key = app.keymap.labels(&[Action::NextPreset]);
+    let cycle = Some(Button::Key(Action::NextPreset));
+    if !key.is_empty() {
+        keycap::push_keycap(spans, pills, &key, cycle, theme);
+    }
+    let current = (app.range, app.interval);
+    let presets = &app.chart.presets;
+    // A range alone names a preset unless two presets share it.
+    let unique = presets
+        .iter()
+        .all(|p| presets.iter().filter(|o| o.0 == p.0).count() == 1);
+    let name = |(range, interval): (Range, Interval), lit: bool| {
+        if lit || !unique {
+            format!("{}/{}", range.as_str(), interval.as_str())
+        } else {
+            range.as_str().to_string()
+        }
+    };
+    let lit = keycap::lit_style(theme);
+    if all {
+        if !presets.contains(&current) {
+            keycap::push_pill(
+                spans,
+                pills,
+                format!(" {} ", name(current, true)),
+                lit,
+                None,
+            );
+        }
+        let choices = presets
+            .iter()
+            .enumerate()
+            .map(|(i, p)| (name(*p, *p == current), Button::Preset(i), *p == current));
+        keycap::push_choices(spans, pills, choices, theme);
+    } else {
+        keycap::push_pill(
+            spans,
+            pills,
+            format!(" {} ", name(current, true)),
+            lit,
+            cycle,
+        );
+    }
+    spans.push(Span::raw(" "));
+}
+
+/// A window still on its way or refused, and the note on what is drawn.
+/// A refused window says so: the footer carries the error, and "loading"
+/// would be a promise the next poll may not keep.
+fn push_window_state(
+    spans: &mut Vec<Span<'static>>,
+    app: &App,
+    symbol: &str,
+    drawn: Drawn,
+    note: Option<&str>,
+) {
+    let theme = &app.theme;
+    let loading = drawn.pending && (drawn.range, drawn.interval) != (app.range, app.interval);
+    if loading {
+        let window = format!("{} / {}", app.range.as_str(), app.interval.as_str());
+        spans.push(if app.window_failed(symbol) {
+            Span::styled(format!("{window} failed "), Style::new().fg(theme.error))
+        } else {
+            Span::styled(format!("loading {window} "), Style::new().fg(theme.accent))
+        });
+    }
+    if let Some(note) = note {
+        spans.push(Span::styled(format!("{note} "), theme.subtle()));
+    }
+}
+
+/// The pre and post market switch behind its key, lit while on, with what
+/// the extended sessions draw from (or why nothing). Intraday US equities
+/// only: daily bars and other markets have no extended session.
+fn push_ext(
+    spans: &mut Vec<Span<'static>>,
+    pills: &mut Pills,
+    app: &App,
+    symbol: &str,
+    data: &TickerData,
+    drawn: Drawn,
+) {
+    if drawn.interval == Interval::D1 || !market::is_us_equity(symbol) {
+        return;
+    }
+    let theme = &app.theme;
+    let loading = drawn.pending && (drawn.range, drawn.interval) != (app.range, app.interval);
+    let failed = drawn.pending && app.window_failed(symbol);
+    let mut feeds = Vec::new();
+    let cut = visible_from(&data.candles, drawn.range);
+    for c in &data.candles[cut..] {
+        if market::window_at(c.ts).is_some_and(|w| w.session != market::Session::Open)
+            && !feeds.contains(&c.feed)
+        {
+            feeds.push(c.feed);
+        }
+    }
+    // Only the sessions switch pending shows here; a pending preset says
+    // so on its own.
+    let status = if drawn.pending && !loading {
+        Some(if failed { "failed" } else { "loading" }.to_string())
+    } else if !app.source_extended {
+        // Not "no data", which reads as a gap the next poll may fill.
+        Some("n/a".to_string())
+    } else if drawn.sessions == Sessions::Regular {
+        None
+    } else if feeds.is_empty() {
+        Some("no data".to_string())
+    } else {
+        Some(
+            feeds
+                .iter()
+                .map(|f| f.label())
+                .collect::<Vec<_>>()
+                .join(" / "),
+        )
+    };
+    spans.push(Span::styled("· ", theme.faint()));
+    let toggle = Some(Button::Key(Action::ToggleExtended));
+    let key = app.keymap.labels(&[Action::ToggleExtended]);
+    if !key.is_empty() {
+        keycap::push_keycap(spans, pills, &key, toggle, theme);
+    }
+    let on = app.sessions == Sessions::Extended && app.source_extended;
+    let style = if on {
+        keycap::lit_style(theme)
+    } else {
+        theme.subtle()
+    };
+    keycap::push_pill(spans, pills, " ext ".to_string(), style, toggle);
+    match status {
+        Some(status) => spans.push(Span::styled(
+            format!(" {status} "),
+            Style::new().fg(theme.flat),
+        )),
+        None => spans.push(Span::raw(" ")),
+    }
+}
+
+/// The chart's key: each kind of news mark on screen in the accent the
+/// marks share (the shape is the story's sentiment, hollow when it is a
+/// corporate event the ticker filed; the line chart draws every mark as a
+/// dot), and the pre and post market shades when the window shows them.
+/// Only what is on screen, so it stays a short line for a corner.
+fn legend(marks: &[news_marks::Mark], symbol: &str, axis: &TimeAxis, app: &App) -> Line<'static> {
+    let theme = &app.theme;
+    let shapes: Vec<char> = marks
+        .iter()
+        .map(|m| news_marks::glyph(m.article, symbol, theme).0)
+        .collect();
+    let mut entries: Vec<(Span<'static>, &str)> = Vec::new();
+    let mark = |c: char| Span::styled(c.to_string(), Style::new().fg(theme.accent));
+    if app.chart_style == ChartStyle::Line {
+        if !shapes.is_empty() {
+            entries.push((mark('•'), "news"));
+        }
+    } else {
+        for (shape, word) in [('▲', "bullish"), ('▼', "bearish"), ('◆', "neutral")] {
+            if shapes.contains(&shape) {
+                entries.push((mark(shape), word));
+            }
+        }
+        if let Some(hollow) = ['△', '▽', '◇'].into_iter().find(|c| shapes.contains(c)) {
+            entries.push((mark(hollow), "event"));
+        }
+    }
+    if app.chart.session_shading {
+        for (session, color, word) in [
+            (market::Session::Pre, theme.pre_market_bg, "pre"),
+            (market::Session::Post, theme.post_market_bg, "post"),
+        ] {
+            if axis.shades.iter().any(|(_, s)| *s == session) {
+                entries.push((Span::styled("  ", Style::new().bg(color)), word));
+            }
+        }
+    }
+    if entries.is_empty() {
+        return Line::default();
+    }
+    let mut spans = Vec::new();
+    for (glyph, word) in entries {
+        spans.push(Span::raw(" "));
+        spans.push(glyph);
+        spans.push(Span::styled(format!(" {word} "), theme.subtle()));
+    }
     Line::from(spans)
+}
+
+/// The keys of the chart's own switches, each beside what it shows: the
+/// style and the average type as their current value, the overlays and
+/// panels as pills lit while on. A click works like the key.
+fn toolbar(app: &App) -> Title {
+    let theme = &app.theme;
+    let items: [(Action, &str, Option<bool>); 6] = [
+        (
+            Action::ChartStyle,
+            match app.chart_style {
+                ChartStyle::Candles => "candles",
+                ChartStyle::Line => "line",
+            },
+            None,
+        ),
+        (Action::ToggleSma, "MA", Some(app.show_sma)),
+        (Action::MaType, app.ma_type.label(), None),
+        (Action::ToggleRsi, "RSI", Some(app.show_rsi)),
+        (Action::ToggleVolume, "vol", Some(app.show_volume)),
+        (Action::NewsMarkers, "news", Some(app.show_news_markers)),
+    ];
+    let mut spans = Vec::new();
+    let mut pills = Pills::new();
+    for (action, label, on) in items {
+        let key = app.keymap.labels(&[action]);
+        if key.is_empty() {
+            continue;
+        }
+        let button = Some(Button::Key(action));
+        spans.push(Span::raw(" "));
+        keycap::push_cap(&mut spans, &mut pills, &key, button, theme);
+        let style = match on {
+            Some(true) => keycap::lit_style(theme),
+            Some(false) => theme.faint(),
+            None => theme.subtle(),
+        };
+        keycap::push_pill(&mut spans, &mut pills, format!(" {label} "), style, button);
+    }
+    spans.push(Span::raw(" "));
+    (Line::from(spans), pills)
 }
 
 fn push_title_span(spans: &mut Vec<Span<'static>>, span: Span<'static>, width: u16) {
@@ -446,6 +640,7 @@ impl CandleGeom {
 /// `│ ╵ ╷`. ratatui's Chart widget has no candle graph type. Returns the
 /// column layout for the volume panel, or None when the area was too small
 /// to plot anything.
+#[allow(clippy::too_many_arguments)]
 fn render_price_candles(
     f: &mut Frame,
     area: Rect,
@@ -454,6 +649,8 @@ fn render_price_candles(
     data: &TickerData,
     drawn: Drawn,
     cut: usize,
+    tools: bool,
+    hits: &mut Vec<(Rect, Button)>,
 ) -> Option<CandleGeom> {
     let q = &data.quote;
     let draw_extended = drawn.sessions == Sessions::Extended && drawn.interval != Interval::D1;
@@ -488,10 +685,9 @@ fn render_price_candles(
         .unwrap() as u16
         + 1;
     if inner.width <= gutter + 2 || inner.height <= 4 {
-        let block = panel.title(chart_title(
-            symbol, data, app, drawn, show_quote, area.width, None,
-        ));
-        f.render_widget(block, area);
+        let (title, pills) = chart_title(symbol, data, app, drawn, show_quote, area.width, None);
+        hits.extend(keycap::place_left(pills, area));
+        f.render_widget(panel.title(title), area);
         return None; // too small: leave the bare block
     }
     let plot = Rect {
@@ -515,7 +711,7 @@ fn render_price_candles(
     let sample_idx: Vec<usize> = shown.clone().collect();
     let note =
         (shown.start > 0).then(|| format!("last {} of {} bars", display.len(), visible.len()));
-    let block = panel.title(chart_title(
+    let (title, pills) = chart_title(
         symbol,
         data,
         app,
@@ -523,7 +719,10 @@ fn render_price_candles(
         show_quote,
         area.width,
         note.as_deref(),
-    ));
+    );
+    hits.extend(keycap::place_left(pills, area));
+    let title_w = title.width();
+    let block = panel.title(title);
     let (y_lo, y_hi) = y_range(&display, reference, marker_price);
     let y_labels = y_labels(y_lo, y_hi);
     // Spread the visible history across the candle zone even when only
@@ -561,15 +760,57 @@ fn render_price_candles(
         Vec::new()
     };
     let focus = focus.is_some() && app.show_news_markers;
-    let block = match headline(&marks, focus, symbol, area.width, &app.theme) {
-        Some(line) => block.title_bottom(line),
-        None => block,
+    // The switches go bottom right where they leave the headline its room;
+    // a story beats the keys, which the footer also lists.
+    let full = headline(&marks, focus, symbol, area.width, &app.theme);
+    let tools = tools.then(|| toolbar(app)).and_then(|(line, pills)| {
+        let room = area.width.saturating_sub(2 + line.width() as u16 + 1);
+        let beside = headline(&marks, focus, symbol, room + 2, &app.theme);
+        let fits = usize::from(area.width.saturating_sub(2)) > line.width();
+        (fits && beside.is_some() == full.is_some()).then_some((line, pills, beside))
+    });
+    let block = match tools {
+        Some((line, pills, beside)) => {
+            let inner_right = area.right().saturating_sub(1);
+            let x0 = inner_right.saturating_sub(line.width() as u16);
+            hits.extend(keycap::place(pills, x0, area.bottom() - 1, inner_right));
+            let block = block.title_bottom(line.right_aligned());
+            match beside {
+                Some(story) => block.title_bottom(story),
+                None => block,
+            }
+        }
+        None => match full {
+            Some(line) => block.title_bottom(line),
+            None => block,
+        },
+    };
+    // The key to the marks and shades on screen, in the top right corner
+    // inside the chart: the last bar's row leaves most of its width free.
+    // On the border where that row is full, nowhere where both are.
+    let legend = legend(&marks, symbol, &axis, app);
+    let bar = bar_line(data, app, inner.width);
+    let row = Rect { height: 1, ..inner };
+    let legend_w = legend.width() as u16;
+    let beside_bar = legend_w > 0 && bar.width() as u16 + 1 + legend_w <= inner.width;
+    let block = if legend_w > 0
+        && !beside_bar
+        && title_w + 1 + legend.width() <= usize::from(area.width.saturating_sub(2))
+    {
+        block.title(legend.clone().right_aligned())
+    } else {
+        block
     };
     f.render_widget(block, area);
-    f.render_widget(
-        bar_line(data, app, inner.width),
-        Rect { height: 1, ..inner },
-    );
+    f.render_widget(bar, row);
+    if beside_bar {
+        let corner = Rect {
+            x: row.right() - legend_w,
+            width: legend_w,
+            ..row
+        };
+        f.render_widget(legend, corner);
+    }
 
     let buf = f.buffer_mut();
     axis.backdrop(
@@ -828,7 +1069,7 @@ const BRAILLE_BITS: [[u8; 2]; 4] = [[0x01, 0x08], [0x02, 0x10], [0x04, 0x20], [0
 /// Braille canvas over the candle plot, 2x4 dots per terminal cell. The SMA
 /// overlay draws its segments here and `blit` merges the result into the
 /// frame, with candle bodies keeping their cells.
-struct BrailleOverlay {
+pub(crate) struct BrailleOverlay {
     cols: u16,
     rows: u16,
     /// Per cell: accumulated dot mask + the color of the last line to touch
@@ -837,7 +1078,7 @@ struct BrailleOverlay {
 }
 
 impl BrailleOverlay {
-    fn new(cols: u16, rows: u16) -> Self {
+    pub(crate) fn new(cols: u16, rows: u16) -> Self {
         Self {
             cols,
             rows,
@@ -847,7 +1088,7 @@ impl BrailleOverlay {
 
     /// Set one dot in dot coordinates (x in 0..cols*2, y in 0..rows*4);
     /// out-of-range dots are dropped, not clamped.
-    fn dot(&mut self, x: i32, y: i32, color: Color) {
+    pub(crate) fn dot(&mut self, x: i32, y: i32, color: Color) {
         if x < 0 || y < 0 {
             return;
         }
@@ -861,7 +1102,7 @@ impl BrailleOverlay {
     }
 
     /// Straight segment between two dots (integer Bresenham).
-    fn line(&mut self, (x0, y0): (i32, i32), (x1, y1): (i32, i32), color: Color) {
+    pub(crate) fn line(&mut self, (x0, y0): (i32, i32), (x1, y1): (i32, i32), color: Color) {
         let (dx, dy) = ((x1 - x0).abs(), -(y1 - y0).abs());
         let (sx, sy) = (if x0 < x1 { 1 } else { -1 }, if y0 < y1 { 1 } else { -1 });
         let (mut x, mut y, mut err) = (x0, y0, dx + dy);
@@ -885,7 +1126,7 @@ impl BrailleOverlay {
     /// Merge into the frame at `plot`. Candle bodies keep their cells; wicks
     /// and the prev-close dashes give way, exactly like the old per-column
     /// dots did.
-    fn blit(&self, buf: &mut ratatui::buffer::Buffer, plot: Rect) {
+    pub(crate) fn blit(&self, buf: &mut ratatui::buffer::Buffer, plot: Rect) {
         for cy in 0..self.rows {
             for cx in 0..self.cols {
                 let (mask, color) = self.cells[cy as usize * self.cols as usize + cx as usize];

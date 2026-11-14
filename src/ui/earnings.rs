@@ -20,7 +20,8 @@ use crate::alphai::{
 use crate::app::App;
 use crate::keymap::Action;
 use crate::theme::Theme;
-use crate::ui::hits::Scroll;
+use crate::ui::hits::{Button, Scroll};
+use crate::ui::keycap;
 use crate::ui::{Hint, View, ViewId, ellipsize, news};
 
 /// Room the verdict needs in the top border, right of the title.
@@ -100,7 +101,48 @@ impl View for EarningsView {
             None => format!(" Earnings · {symbol} "),
         };
         let room = area.width.saturating_sub(VERDICT_ROOM) as usize;
-        let mut block = theme.panel_titled(ellipsize(&head, room));
+        // With more than one ticker the name sits between the keys that
+        // step through the watchlist, each a click away.
+        let stepper = (app.symbols.len() > 1).then(|| {
+            let mut spans = vec![Span::styled(
+                " Earnings ",
+                Style::new().fg(theme.accent).add_modifier(Modifier::BOLD),
+            )];
+            let mut pills = keycap::Pills::new();
+            let (prev, next) = (
+                app.keymap.labels(&[Action::Left]),
+                app.keymap.labels(&[Action::Right]),
+            );
+            if !prev.is_empty() {
+                let button = Some(Button::Key(Action::Left));
+                keycap::push_keycap(&mut spans, &mut pills, &prev, button, &theme);
+            }
+            spans.push(Span::styled(
+                symbol.clone(),
+                Style::new().fg(theme.accent).add_modifier(Modifier::BOLD),
+            ));
+            if !next.is_empty() {
+                spans.push(Span::raw(" "));
+                let button = Some(Button::Key(Action::Right));
+                keycap::push_cap(&mut spans, &mut pills, &next, button, &theme);
+            }
+            spans.push(Span::raw(" "));
+            if let Some(read) = latest {
+                spans.push(Span::styled(
+                    format!("· {} ", period_of(read)),
+                    Style::new().fg(theme.accent).add_modifier(Modifier::BOLD),
+                ));
+            }
+            (Line::from(spans), pills)
+        });
+        let mut title_hits = Vec::new();
+        let mut block = match stepper.filter(|(line, _)| line.width() <= room) {
+            Some((line, pills)) => {
+                title_hits = keycap::place_left(pills, area);
+                theme.panel().title(line)
+            }
+            None => theme.panel_titled(ellipsize(&head, room)),
+        };
         if let Some(word) = latest.map(|r| r.report().verdict.clone())
             && !word.is_empty()
         {
@@ -182,6 +224,7 @@ impl View for EarningsView {
                 strip,
             );
         }
+        app.hits.buttons.extend(title_hits);
     }
 }
 

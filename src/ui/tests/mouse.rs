@@ -310,3 +310,50 @@ fn the_mouse_key_and_the_settings_row_hand_the_mouse_back() {
     let screen = render_sized(&mut app, 100, 40);
     assert!(screen.contains("Mouse"), "screen:\n{screen}");
 }
+
+/// The score in the News title sits between the keys that move it, each on
+/// its own plate, and a click on a plate moves it like the key: in the
+/// News view and on the Split strip alike.
+#[test]
+fn the_score_stepper_moves_the_news_filter() {
+    use crate::ui::hits::Button;
+    for view in [ui::ViewId::News, ui::ViewId::Split] {
+        let (mut app, _cmds) = news_app(view);
+        let start = app.news_min_score;
+        draw(&mut app, 160, 40);
+        let button = |app: &App, want: Button| {
+            app.hits
+                .buttons
+                .iter()
+                .find(|(_, b)| *b == want)
+                .map(|(r, _)| *r)
+                .unwrap_or_else(|| panic!("{view:?}: no {want:?} in {:?}", app.hits.buttons))
+        };
+        let up = button(&app, Button::Score(1));
+        let down = button(&app, Button::Score(-1));
+        assert!(down.x < up.x, "{view:?}: the lowering key comes first");
+        assert!(click(&mut app, up.x + 1, up.y));
+        assert_eq!(app.news_min_score, start + 1, "{view:?}");
+        draw(&mut app, 160, 40);
+        let down = button(&app, Button::Score(-1));
+        assert!(click(&mut app, down.x + 1, down.y));
+        assert!(click(&mut app, down.x + 1, down.y));
+        assert_eq!(app.news_min_score, start - 1, "{view:?}");
+    }
+}
+
+/// Trending has no score, so no stepper and nothing to click.
+#[test]
+fn trending_has_no_stepper() {
+    let (mut app, _cmds) = news_app(ui::ViewId::News);
+    app.news_scope = crate::app::NewsScope::Trending;
+    draw(&mut app, 160, 40);
+    assert!(
+        !app.hits
+            .buttons
+            .iter()
+            .any(|(_, b)| matches!(b, crate::ui::hits::Button::Score(_))),
+        "{:?}",
+        app.hits.buttons
+    );
+}
