@@ -5,6 +5,34 @@ the crates.io releases; from 0.7.0 on each one is also a git tag and a
 GitHub release with prebuilt binaries. The Homebrew tap, the AUR and the
 apt repository joined later, and carry every version since.
 
+## 0.43.0 - 2026-11-15
+
+- Panel titles are quieter. The current value of a choice (a scope, a
+  filter, a layout, the Form 4 window) is lit in the accent color instead
+  of on an accent fill; only the active tab and the chart's window keep a
+  fill. The chart's switches (`MA`, `RSI`, `vol`, `news`, `ext`) read on
+  by brightness and off by fading rather than as lit buttons. Keys keep
+  their plates, now in a softer shade than the cursor row.
+- The footer leaves out a key that a panel title on screen already shows
+  beside its choices, so it names only what no title does: quit, the views,
+  the arrows, the price alert, help and the view's own keys. A title too
+  narrow to show its key leaves the hint in the footer.
+- The panel the arrow keys move in (the watchlist, the News and Insider
+  feeds, the Portfolio table, the Calendar agenda) has its frame in the
+  accent color.
+- Pre-market and after-hours shading stops at the last bar: over a weekend
+  the right margin used to be shaded as Monday's pre-market. Volume, RSI
+  and the Summary cards carry the session as a band along their bottom row
+  instead of a full background.
+- `[ui] borders = "none"` draws each tinted panel half a cell past its
+  content with quadrant blocks, so text gets a margin and panels keep a
+  narrow gutter; titles sit on a tab of the panel's tint, and the panel the
+  arrows move in is edged with a thin accent line. The `default` theme,
+  which has no tint, keeps its blank gutter.
+- Two color presets: `aardvark-ink` and `aardvark-blue`, after the Aardvark
+  Ink and Aardvark Blue terminal palettes. `{` and `}` cycle through them,
+  `--theme aardvark-blue` picks one for a run.
+
 ## 0.42.0 - 2026-11-14
 
 - The Insider view shows AlphAI's new sale label on every Form 4 sale:

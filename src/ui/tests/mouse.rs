@@ -332,12 +332,12 @@ fn the_score_stepper_moves_the_news_filter() {
         let up = button(&app, Button::Score(1));
         let down = button(&app, Button::Score(-1));
         assert!(down.x < up.x, "{view:?}: the lowering key comes first");
-        assert!(click(&mut app, up.x + 1, up.y));
+        assert!(click(&mut app, up.x + up.width / 2, up.y));
         assert_eq!(app.news_min_score, start + 1, "{view:?}");
         draw(&mut app, 160, 40);
         let down = button(&app, Button::Score(-1));
-        assert!(click(&mut app, down.x + 1, down.y));
-        assert!(click(&mut app, down.x + 1, down.y));
+        assert!(click(&mut app, down.x + down.width / 2, down.y));
+        assert!(click(&mut app, down.x + down.width / 2, down.y));
         assert_eq!(app.news_min_score, start - 1, "{view:?}");
     }
 }

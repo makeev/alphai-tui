@@ -806,7 +806,7 @@ fn the_legend_names_each_color_in_the_corner() {
     app.insider_chart = crate::app::InsiderChartWindow::M12;
     let buf = buffer_of(&mut app, 185, 42);
     let screen = screen_of(&buf);
-    let (y, line) = row_of(&screen, "Form 4  g   3m  12m  off");
+    let (y, line) = row_of(&screen, "Form 4  g  3m 12m off");
     assert!(
         line.trim_end().ends_with("▼ discretionary  ▾ routine ╮"),
         "{line}"
@@ -842,26 +842,27 @@ fn the_title_switches_modes_and_filters_by_click() {
     let buf = buffer_of(&mut app, 185, 42);
     let screen = screen_of(&buf);
     let (y, line) = row_of(&screen, "Insider · CRWV");
-    assert!(line.contains(" f   all  discretionary  routine"), "{line}");
-    assert!(line.contains(" x   filings  people"), "{line}");
-    // The keys sit on their own plates, apart from the lit pill.
+    assert!(line.contains(" f  all discretionary routine"), "{line}");
+    assert!(line.contains(" x  filings people"), "{line}");
+    // The key sits on its own plate; the lit pill is the accent, the
+    // others are not.
     let cap = &buf[(column(line, " f ") + 1, y)];
     assert!(
         cap.modifier
             .contains(ratatui::style::Modifier::REVERSED | ratatui::style::Modifier::BOLD),
         "{cap:?}"
     );
-    assert_ne!(buf[(column(line, " f ") + 3, y)].bg, theme.accent);
-    assert_eq!(buf[(column(line, " filings ") + 1, y)].bg, theme.accent);
-    assert_ne!(buf[(column(line, " people ") + 1, y)].bg, theme.accent);
+    assert_eq!(buf[(column(line, " all ") + 1, y)].fg, theme.accent);
+    assert_eq!(buf[(column(line, " filings ") + 1, y)].fg, theme.accent);
+    assert_ne!(buf[(column(line, " people ") + 1, y)].fg, theme.accent);
 
     assert!(click_at(&mut app, column(line, " people ") + 1, y));
     assert!(app.insider_people);
     let buf = buffer_of(&mut app, 185, 42);
     let screen = screen_of(&buf);
     let (y, line) = row_of(&screen, "Insiders · CRWV · 12m");
-    assert!(line.contains(" x   filings  people"), "{line}");
-    assert_eq!(buf[(column(line, " people ") + 1, y)].bg, theme.accent);
+    assert!(line.contains(" x  filings people"), "{line}");
+    assert_eq!(buf[(column(line, " people ") + 1, y)].fg, theme.accent);
 
     assert!(click_at(&mut app, column(line, " routine ") + 1, y));
     assert_eq!(app.insider_decision, InsiderDecision::Routine);
@@ -884,15 +885,15 @@ fn a_narrow_title_keeps_the_switch() {
     let (mut app, _cmds) = crwv_app();
     let screen = render_sized(&mut app, 110, 32);
     let (_, line) = row_of(&screen, "Insider · CRWV");
-    assert!(line.contains(" f   all  "), "{line}");
+    assert!(line.contains(" f  all "), "{line}");
     assert!(!line.contains("discretionary"), "{line}");
-    assert!(line.contains(" x   filings  people"), "{line}");
+    assert!(line.contains(" x  filings people"), "{line}");
     app.insider_min_score = 6;
     let screen = render_sized(&mut app, 110, 32);
     let (_, line) = row_of(&screen, "Insider · CRWV");
     assert!(line.contains("score 6+"), "{line}");
     // The switch outranks the score's keys: the score goes back to text.
-    assert!(line.contains(" x   people "), "{line}");
+    assert!(line.contains(" x  people "), "{line}");
     assert!(!line.contains(" -  score"), "{line}");
 }
 

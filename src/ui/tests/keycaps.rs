@@ -92,6 +92,23 @@ fn footer_hints_are_keycaps_a_click_presses() {
     assert!(app.article_overlay.open, "v card did not open the card");
 }
 
+/// A key the frame already drew in a title is not named again in the
+/// footer; a key no title shows stays there.
+#[test]
+fn the_footer_leaves_out_keys_a_title_shows() {
+    let mut app = fake_app();
+    app.view_idx = ui::view_index(ui::ViewId::Chart);
+    let screen = draw(&mut app, 160, 40);
+    let footer = screen.lines().last().unwrap();
+    // The chart's toolbar and its preset pills carry these keys.
+    assert!(!footer.contains("c/m/i/b/e/n"), "{footer}");
+    assert!(!footer.contains("preset"), "{footer}");
+    assert!(footer.contains("q  quit"), "{footer}");
+    assert!(footer.contains("↑↓  select"), "{footer}");
+    // Help stays, though the header names it too: it is the way in.
+    assert!(footer.contains("?  help"), "{footer}");
+}
+
 /// The chart's title lists the presets behind their key and the session
 /// switch behind its own; the bottom border carries the chart's switches,
 /// each lit while on. A click works like the key.
@@ -101,8 +118,8 @@ fn the_chart_title_and_toolbar_take_clicks() {
     app.view_idx = ui::view_index(ui::ViewId::Chart);
     let screen = draw(&mut app, 160, 40);
     let title = screen.lines().find(|l| l.contains("╭ AAPL")).unwrap();
-    assert!(title.contains(" t   1d/5m  5d  1mo  6mo  1y "), "{title}");
-    assert!(title.contains("⇧E   ext "), "{title}");
+    assert!(title.contains(" t   1d/5m  5d 1mo 6mo 1y "), "{title}");
+    assert!(title.contains("⇧E  ext "), "{title}");
     let bottom = screen
         .lines()
         .find(|l| l.contains("candles"))
@@ -180,10 +197,10 @@ fn news_scopes_and_layouts_are_pills() {
     let screen = draw(&mut app, 240, 40);
     let title = screen.lines().find(|l| l.contains("╭ News ")).unwrap();
     assert!(
-        title.contains(" f   AAPL  events  market  trending "),
+        title.contains(" f  AAPL events market trending "),
         "{title}"
     );
-    assert!(title.contains(" x   chart  stacked  side "), "{title}");
+    assert!(title.contains(" x  chart stacked side "), "{title}");
     press(&mut app, Button::NewsScope(NewsScope::Market));
     assert_eq!(app.news_scope, NewsScope::Market);
     draw(&mut app, 240, 40);
@@ -200,7 +217,7 @@ fn calendar_filter_and_insider_window_are_pills() {
     let mut app = fake_app();
     app.view_idx = ui::view_index(ui::ViewId::Calendar);
     let screen = draw(&mut app, 160, 40);
-    assert!(screen.contains(" f   all  reports  macro "), "{screen}");
+    assert!(screen.contains(" f  all reports macro "), "{screen}");
     press(
         &mut app,
         Button::CalendarFilter(ui::calendar::Filter::Macro),
@@ -364,4 +381,72 @@ fn the_chart_legend_names_the_session_shade() {
     assert!(!row.contains(" post "), "{row}");
     let x = row[..row.find(" pre ").unwrap()].chars().count() as u16;
     assert_eq!(buf[(x - 1, y as u16)].bg, app.theme.pre_market_bg, "{row}");
+}
+
+fn buffer_at(app: &mut App, width: u16, height: u16) -> ratatui::buffer::Buffer {
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+    terminal.draw(|f| ui::draw(f, app)).unwrap();
+    terminal.backend().buffer().clone()
+}
+
+/// The ANSI theme has no surface color: tinted panels on it keep a blank
+/// frame rather than quadrant glyphs in the terminal's foreground.
+#[test]
+fn borderless_panels_on_the_ansi_theme_draw_no_frame_glyphs() {
+    let mut app = fake_app();
+    app.theme.panels = crate::theme::Panels::Surface;
+    app.view_idx = ui::view_index(ui::ViewId::Table);
+    let buf = buffer_at(&mut app, 110, 32);
+    let frames: Vec<_> = buf
+        .content()
+        .iter()
+        .filter(|c| ["▗", "▖", "▝", "▘", "▐", "▌"].contains(&c.symbol()))
+        .collect();
+    assert!(frames.is_empty(), "{} frame glyphs", frames.len());
+}
+
+/// Title text with no color of its own must not take the surface color of
+/// the frame it sits on, or it vanishes into the tab.
+#[test]
+fn borderless_titles_stay_readable_on_their_tab() {
+    let mut app = fake_app();
+    app.theme.panels = crate::theme::Panels::Surface;
+    app.theme.surface = Color::Rgb(0x28, 0x28, 0x28);
+    for view in [ui::ViewId::Split, ui::ViewId::News, ui::ViewId::Chart] {
+        app.view_idx = ui::view_index(view);
+        let buf = buffer_at(&mut app, 160, 40);
+        let hidden = buf
+            .content()
+            .iter()
+            .filter(|c| c.bg == app.theme.surface && c.fg == app.theme.surface)
+            .filter(|c| c.symbol().chars().any(char::is_alphanumeric))
+            .count();
+        assert_eq!(hidden, 0, "{view:?}: {hidden} letters in the surface color");
+    }
+}
+
+/// When the News title is too narrow for the layout switch, its key comes
+/// back to the footer: it is always somewhere on screen.
+#[test]
+fn the_layout_key_is_always_on_screen() {
+    let mut app = fake_app();
+    app.view_idx = ui::view_index(ui::ViewId::News);
+    app.news_categories = crate::category::Categories::only([0]);
+    app.feeds.insert(
+        "AAPL".into(),
+        FeedBundle::new(
+            vec![article("Apple beats expectations", "AAPL", 9, "positive")],
+            None,
+            None,
+        ),
+    );
+    for (width, height) in [(100, 30), (110, 32), (160, 40)] {
+        let screen = draw(&mut app, width, height);
+        let footer = screen.lines().last().unwrap();
+        let title = screen.lines().find(|l| l.contains(" News ")).unwrap();
+        assert!(
+            title.contains(" x ") || footer.contains("x  layout"),
+            "{width}x{height}:\n{title}\n{footer}"
+        );
+    }
 }

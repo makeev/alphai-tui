@@ -438,7 +438,7 @@ fn list_panel(
     };
 
     let mut hits = keycap::place_left(left_pills, area);
-    let mut block = theme.panel().title(left);
+    let mut block = theme.panel_active(true).title(left);
     if let Some((line, pills)) = right {
         let inner_right = area.right().saturating_sub(1);
         let x0 = inner_right.saturating_sub(line.width() as u16);
@@ -480,29 +480,19 @@ fn list_title(
         } else {
             push_keycap(&mut spans, &mut pills, key, next, theme);
         }
-        let active = Style::new().fg(theme.accent_text).bg(theme.accent);
         if width >= 70 {
-            for f in InsiderDecision::ALL {
-                let style = if f == filter { active } else { theme.subtle() };
-                let button = Some(Button::InsiderFilter(f));
-                push_pill(
-                    &mut spans,
-                    &mut pills,
-                    format!(" {} ", f.label()),
-                    style,
-                    button,
-                );
-            }
+            let choices = InsiderDecision::ALL
+                .map(|f| (f.label().to_string(), Button::InsiderFilter(f), f == filter));
+            keycap::push_choices(&mut spans, &mut pills, choices, theme);
         } else {
             push_pill(
                 &mut spans,
                 &mut pills,
                 format!(" {} ", filter.label()),
-                active,
+                keycap::lit_style(theme),
                 next,
             );
         }
-        spans.push(Span::raw(" "));
     }
     if let Some(score) = min_score {
         // The stepper where the title has room for it, else the bare bar.
@@ -536,7 +526,6 @@ fn mode_switch(
     room: usize,
     theme: &Theme,
 ) -> Option<(Line<'static>, Pills)> {
-    let active = Style::new().fg(theme.accent_text).bg(theme.accent);
     let toggle = Some(Button::InsiderPeople(!people));
     let start = |spans: &mut Vec<Span<'static>>, pills: &mut Pills| {
         spans.push(Span::raw(" "));
@@ -546,16 +535,14 @@ fn mode_switch(
     };
     let (mut spans, mut pills) = (Vec::new(), Pills::new());
     start(&mut spans, &mut pills);
-    for (mode, is_people) in [("filings", false), ("people", true)] {
-        let style = if is_people == people {
-            active
-        } else {
-            theme.subtle()
-        };
-        let button = Some(Button::InsiderPeople(is_people));
-        push_pill(&mut spans, &mut pills, format!(" {mode} "), style, button);
-    }
-    spans.push(Span::raw(" "));
+    let choices = [("filings", false), ("people", true)].map(|(mode, is_people)| {
+        (
+            mode.to_string(),
+            Button::InsiderPeople(is_people),
+            is_people == people,
+        )
+    });
+    keycap::push_choices(&mut spans, &mut pills, choices, theme);
     let full = Line::from(spans);
     if full.width() <= room {
         return Some((full, pills));

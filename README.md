@@ -247,8 +247,10 @@ swatch for each session shade it shows (`pre`, `post`).
 
 The client fetches extra history for indicator warm-up. Pre-market has a
 quiet warm background, after-hours a cool one, and regular trading keeps
-the panel background. Price, volume and RSI share the same session
-columns and vertical grid in both candle and line mode. Aggregation never
+the panel background, up to the last bar: the right margin stays clear.
+Price, volume and RSI share the same session columns and vertical grid
+in both candle and line mode; under the price, volume and RSI carry the
+session as a band along their bottom row rather than a full background. Aggregation never
 combines different sessions or feeds into one candle. These session rules
 apply to US stocks on intraday intervals, including scheduled 13:00 closes
 and 17:00 after-hours closes on half days; crypto remains 24/7.
@@ -360,7 +362,7 @@ moves a price you are about to read about.
 
 ### 7 Summary: the whole watchlist at once
 
-![alphai-tui summary view: the day's line over eleven watchlist cards, each with its path through the window, the previous close dashed, the extended sessions shaded, the news marks and a line of facts under it](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/summary.png)
+![alphai-tui summary view: the day's line over eleven watchlist cards, each with its path through the window, the previous close dashed, the extended sessions as a band along the bottom, the news marks and a line of facts under it](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/summary.png)
 
 The whole watchlist on one screen, in one of three layouts, under a line
 that sums up the day: the session and its countdown, how many tickers are
@@ -369,7 +371,7 @@ release and the watchlist's reports due within the week.
 
 - **Cards** (the default): a card per ticker filling the screen. Its path
   through the chart's window with the previous close dashed, the pre and
-  post market shaded as on the chart, the news marks and the alert's level;
+  post market as a band along its bottom row, the news marks and the alert's level;
   the window's high and low beside it; under it the window's move, the
   position, the alert and the day's range with the price in it. The extended
   print sits in the top border, the latest story and a report due within two
@@ -536,7 +538,8 @@ choices they cycle, and a click on a plate or on a choice works like the
 key: a preset, the news scope or layout, the Insider filter, mode and
 chart window, the Calendar filter, a score's `-` and `+`. Two keys are
 never a click: quit, and `d`, which drops a saved ticker. The header's
-right end carries `s settings` and `? help` the same way. The wheel
+right end carries `s settings` and `? help` the same way. A key a title
+already shows is left out of the footer. The wheel
 moves the cursor in lists and scrolls the article card, the earnings read,
 the help and the settings. It never loads another page of a feed and
 never changes the chart preset, so a trackpad flick costs no requests.
@@ -882,8 +885,8 @@ it in a running instance and `[ui] bare = true` makes it the default. The
 quote rail stays, so a bare pane still names its ticker and its price.
 
 Tiled panes put frames next to frames, so the shot below also sets
-`[ui] borders = "none"`: each panel becomes a tinted surface with a small
-gutter and its title above, and the panes read as one desk. The Panels row
+`[ui] borders = "none"`: each panel becomes a tinted surface with a narrow
+gutter and its title on a tab above it, and the panes read as one desk. The Panels row
 in the settings screen switches it live.
 
 Press `4` in the three chart panes and `2` in the tall one, and you get a
@@ -1251,16 +1254,23 @@ the terminal's own colors and is shown here on a plain dark terminal:
 </tr>
 <tr>
 <td align="center"><img src="https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/gallerynord.png" alt="alphai-tui split view in the nord preset" width="100%"><br><code>nord</code></td>
+<td align="center"><img src="https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/galleryaardvarkink.png" alt="alphai-tui split view in the aardvark-ink preset" width="100%"><br><code>aardvark-ink</code></td>
+<td align="center"><img src="https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/galleryaardvarkblue.png" alt="alphai-tui split view in the aardvark-blue preset" width="100%"><br><code>aardvark-blue</code></td>
+</tr>
+<tr>
 <td align="center"><img src="https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/gallerycatppuccinlatte.png" alt="alphai-tui split view in the catppuccin-latte preset" width="100%"><br><code>catppuccin-latte</code></td>
 <td align="center"><img src="https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/gallerygruvboxlight.png" alt="alphai-tui split view in the gruvbox-light preset" width="100%"><br><code>gruvbox-light</code></td>
+<td></td>
 </tr>
 </table>
 
 The panel look is a separate choice. Frame lines are the default (`rounded`,
 or `plain`); `[ui] borders = "none"`, or the Panels row in the settings
-screen, draws tinted panels with a gutter instead:
+screen, draws tinted panels with a gutter instead. Either way, the panel
+the arrow keys move in (the watchlist, a feed, the agenda) has its frame
+in the accent color:
 
-![alphai-tui split view in the dracula preset with borders = "none": tinted panels separated by a small gutter, each titled above, in place of frame lines](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/borderless.png)
+![alphai-tui split view in the dracula preset with borders = "none": tinted panels separated by a narrow gutter, each titled on a tab, the watchlist edged in the accent, in place of frame lines](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/borderless.png)
 
 `}` and `{` walk the presets live, `--theme catppuccin-mocha` picks one
 for a single run, and the Theme row in the settings screen (`s`) does
@@ -1268,7 +1278,8 @@ both: `←` `→` cycle it with a live preview, Save writes it here.
 
 Available: `default`, `catppuccin-mocha`, `catppuccin-macchiato`,
 `catppuccin-frappe`, `catppuccin-latte`, `dracula`, `gruvbox-dark`,
-`gruvbox-light`, `nord`. Presets are written in hex, so they want a
+`gruvbox-light`, `nord`, `aardvark-ink`, `aardvark-blue` (the last two
+follow the Aardvark Ink and Aardvark Blue terminal palettes). Presets are written in hex, so they want a
 terminal with 24-bit color. Their background and body text cover the whole
 app, including menus and empty space, independently of the terminal theme.
 For a light app, choose `catppuccin-latte` or `gruvbox-light`; changing only

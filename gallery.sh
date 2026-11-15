@@ -30,15 +30,20 @@ trap 'rm -rf "$tmp" assets/gallerytake.gif' EXIT
 
 # preset, panel look, output name, vhs terminal theme. The ANSI default
 # follows the terminal it runs in, so it gets a plain dark one rather than
-# a palette's.
+# a palette's. A theme vhs does not ship is spelled out as a JSON object
+# (Aardvark Ink below, from iTerm2-Color-Schemes).
 while read -r preset look name term; do
   cfg="$tmp/config-$look.toml"
   if [ ! -f "$cfg" ]; then
     (umask 077; printf '[ui]\nborders = "%s"\n\n' "$look" >"$cfg"; cat "$tmp/config.toml" >>"$cfg")
   fi
+  case "$term" in
+    \{*) theme="Set Theme $term" ;;
+    *) theme="Set Theme \"$term\"" ;;
+  esac
   cat >"$tmp/take.tape" <<TAPE
 Output assets/gallerytake.gif
-Set Theme "$term"
+$theme
 Set FontSize 14
 Set Width 1200
 Set Height 680
@@ -71,5 +76,7 @@ dracula rounded gallerydracula Dracula
 gruvbox-dark rounded gallerygruvboxdark GruvboxDark
 gruvbox-light rounded gallerygruvboxlight Gruvbox Light
 nord rounded gallerynord nord
+aardvark-ink rounded galleryaardvarkink { "name": "Aardvark Ink", "black": "#222734", "red": "#c26265", "green": "#52aa60", "yellow": "#ad9b49", "blue": "#487fd4", "magenta": "#af5bd1", "purple": "#af5bd1", "cyan": "#269d9a", "white": "#5a6377", "brightBlack": "#3a4152", "brightRed": "#e48383", "brightGreen": "#75cf84", "brightYellow": "#c7b461", "brightBlue": "#76a8f2", "brightMagenta": "#d58bf0", "brightPurple": "#d58bf0", "brightCyan": "#52c4c0", "brightWhite": "#dfe5ee", "background": "#0f141f", "foreground": "#b4bcca", "selection": "#2a3645", "cursor": "#b4bcca" }
+aardvark-blue rounded galleryaardvarkblue Aardvark Blue
 dracula none borderless Dracula
 LIST

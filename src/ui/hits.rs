@@ -70,6 +70,29 @@ pub enum Button {
     SummaryOrder(crate::app::SummaryOrder),
 }
 
+impl Button {
+    /// The action whose key the pill stands beside: a click on any of them
+    /// does what that key does, or picks one of the values it cycles.
+    pub fn action(self) -> Option<crate::keymap::Action> {
+        use crate::keymap::Action;
+        Some(match self {
+            Self::Key(action) => action,
+            Self::Preset(_) => Action::NextPreset,
+            Self::NewsScope(_)
+            | Self::CalendarFilter(_)
+            | Self::InsiderFilter(_)
+            | Self::SummaryOrder(_) => Action::CycleScope,
+            Self::NewsLayout(_) | Self::InsiderPeople(_) | Self::SummaryLayout(_) => {
+                Action::CycleLayout
+            }
+            Self::InsiderWindow(_) => Action::InsiderChart,
+            Self::Score(-1) => Action::ScoreDown,
+            Self::Score(1) => Action::ScoreUp,
+            Self::Score(_) => return None,
+        })
+    }
+}
+
 /// The overlay on top of the view, when one is open.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Modal {

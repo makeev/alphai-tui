@@ -49,11 +49,13 @@ impl View for NewsView {
             Hint::act(&[Action::PriceAlert], "alert"),
             Hint::act(&[Action::Open], "open"),
             Hint::act(&[Action::Card], "card"),
-            // The layout's key sits in the list's title beside the three
-            // layouts, which leaves the footer inside 110 columns.
+            // The scope, score, categories and layout keys usually sit in
+            // the list's title, and the footer then leaves them out; a
+            // title too narrow for one of them hands its hint back here.
             Hint::act(&[Action::CycleScope], "scope"),
             Hint::act(&[Action::ScoreUp, Action::ScoreDown], "score"),
             Hint::act(&[Action::Categories], "category"),
+            Hint::act(&[Action::CycleLayout], "layout"),
             // No settings or refresh hint: the widest footer of the app, it
             // must fit 110 columns and the help overlay lists s and r anyway.
             Hint::act(&[Action::Help], "help"),
@@ -354,7 +356,9 @@ impl NewsTitle<'_> {
     /// the cells of their pills.
     fn panel(&self, area: Rect, theme: &Theme) -> (Block<'static>, Vec<(Rect, Button)>) {
         let (left, right) = self.fitted(area.width, theme);
-        keycap::panel(theme, area, left, right)
+        // The News view's list takes the arrow keys; the Split strip,
+        // the one title built without the layout switch, has no cursor.
+        keycap::panel(theme, area, left, right, self.layout.is_some())
     }
 
     /// Wide to narrow: the whole scope row before the layout row shrinks,
@@ -426,7 +430,9 @@ impl NewsTitle<'_> {
                 cycle,
             );
         }
-        spans.push(Span::raw(" "));
+        // The score is a value, not a choice: body text, so the heading
+        // and the lit scope stay the only accents in the title.
+        let value = Style::new().fg(theme.text);
         // Events and Trending take no score and no categories.
         if matches!(self.scope, NewsScope::Ticker | NewsScope::Market) {
             spans.push(Span::styled("· ", theme.faint()));
@@ -437,12 +443,12 @@ impl NewsTitle<'_> {
                     &mut pills,
                     self.min_score,
                     keys,
-                    heading,
+                    value,
                     theme,
                 );
                 spans.push(Span::raw(" "));
             } else {
-                spans.push(Span::styled(format!("score {}+ ", self.min_score), heading));
+                spans.push(Span::styled(format!("score {}+ ", self.min_score), value));
             }
             let picked = self.categories.label();
             if category_key && !self.keys.categories.is_empty() {
@@ -455,7 +461,6 @@ impl NewsTitle<'_> {
                     None => ("all categories".to_string(), theme.subtle()),
                 };
                 keycap::push_pill(&mut spans, &mut pills, format!(" {label} "), style, open);
-                spans.push(Span::raw(" "));
             } else if let Some(picked) = picked {
                 spans.push(Span::styled(format!("· {picked} "), heading));
             }
@@ -485,7 +490,6 @@ impl NewsTitle<'_> {
                 cycle,
             );
         }
-        spans.push(Span::raw(" "));
         Some((Line::from(spans), pills))
     }
 

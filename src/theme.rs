@@ -16,15 +16,16 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType};
 
 /// How panels are told apart: a line frame, or a tinted surface with a
-/// blank gutter around it. Chosen by `[ui] borders` rather than by the
+/// narrow gutter around it. Chosen by `[ui] borders` rather than by the
 /// preset, and carried on the theme because `panel()` needs both halves.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Panels {
     Lines(BorderType),
-    /// No lines: the frame cells stay blank on the theme's background,
-    /// the inside takes `surface`. The frame keeps its cell, so every
-    /// "minus two for the borders" in the layouts still holds and titles
-    /// still sit on the top and bottom edges.
+    /// No lines: the inside takes `surface`, and the frame cells are split
+    /// by quadrant blocks, the inner half surface and the outer half the
+    /// theme's background. The frame keeps its cell, so every "minus two
+    /// for the borders" in the layouts still holds and titles still sit on
+    /// the top and bottom edges.
     Surface,
 }
 
@@ -60,6 +61,19 @@ impl Panels {
         Self::ALL[(i + dir).rem_euclid(n) as usize]
     }
 }
+
+/// The active surface panel's frame: eighth-cell lines on the side of
+/// each frame cell that touches the panel.
+const ACTIVE_SURFACE: ratatui::symbols::border::Set = ratatui::symbols::border::Set {
+    top_left: " ",
+    top_right: " ",
+    bottom_left: " ",
+    bottom_right: " ",
+    vertical_left: "▕",
+    vertical_right: "▏",
+    horizontal_top: "▁",
+    horizontal_bottom: "▔",
+};
 
 /// One slot per meaning, not per widget: the same red means "price down"
 /// everywhere it appears. Unstyled and bold text inherit the body color.
@@ -258,13 +272,53 @@ impl Theme {
                 .border_type(kind)
                 .style(self.base())
                 .border_style(Style::new().fg(self.border)),
-            // The frame is still there, drawn in spaces on the theme's
-            // background: a one-cell gutter between two surfaces, and a
-            // row for the titles above and below.
-            Panels::Surface => Block::bordered()
+            // The frame cell is split in two by quadrant blocks: its inner
+            // half takes the surface, its outer half the background. Each
+            // surface reaches half a cell past its content, so the text
+            // gets a margin and two panels side by side keep a one-cell
+            // gap between them, half from each. Titles sit on a full cell
+            // of the surface, a tab rising half a cell over the edge.
+            // The ANSI theme has no surface color (`Reset`): quadrant
+            // glyphs would draw in the terminal's foreground, a heavy frame
+            // around every panel, so its frame stays blank as before.
+            Panels::Surface if self.surface == Color::Reset => Block::bordered()
                 .border_set(border::EMPTY)
                 .style(self.fill())
                 .border_style(self.base()),
+            // Title text with no color of its own takes the body text, not
+            // the frame's surface-colored glyphs (it would vanish).
+            Panels::Surface => Block::bordered()
+                .border_type(BorderType::QuadrantInside)
+                .style(self.fill())
+                .border_style(Style::new().fg(self.surface).bg(self.background))
+                .title_style(Style::new().fg(self.text).bg(self.surface)),
+        }
+    }
+
+    /// `panel` for the one panel the arrow keys move in (the watchlist in
+    /// Split and Table, the feed in News and Insider): its frame in the
+    /// accent, so the eye finds where the keys go. On surfaces the frame is
+    /// an eighth-cell accent line hugging the surface, in place of the
+    /// half-cell reach the other panels have; the rest of the frame cell
+    /// stays the gutter, and the corners stay open (no eighth-cell corner
+    /// glyph exists).
+    pub fn panel_active(&self, active: bool) -> Block<'static> {
+        if !active {
+            return self.panel();
+        }
+        // Title text with no color of its own (the ANSI theme's tiers are
+        // only DIM) would take the frame's accent: it gets the body text.
+        match self.panels {
+            Panels::Lines(kind) => Block::bordered()
+                .border_type(kind)
+                .style(self.base())
+                .border_style(Style::new().fg(self.accent))
+                .title_style(Style::new().fg(self.text)),
+            Panels::Surface => self
+                .panel()
+                .border_set(ACTIVE_SURFACE)
+                .border_style(Style::new().fg(self.accent).bg(self.background))
+                .title_style(Style::new().fg(self.text).bg(self.surface)),
         }
     }
 
@@ -295,6 +349,18 @@ impl Theme {
         match self.panels {
             Panels::Lines(_) => self.base(),
             Panels::Surface => self.base().bg(self.surface),
+        }
+    }
+
+    /// The plate a key sits on, over a cell whose background is `under`:
+    /// 15% of the way to the body text, softer than the cursor row (22%),
+    /// so a key reads as a key without competing with the selected row.
+    /// The ANSI theme, whose colors are the terminal's, inverts instead.
+    pub fn plate(&self, under: Color) -> Style {
+        let bold = Style::new().fg(self.text).add_modifier(Modifier::BOLD);
+        match (under, self.text) {
+            (Color::Rgb(..), Color::Rgb(..)) => bold.bg(presets::mix(under, self.text, 15)),
+            _ => self.selected().patch(bold),
         }
     }
 

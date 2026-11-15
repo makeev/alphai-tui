@@ -33,10 +33,11 @@ pub fn push_pill(
     spans.push(span);
 }
 
-/// A key drawn as a keycap: the letter on its own plate (the selection
-/// shade, inverted on the ANSI theme), so it reads as the key to press
-/// rather than as part of the heading or of a lit pill beside it. No gap
-/// around it; the caller spaces it.
+/// A key drawn as a keycap: the letter on its own soft plate (inverted on
+/// the ANSI theme), so it reads as the key to press rather than as part
+/// of the heading or of a lit value beside it. The plate is the only fill
+/// a title keeps besides the chart window: the values a key cycles are
+/// lit by color alone. No gap around it; the caller spaces it.
 pub fn push_cap(
     spans: &mut Vec<Span<'static>>,
     pills: &mut Pills,
@@ -48,14 +49,32 @@ pub fn push_cap(
         spans,
         pills,
         format!(" {} ", label(key)),
-        cap_style(theme),
+        key_style(theme),
         button,
     );
 }
 
-/// The plate a key sits on.
+/// The plate a key sits on in the header and the footer, over the
+/// theme's background.
 pub fn cap_style(theme: &Theme) -> Style {
-    theme.selected().fg(theme.text).add_modifier(Modifier::BOLD)
+    theme.plate(theme.background)
+}
+
+/// The plate a key sits on in a panel title, over the panel's fill (the
+/// surface when panels are tinted).
+pub fn key_style(theme: &Theme) -> Style {
+    theme.plate(theme.fill().bg.unwrap_or(theme.background))
+}
+
+/// A switch's word by whether it is on: body text while on, faint while
+/// off. Brightness rather than a fill, so a row of switches does not
+/// light up like a row of buttons.
+pub fn on_style(theme: &Theme, on: bool) -> Style {
+    if on {
+        Style::new().fg(theme.text)
+    } else {
+        theme.faint()
+    }
 }
 
 /// A key as a keycap names it: a capital letter is the letter with shift,
@@ -68,7 +87,8 @@ pub fn label(key: &str) -> String {
     }
 }
 
-/// A keycap and the gap after it, ahead of the pills it acts on.
+/// A keycap ahead of the pills it acts on. No gap after it: every pill
+/// starts with its own space.
 pub fn push_keycap(
     spans: &mut Vec<Span<'static>>,
     pills: &mut Pills,
@@ -77,7 +97,6 @@ pub fn push_keycap(
     theme: &Theme,
 ) {
     push_cap(spans, pills, key, button, theme);
-    spans.push(Span::raw(" "));
 }
 
 /// The key bound to `action` as a sentence names it ("- lowers the
@@ -139,25 +158,48 @@ pub fn place_left(pills: Pills, area: Rect) -> Vec<(Rect, Button)> {
 /// A title line and its pills.
 pub type Title = (Line<'static>, Pills);
 
-/// A choice drawn as pills, the current one lit: each a click away.
+/// A choice drawn as pills, the current one lit: each a click away. Each
+/// pill is its word behind a space, and the group ends on one.
 pub fn push_choices(
     spans: &mut Vec<Span<'static>>,
     pills: &mut Pills,
     choices: impl IntoIterator<Item = (String, Button, bool)>,
     theme: &Theme,
 ) {
-    for (label, button, current) in choices {
-        let style = if current {
-            lit_style(theme)
-        } else {
-            theme.subtle()
-        };
-        push_pill(spans, pills, format!(" {label} "), style, Some(button));
-    }
+    push_choices_lit(spans, pills, choices, lit_style(theme), theme);
 }
 
-/// The lit pill: the current value of a choice.
+/// `push_choices` with the current pill in `lit`: the chart window keeps
+/// its fill (`filled_style`), the one choice per screen that is a state
+/// of the main panel rather than a filter on a side one.
+pub fn push_choices_lit(
+    spans: &mut Vec<Span<'static>>,
+    pills: &mut Pills,
+    choices: impl IntoIterator<Item = (String, Button, bool)>,
+    lit: Style,
+    theme: &Theme,
+) {
+    for (label, button, current) in choices {
+        if current && lit.bg.is_some() {
+            spans.push(Span::raw(" "));
+            push_pill(spans, pills, format!(" {label} "), lit, Some(button));
+            continue;
+        }
+        let style = if current { lit } else { theme.subtle() };
+        push_pill(spans, pills, format!(" {label}"), style, Some(button));
+    }
+    spans.push(Span::raw(" "));
+}
+
+/// The lit pill: the current value of a choice, in the accent and bold
+/// rather than on a fill, so a title's lit values do not outweigh its
+/// heading.
 pub fn lit_style(theme: &Theme) -> Style {
+    Style::new().fg(theme.accent).add_modifier(Modifier::BOLD)
+}
+
+/// The filled pill, kept for the active view tab and the chart window.
+pub fn filled_style(theme: &Theme) -> Style {
     Style::new().fg(theme.accent_text).bg(theme.accent)
 }
 
@@ -189,9 +231,10 @@ pub fn panel(
     area: Rect,
     (left, left_pills): Title,
     right: Option<Title>,
+    active: bool,
 ) -> (Block<'static>, Vec<(Rect, Button)>) {
     let mut hits = place_left(left_pills, area);
-    let mut block = theme.panel().title(left);
+    let mut block = theme.panel_active(active).title(left);
     if let Some((line, pills)) = right {
         let inner_right = area.right().saturating_sub(1);
         let x0 = inner_right.saturating_sub(line.width() as u16);
@@ -227,15 +270,17 @@ pub fn actions(app: &App, items: &[(Action, &str, bool)]) -> Title {
     (Line::from(spans), pills)
 }
 
-/// A panel titled `heading` with `items` in its right corner where both fit.
+/// A panel titled `heading` with `items` in its right corner where both
+/// fit; `active` when the arrow keys move in it.
 pub fn heading_with_actions(
     app: &App,
     area: Rect,
     heading: &str,
     items: &[(Action, &str, bool)],
+    active: bool,
 ) -> (Block<'static>, Vec<(Rect, Button)>) {
     let left = || (app.theme.heading(heading.to_string()), Pills::new());
     let forms = [(left(), Some(actions(app, items))), (left(), None)];
     let (left, right) = fit(area.width, forms).unwrap_or_else(|| (left(), None));
-    panel(&app.theme, area, left, right)
+    panel(&app.theme, area, left, right, active)
 }

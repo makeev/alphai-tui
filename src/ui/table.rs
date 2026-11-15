@@ -281,6 +281,7 @@ pub fn render_table(f: &mut Frame, area: Rect, app: &mut App) {
             (Action::RemoveTicker, "remove", false),
             (Action::FindTicker, "find", true),
         ],
+        true,
     );
     app.hits.buttons.extend(buttons);
     let rows_area = Hits::rows_area(block.inner(area), 1);

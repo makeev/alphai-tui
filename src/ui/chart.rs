@@ -51,8 +51,9 @@ impl View for ChartView {
                 ],
                 "chart",
             ),
-            // The preset's key leads the presets in the chart's title, so
-            // the footer leaves it out and stays inside 110 columns.
+            // The preset's key leads the presets in the chart's title, and
+            // the footer drops it while the title shows it.
+            Hint::act(&[Action::NextPreset], "preset"),
             Hint::act(&[Action::Refresh], "refresh"),
             Hint::act(&[Action::Settings], "settings"),
             Hint::act(&[Action::Help], "help"),
@@ -335,9 +336,12 @@ fn push_presets(spans: &mut Vec<Span<'static>>, pills: &mut Pills, app: &App, al
             range.as_str().to_string()
         }
     };
-    let lit = keycap::lit_style(theme);
+    // The window is the one title choice that keeps its fill: it is the
+    // state of the main panel, where the others filter a side one.
+    let lit = keycap::filled_style(theme);
     if all {
         if !presets.contains(&current) {
+            spans.push(Span::raw(" "));
             keycap::push_pill(
                 spans,
                 pills,
@@ -350,8 +354,9 @@ fn push_presets(spans: &mut Vec<Span<'static>>, pills: &mut Pills, app: &App, al
             .iter()
             .enumerate()
             .map(|(i, p)| (name(*p, *p == current), Button::Preset(i), *p == current));
-        keycap::push_choices(spans, pills, choices, theme);
+        keycap::push_choices_lit(spans, pills, choices, lit, theme);
     } else {
+        spans.push(Span::raw(" "));
         keycap::push_pill(
             spans,
             pills,
@@ -359,8 +364,8 @@ fn push_presets(spans: &mut Vec<Span<'static>>, pills: &mut Pills, app: &App, al
             lit,
             cycle,
         );
+        spans.push(Span::raw(" "));
     }
-    spans.push(Span::raw(" "));
 }
 
 /// A window still on its way or refused, and the note on what is drawn.
@@ -441,12 +446,8 @@ fn push_ext(
         keycap::push_keycap(spans, pills, &key, toggle, theme);
     }
     let on = app.sessions == Sessions::Extended && app.source_extended;
-    let style = if on {
-        keycap::lit_style(theme)
-    } else {
-        theme.subtle()
-    };
-    keycap::push_pill(spans, pills, " ext ".to_string(), style, toggle);
+    let style = keycap::on_style(theme, on);
+    keycap::push_pill(spans, pills, " ext".to_string(), style, toggle);
     match status {
         Some(status) => spans.push(Span::styled(
             format!(" {status} "),
@@ -536,8 +537,7 @@ fn toolbar(app: &App) -> Title {
         spans.push(Span::raw(" "));
         keycap::push_cap(&mut spans, &mut pills, &key, button, theme);
         let style = match on {
-            Some(true) => keycap::lit_style(theme),
-            Some(false) => theme.faint(),
+            Some(on) => keycap::on_style(theme, on),
             None => theme.subtle(),
         };
         keycap::push_pill(&mut spans, &mut pills, format!(" {label} "), style, button);
@@ -818,6 +818,7 @@ fn render_price_candles(
         plot,
         &app.theme,
         app.chart.session_shading,
+        true,
         app.chart.time_grid,
     );
 
@@ -1282,8 +1283,14 @@ fn render_volume_candles(
         inner.right().saturating_sub(geom.plot_x),
         inner.height,
     );
-    geom.axis
-        .backdrop(buf, plot, theme, chart.session_shading, chart.time_grid);
+    geom.axis.backdrop(
+        buf,
+        plot,
+        theme,
+        chart.session_shading,
+        false,
+        chart.time_grid,
+    );
     let levels = inner.height as usize * LOWER_EIGHTHS.len();
     for (i, c) in geom.display.iter().enumerate() {
         let Some(v) = c.volume else { continue };
@@ -1364,8 +1371,14 @@ fn render_rsi(
         inner.height,
     );
     let buf = f.buffer_mut();
-    geom.axis
-        .backdrop(buf, plot, theme, chart.session_shading, chart.time_grid);
+    geom.axis.backdrop(
+        buf,
+        plot,
+        theme,
+        chart.session_shading,
+        false,
+        chart.time_grid,
+    );
     for value in [30.0, 70.0] {
         let y = plot.y + (scale(value, 0.0, 100.0, plot.height as usize * 2) / 2) as u16;
         for x in (plot.x..plot.right()).step_by(2) {

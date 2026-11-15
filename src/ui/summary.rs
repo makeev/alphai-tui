@@ -582,8 +582,12 @@ fn draw_path(
     let y_of = |v: f64| (((hi - v) / (hi - lo)) * f64::from(dots_h)).round() as i32;
     let row_of = |v: f64| plot.y + (y_of(v).clamp(0, dots_h) / 4) as u16;
 
-    // Extended sessions shaded as on the chart: intraday US equities only.
+    // Extended sessions as a band along the plot's bottom row, the way the
+    // chart's lower panels carry them: a 5d card crosses ten extended
+    // sessions, and full-height shades made the grid of cards a wall of
+    // stripes. Intraday US equities only.
     if app.chart.session_shading && interval != Interval::D1 && market::is_us_equity(symbol) {
+        let band = plot.bottom().saturating_sub(1).max(plot.y);
         for col in 0..plot.width {
             let i = (usize::from(col) * (n - 1)) / usize::from(plot.width.max(2) - 1);
             let color = match market::window_at(visible[i.min(n - 1)].ts).map(|w| w.session) {
@@ -591,10 +595,8 @@ fn draw_path(
                 Some(Session::Post) => theme.post_market_bg,
                 _ => continue,
             };
-            for y in plot.y..plot.bottom() {
-                if let Some(cell) = buf.cell_mut((plot.x + col, y)) {
-                    cell.set_bg(color);
-                }
+            if let Some(cell) = buf.cell_mut((plot.x + col, band)) {
+                cell.set_bg(color);
             }
         }
     }
@@ -933,16 +935,26 @@ fn tile(f: &mut Frame, area: Rect, app: &App, idx: usize, big: bool) {
         },
         Style::new().add_modifier(Modifier::BOLD).fg(theme.accent),
     );
-    let block = theme.panel().title(Line::from(title));
+    let mut block = theme.panel().title(Line::from(title));
     let inner = block.inner(area);
+    let heat_of = app
+        .data
+        .get(symbol)
+        .map(|d| heat(theme, d.quote.change_pct()));
+    // On tinted panels the frame's inner half carries the surface; a tile
+    // takes its heat there too, or a strong tint sits in a grey ring.
+    if let (crate::theme::Panels::Surface, Some((Some(bg), _))) = (theme.panels, heat_of)
+        && theme.surface != ratatui::style::Color::Reset
+    {
+        block = block.border_style(Style::new().fg(bg).bg(theme.background));
+    }
     f.render_widget(block, area);
     let Some(data) = app.data.get(symbol) else {
         f.render_widget(Paragraph::new(Line::from("…").style(theme.subtle())), inner);
         return;
     };
     let q = &data.quote;
-    let pct = q.change_pct();
-    let (bg, figure) = heat(theme, pct);
+    let (bg, figure) = heat_of.unwrap_or_else(|| heat(theme, q.change_pct()));
     let fill = match bg {
         Some(bg) => Style::new().bg(bg),
         None => Style::new(),

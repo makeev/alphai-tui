@@ -395,6 +395,7 @@ fn portfolio_panel(
         area,
         " Portfolio ",
         &[(Action::Position, "position", true)],
+        true,
     )
 }
 

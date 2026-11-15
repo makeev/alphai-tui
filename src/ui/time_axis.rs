@@ -251,7 +251,13 @@ impl TimeAxis {
         };
         let mut shades = Vec::new();
         if intraday && us && sessions == Sessions::Extended {
-            for x in xs[0].saturating_sub((spacing / 2.0) as u16).max(plot.x)..plot.right() {
+            // Up to the last bar, not across the margin: the margin is
+            // clock time that has not traded yet, and over a weekend its
+            // extrapolated stamps land in Monday's pre-market, which shaded
+            // a block of the chart where nothing has been drawn.
+            let half = (spacing / 2.0) as u16;
+            let stop = last_x.saturating_add(half + 1).min(plot.right());
+            for x in xs[0].saturating_sub(half).max(plot.x)..stop {
                 let i = points.partition_point(|(_, px)| *px <= x).saturating_sub(1);
                 let ts = if let Some(&(next, nx)) = points.get(i + 1) {
                     if x > points[i].1 + (nx - points[i].1) / 2 {
@@ -275,15 +281,32 @@ impl TimeAxis {
         }
     }
 
-    pub fn backdrop(&self, buf: &mut Buffer, plot: Rect, theme: &Theme, shading: bool, grid: bool) {
+    /// The session shades and the time grid behind a plot. `full` shades
+    /// the whole height (the price panel); the panels under it (volume,
+    /// RSI) take a one-row band along their bottom instead, so the session
+    /// still lines up down the stack without three tinted walls.
+    pub fn backdrop(
+        &self,
+        buf: &mut Buffer,
+        plot: Rect,
+        theme: &Theme,
+        shading: bool,
+        full: bool,
+        grid: bool,
+    ) {
         if shading {
+            let top = if full {
+                plot.y
+            } else {
+                plot.bottom().saturating_sub(1).max(plot.y)
+            };
             for &(x, session) in &self.shades {
                 let color = match session {
                     Session::Pre => theme.pre_market_bg,
                     Session::Post => theme.post_market_bg,
                     _ => continue,
                 };
-                for y in plot.y..plot.bottom() {
+                for y in top..plot.bottom() {
                     if let Some(cell) = buf.cell_mut((x, y)) {
                         cell.set_bg(color);
                     }
@@ -364,6 +387,43 @@ mod tests {
         assert!(axis.shades.iter().any(|(_, s)| *s == Session::Pre));
         assert!(axis.shades.iter().any(|(_, s)| *s == Session::Post));
         assert_eq!(axis.zone, "ET");
+    }
+
+    /// The margin right of the last bar is time that has not traded: a
+    /// Friday evening's margin extrapolates into Monday's pre-market, and
+    /// shading it would paint a block where nothing has been drawn.
+    #[test]
+    fn the_margin_after_the_last_bar_is_not_shaded() {
+        // Friday 13 Nov 2026, 15:00 to 20:00 ET in 15m bars.
+        let first = DateTime::parse_from_rfc3339("2026-11-13T20:00:00Z")
+            .unwrap()
+            .timestamp();
+        let bars: Vec<_> = (0..20)
+            .map(|i| Candle {
+                ts: first + i * 900,
+                ..Default::default()
+            })
+            .collect();
+        let xs: Vec<_> = (0..20).map(|i| 10 + i * 3).collect();
+        let plot = Rect::new(10, 0, 100, 10);
+        let axis = TimeAxis::build(
+            &bars,
+            &xs,
+            plot,
+            Interval::M15,
+            Sessions::Extended,
+            ChartTimezone::Exchange,
+            true,
+            bars.last().unwrap().ts,
+        );
+        let last = *xs.last().unwrap();
+        assert!(axis.shades.iter().any(|(_, s)| *s == Session::Post));
+        assert!(
+            axis.shades.iter().all(|(x, _)| *x <= last + 2),
+            "shaded past the last bar at {last}: {:?}",
+            axis.shades.iter().map(|(x, _)| x).max()
+        );
+        assert!(!axis.shades.iter().any(|(_, s)| *s == Session::Pre));
     }
 
     #[test]

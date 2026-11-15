@@ -116,6 +116,7 @@ impl View for EarningsView {
             if !prev.is_empty() {
                 let button = Some(Button::Key(Action::Left));
                 keycap::push_keycap(&mut spans, &mut pills, &prev, button, &theme);
+                spans.push(Span::raw(" "));
             }
             spans.push(Span::styled(
                 symbol.clone(),

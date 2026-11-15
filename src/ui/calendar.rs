@@ -875,7 +875,6 @@ fn calendar_panel(app: &App, area: Rect) -> (Block<'static>, Vec<(Rect, Button)>
                 cycle,
             );
         }
-        spans.push(Span::raw(" "));
         if window {
             spans.push(Span::styled("· past 7d · next 45d ", theme.subtle()));
         }
@@ -896,7 +895,7 @@ fn calendar_panel(app: &App, area: Rect) -> (Block<'static>, Vec<(Rect, Button)>
             None,
         )
     });
-    keycap::panel(theme, area, left, None)
+    keycap::panel(theme, area, left, None, true)
 }
 
 pub(crate) fn render_calendar_at(f: &mut Frame, area: Rect, app: &mut App, now: DateTime<Utc>) {

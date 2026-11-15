@@ -58,8 +58,8 @@ fn the_day_line_sums_up_the_watchlist() {
     let line = screen.lines().nth(2).unwrap();
     assert!(line.contains("▲ 1  ▼ 1"), "{line}");
     assert!(line.contains("avg "), "{line}");
-    assert!(line.contains(" x   cards  heatmap  compare "), "{line}");
-    assert!(line.contains(" f   list  change "), "{line}");
+    assert!(line.contains(" x  cards heatmap compare "), "{line}");
+    assert!(line.contains(" f  list change "), "{line}");
 
     click(&mut app, Button::SummaryLayout(SummaryLayout::Heatmap));
     assert_eq!(app.summary_layout, SummaryLayout::Heatmap);

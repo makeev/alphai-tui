@@ -210,6 +210,16 @@ fn session_backgrounds_and_time_grid_share_all_three_panels() {
                 .position(|line| line.contains("SMA20"))
                 .unwrap() as u16
                 + 2;
+            // The panels under the price take the session as a one-row
+            // band along their bottom, the row above their bottom border.
+            let band = |top: u16| {
+                (top..height)
+                    .find(|y| lines[*y as usize].starts_with('╰'))
+                    .unwrap()
+                    - 1
+            };
+            let (vol_band, rsi_band) = (band(vol), band(rsi));
+            assert!(vol_band > vol && rsi_band > rsi, "{text}");
             for color in [app.theme.pre_market_bg, app.theme.post_market_bg] {
                 let cols = |y| {
                     (0..width)
@@ -217,8 +227,10 @@ fn session_backgrounds_and_time_grid_share_all_three_panels() {
                         .collect::<Vec<_>>()
                 };
                 assert!(!cols(price).is_empty(), "session background missing");
-                assert_eq!(cols(price), cols(vol), "volume session columns differ");
-                assert_eq!(cols(price), cols(rsi), "RSI session columns differ");
+                assert_eq!(cols(price), cols(vol_band), "volume session columns differ");
+                assert_eq!(cols(price), cols(rsi_band), "RSI session columns differ");
+                assert!(cols(vol).is_empty(), "volume shaded above its band");
+                assert!(cols(rsi).is_empty(), "RSI shaded above its band");
             }
             if let Ok(dir) = std::env::var("ALPHAI_TEST_RENDER_DIR") {
                 let cells: Vec<_> = (0..height).flat_map(|y| (0..width).map(move |x| {
@@ -1304,6 +1316,8 @@ fn footer_hints_fit_110_columns() {
     let mut app = fake_app();
     for (i, view) in ui::VIEWS.iter().enumerate() {
         app.view_idx = i;
+        // As drawn: the footer leaves out the keys this frame's titles show.
+        render_sized(&mut app, 110, 32);
         let width = crate::ui::hints_text(&app).chars().count();
         assert!(
             width <= 110,
@@ -1784,7 +1798,7 @@ fn extended_candles_leave_at_once_and_arrive_with_the_poller() {
     press(&mut app, KeyCode::Char('E'));
     assert!(app.chart_window("AAPL").1);
     let screen = render(&mut app);
-    assert!(screen.contains("ext  loading"), "screen:\n{screen}");
+    assert!(screen.contains("ext loading"), "screen:\n{screen}");
 
     answer(&mut app, Sessions::Extended, extended);
     assert!(!app.chart_window("AAPL").1);
@@ -1798,8 +1812,8 @@ fn extended_candles_leave_at_once_and_arrive_with_the_poller() {
     assert_eq!(app.data["AAPL"].candles.len(), 30);
     let screen = render(&mut app);
     // Off: the pill unlit and nothing after it.
-    assert!(screen.contains("⇧E   ext  "), "screen:\n{screen}");
-    assert!(!screen.contains("ext  loading"), "screen:\n{screen}");
+    assert!(screen.contains("⇧E  ext "), "screen:\n{screen}");
+    assert!(!screen.contains("ext loading"), "screen:\n{screen}");
 }
 
 /// Budget invariant: a range switch must wake only the price poller. The
@@ -1842,7 +1856,7 @@ fn split_view_combines_table_chart_and_news() {
         screen.contains('▀'),
         "no candle chart in split view:\n{screen}"
     );
-    assert!(screen.contains("News  f   AAPL"), "screen:\n{screen}");
+    assert!(screen.contains("News  f  AAPL"), "screen:\n{screen}");
     assert!(
         screen.contains("Apple beats expectations"),
         "screen:\n{screen}"
@@ -1908,12 +1922,14 @@ fn footer_shows_bound_keys() {
     assert!(screen.contains("q  quit"), "screen:\n{screen}");
     assert!(screen.contains("tab/1-9  view"), "screen:\n{screen}");
     assert!(screen.contains("↑↓  select"), "screen:\n{screen}");
-    assert!(screen.contains("c/m/i/b/e/n  chart"), "screen:\n{screen}");
+    // The chart's own keys sit on its toolbar this frame, so the footer
+    // leaves them out rather than naming them twice.
+    assert!(!screen.contains("c/m/i/b/e/n"), "screen:\n{screen}");
     app.view_idx = ui::view_index(ui::ViewId::News);
     let screen = render(&mut app);
     assert!(screen.contains("⏎  open"), "screen:\n{screen}");
     // The layout key lives in the list's title, beside the layouts.
-    assert!(screen.contains(" x   chart"), "screen:\n{screen}");
+    assert!(screen.contains(" x  chart"), "screen:\n{screen}");
 }
 
 /// A `[keybindings]` remap flows through to the footer and to dispatch:
@@ -2032,7 +2048,7 @@ fn news_view_lists_articles_and_sentiment() {
         ),
     );
     let screen = render(&mut app);
-    assert!(screen.contains("News  f   AAPL"), "screen:\n{screen}");
+    assert!(screen.contains("News  f  AAPL"), "screen:\n{screen}");
     assert!(
         screen.contains("Apple beats expectations"),
         "screen:\n{screen}"
@@ -2287,7 +2303,7 @@ fn insider_chart_panel_draws_and_cycles() {
     let mut app = insider_app_with_chart();
     let screen = render(&mut app);
     assert!(
-        screen.contains("Form 4  g   3m  12m  off"),
+        screen.contains("Form 4  g  3m 12m off"),
         "panel title missing:\n{screen}"
     );
     // Window totals in the title: both sides priced.
@@ -2324,7 +2340,7 @@ fn insider_chart_panel_draws_and_cycles() {
     // g cycles 3m -> 12m -> off -> 3m; the panel yields its rows when off.
     press(&mut app, KeyCode::Char('g'));
     assert_eq!(app.insider_chart, crate::app::InsiderChartWindow::M12);
-    assert!(render(&mut app).contains("Form 4  g   3m  12m  off"));
+    assert!(render(&mut app).contains("Form 4  g  3m 12m off"));
     press(&mut app, KeyCode::Char('g'));
     let screen = render(&mut app);
     assert!(
@@ -2333,7 +2349,7 @@ fn insider_chart_panel_draws_and_cycles() {
     );
     press(&mut app, KeyCode::Char('g'));
     assert_eq!(app.insider_chart, crate::app::InsiderChartWindow::M3);
-    assert!(render(&mut app).contains("Form 4  g   3m  12m  off"));
+    assert!(render(&mut app).contains("Form 4  g  3m 12m off"));
 }
 
 /// Rows are scarce before they are gone: the weekly bars drop first, the
@@ -2344,7 +2360,7 @@ fn insider_chart_degrades_bars_then_panel() {
     // 24-row terminal: the panel fits only without its bars.
     let screen = render_sized(&mut app, 100, 24);
     assert!(
-        screen.contains("Form 4  g   3m  12m  off"),
+        screen.contains("Form 4  g  3m 12m off"),
         "short panel missing:\n{screen}"
     );
     assert!(
@@ -2409,11 +2425,11 @@ fn news_scope_cycles_and_relabels() {
     press(&mut app, KeyCode::Char('f'));
     assert_eq!(app.news_scope, NewsScope::Events);
     assert_eq!(app.news_cache_key(), "ev:AAPL");
-    assert!(render(&mut app).contains("AAPL  events  market"));
+    assert!(render(&mut app).contains("AAPL events market"));
     press(&mut app, KeyCode::Char('f'));
     assert_eq!(app.news_scope, NewsScope::Market);
     assert_eq!(app.news_cache_key(), "*");
-    assert!(render(&mut app).contains("f   market"));
+    assert!(render(&mut app).contains(" market "));
     press(&mut app, KeyCode::Char('f'));
     assert_eq!(app.news_scope, NewsScope::Trending);
     assert_eq!(app.news_cache_key(), TRENDING_KEY);
@@ -2461,7 +2477,7 @@ fn trending_view_lists_articles() {
         ),
     );
     let screen = render(&mut app);
-    assert!(screen.contains("f   trending"), "screen:\n{screen}");
+    assert!(screen.contains(" trending "), "screen:\n{screen}");
     assert!(
         screen.contains("top 10 of the last 48h"),
         "screen:\n{screen}"
@@ -2743,7 +2759,7 @@ fn v_in_the_chart_layout_reads_under_the_chart() {
     );
     assert!(!screen.contains(" Article "), "modal drawn too:\n{screen}");
     assert!(
-        !screen.contains("News  f   AAPL"),
+        !screen.contains("News  f  AAPL"),
         "list still shown:\n{screen}"
     );
     // Scrolling and closing are the overlay's own keys.
@@ -2972,7 +2988,7 @@ fn category_picker_keys() {
     press(&mut app, KeyCode::Char('C'));
     assert!(!app.category_picker.open);
     assert_eq!(app.news_categories, Categories::only([0]));
-    assert!(render(&mut app).contains("⇧C   earnings"));
+    assert!(render(&mut app).contains("⇧C  earnings"));
 }
 
 /// The insider feed is one category, so C means nothing there.
@@ -3097,7 +3113,7 @@ fn narrow_news_view_hides_side_card() {
             None,
         ),
     );
-    // The pane title carries "pgup/pgdn scroll"; the footer's "v card" hint
+    // The pane title carries "pgup/pgdn  scroll"; the footer's "v card" hint
     // stays in both sizes, so it cannot be the needle.
     let wide = render_sized(&mut app, 100, 30);
     assert!(
@@ -4227,6 +4243,8 @@ fn borders_are_themed() {
         ),
     );
     app.theme.border = Color::Rgb(1, 2, 3);
+    // The panel the arrow keys move in wears the accent instead.
+    app.theme.accent = Color::Rgb(4, 5, 6);
 
     for view in ui::VIEWS {
         app.view_idx = ui::view_index(view.id());
@@ -4244,11 +4262,11 @@ fn borders_are_themed() {
                 );
                 if ROUNDED.contains(&cell.symbol()) {
                     corners += 1;
-                    assert_eq!(
-                        cell.fg,
-                        Color::Rgb(1, 2, 3),
-                        "{:?}: unthemed border at {x},{y}",
-                        view.id()
+                    assert!(
+                        [Color::Rgb(1, 2, 3), Color::Rgb(4, 5, 6)].contains(&cell.fg),
+                        "{:?}: unthemed border at {x},{y}: {:?}",
+                        view.id(),
+                        cell.fg
                     );
                 }
             }
@@ -6272,7 +6290,7 @@ fn extended_hours_explain_why_they_cannot_draw() {
     app.source_extended = false;
     app.view_idx = ui::view_index(ui::ViewId::Chart);
     let screen = render(&mut app);
-    assert!(screen.contains("ext  n/a"), "screen:\n{screen}");
+    assert!(screen.contains("ext n/a"), "screen:\n{screen}");
 
     let mut app = fake_app();
     let notice = |app: &App| app.notice.as_ref().map(|(n, _)| n.clone());

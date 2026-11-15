@@ -35,7 +35,7 @@ const fn surface(p: &Palette) -> Color {
 }
 
 /// `base` moved `pct` percent of the way to `toward`, per channel.
-const fn mix(base: Color, toward: Color, pct: u16) -> Color {
+pub(super) const fn mix(base: Color, toward: Color, pct: u16) -> Color {
     match (base, toward) {
         (Color::Rgb(r, g, b), Color::Rgb(tr, tg, tb)) => Color::Rgb(
             ((r as u16 * (100 - pct) + tr as u16 * pct) / 100) as u8,
@@ -200,6 +200,44 @@ const DRACULA: Palette = Palette {
     dim: rgb(0x44475a),
 };
 
+/// Aardvark Ink by Josh McKinney (iTerm2-Color-Schemes): a graphite blue
+/// dark theme with muted signal colors. It names no orange, so the warning
+/// shade sits between its bright red and bright yellow.
+const AARDVARK_INK: Palette = Palette {
+    accent: rgb(0x76a8f2),
+    base: rgb(0x0f141f),
+    text: rgb(0xb4bcca),
+    subtext: mix(rgb(0xb4bcca), rgb(0x0f141f), 26),
+    faint: mix(rgb(0xb4bcca), rgb(0x0f141f), 44),
+    green: rgb(0x52aa60),
+    red: rgb(0xc26265),
+    red_alt: rgb(0xe48383),
+    orange: mix(rgb(0xe48383), rgb(0xc7b461), 50),
+    yellow: rgb(0xc7b461),
+    violet: rgb(0xd58bf0),
+    cyan: rgb(0x52c4c0),
+    muted: rgb(0x5a6377),
+    dim: rgb(0x3a4152),
+};
+
+/// Aardvark Blue, the same author's navy sibling with brighter signals.
+const AARDVARK_BLUE: Palette = Palette {
+    accent: rgb(0x60a4ec),
+    base: rgb(0x102040),
+    text: rgb(0xdddddd),
+    subtext: mix(rgb(0xdddddd), rgb(0x102040), 28),
+    faint: mix(rgb(0xdddddd), rgb(0x102040), 48),
+    green: rgb(0x95dc55),
+    red: rgb(0xf05b50),
+    red_alt: rgb(0xf05b50),
+    orange: mix(rgb(0xf05b50), rgb(0xffe763), 50),
+    yellow: rgb(0xffe763),
+    violet: rgb(0xe26be2),
+    cyan: rgb(0x60b6cb),
+    muted: mix(rgb(0xdddddd), rgb(0x102040), 45),
+    dim: mix(rgb(0x102040), rgb(0xdddddd), 25),
+};
+
 /// Blue carries the accent so orange stays free for warnings, which is
 /// where gruvbox itself puts it.
 const GRUVBOX_DARK: Palette = Palette {
@@ -266,6 +304,8 @@ pub static PRESETS: &[(&str, Theme)] = &[
     ("dracula", theme_from(DRACULA)),
     ("gruvbox-dark", theme_from(GRUVBOX_DARK)),
     ("nord", theme_from(NORD)),
+    ("aardvark-ink", theme_from(AARDVARK_INK)),
+    ("aardvark-blue", theme_from(AARDVARK_BLUE)),
     ("catppuccin-latte", theme_from(CATPPUCCIN_LATTE)),
     ("gruvbox-light", theme_from(GRUVBOX_LIGHT)),
 ];
@@ -524,6 +564,24 @@ mod tests {
             }
             let d = delta_e(t.warn, t.faint);
             assert!(d >= 20.0, "{name}: warn and faint are {d:.1} ΔE apart");
+        }
+    }
+
+    /// A key's plate sits between the background and the cursor row's
+    /// shade, and its bold letter stays readable as body text on it, over
+    /// the background and over the panel surface alike.
+    #[test]
+    fn key_plates_are_soft_and_readable() {
+        for (name, t) in PRESETS.iter().skip(1) {
+            for under in [t.background, t.surface] {
+                let plate = t.plate(under).bg.unwrap();
+                assert_ne!(plate, under, "{name}: plate is invisible");
+                let r = contrast(t.text, plate);
+                assert!(r >= 4.5, "{name}: key on its plate is {r:.2}");
+            }
+            let soft = contrast(t.plate(t.background).bg.unwrap(), t.background);
+            let cursor = contrast(t.selection, t.background);
+            assert!(soft < cursor, "{name}: plate louder than the cursor row");
         }
     }
 

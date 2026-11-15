@@ -139,7 +139,6 @@ pub fn render(
     ]
     .map(|w| (w.label().to_string(), Button::InsiderWindow(w), w == window));
     keycap::push_choices(&mut spans, &mut pills, choices, theme);
-    spans.push(Span::raw(" "));
     spans.extend(sums.spans.into_iter().skip(1));
     let head = Line::from(spans);
     let hits = keycap::place_left(pills, area);

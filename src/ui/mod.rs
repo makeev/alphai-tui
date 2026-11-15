@@ -341,7 +341,9 @@ fn header_line(app: &App, area: Rect) -> Header {
                 }
                 let button = Some(hits::Button::Key(action));
                 spans.push(Span::raw(" "));
-                keycap::push_cap(&mut spans, &mut pills, key, button, theme);
+                let cap = format!(" {} ", keycap::label(key));
+                let style = keycap::cap_style(theme);
+                keycap::push_pill(&mut spans, &mut pills, cap, style, button);
                 if words {
                     let word = format!(" {word}");
                     keycap::push_pill(&mut spans, &mut pills, word, theme.subtle(), button);
@@ -389,7 +391,24 @@ fn hint_spans(app: &App) -> (Vec<Span<'static>>, keycap::Pills) {
     let word = app.theme.subtle();
     let mut spans = Vec::new();
     let mut pills = keycap::Pills::new();
-    for (i, h) in VIEWS[app.view_idx].hints_for(app).iter().enumerate() {
+    // A key this frame already drew in a title, beside the choice it
+    // cycles, is not repeated here: the footer keeps what no title shows.
+    // The footer draws after the view, so `hits` holds every title's keys.
+    let shown: Vec<Action> = app
+        .hits
+        .buttons
+        .iter()
+        .filter_map(|(_, b)| b.action())
+        .collect();
+    let hints = VIEWS[app.view_idx].hints_for(app).iter().filter(|h| {
+        // Help and settings stay whatever the header shows: help is the
+        // way in, and the header may show their keys bare, wordless.
+        h.actions.is_empty()
+            || h.actions.contains(&Action::Help)
+            || h.actions.contains(&Action::Settings)
+            || !h.actions.iter().all(|a| shown.contains(a))
+    });
+    for (i, h) in hints.enumerate() {
         let keys = if h.actions.is_empty() {
             h.fixed.to_string()
         } else {
