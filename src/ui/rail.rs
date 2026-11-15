@@ -275,7 +275,7 @@ fn quote_context(
     now: DateTime<Utc>,
     stale: bool,
 ) -> Vec<Vec<Span<'static>>> {
-    let feed = quote.timing.regular_feed.label();
+    let feed = quote.timing.regular_feed.shown_label(app.hide_source);
     let mut parts = Vec::new();
     if !feed.is_empty() {
         parts.push(feed.to_string());

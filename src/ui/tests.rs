@@ -6341,3 +6341,29 @@ fn extended_hours_explain_why_they_cannot_draw() {
             .contains("US listings only, not VOD.L")
     );
 }
+
+/// `--hide-source`: the provider's name is off the header, the rail and the
+/// chart labels in every view; without the flag it shows.
+#[test]
+fn hide_source_keeps_the_provider_off_screen() {
+    let mut app = fake_app();
+    app.source_name = "tiingo";
+    for data in app.data.values_mut() {
+        data.quote.timing.regular_feed = crate::domain::PriceFeed::Tiingo;
+        for c in &mut data.candles {
+            c.feed = crate::domain::PriceFeed::Tiingo;
+        }
+    }
+    let screen = render_sized(&mut app, 160, 40);
+    assert!(screen.contains("tiingo"), "{screen}");
+    app.hide_source = true;
+    for view in ui::VIEWS {
+        app.view_idx = ui::view_index(view.id());
+        let screen = render_sized(&mut app, 160, 40);
+        assert!(
+            !screen.to_lowercase().contains("tiingo"),
+            "{:?}:\n{screen}",
+            view.id()
+        );
+    }
+}

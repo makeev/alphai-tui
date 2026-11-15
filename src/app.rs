@@ -434,6 +434,9 @@ pub struct App {
     pub selected: usize,
     pub view_idx: usize,
     pub source_name: &'static str,
+    /// `--hide-source`: the provider's name stays off the screen (header,
+    /// rail, chart labels) so a screenshot does not advertise it.
+    pub hide_source: bool,
     /// How stale the active source's prices are (`DataSource::delay_note`),
     /// re-read whenever the settings screen swaps the source. The quote
     /// rail badges it so a delayed price is never read as a live one.
@@ -643,6 +646,7 @@ impl App {
             selected: 0,
             view_idx: init.ui.view_idx,
             source_name: init.source_name,
+            hide_source: false,
             source_delay,
             source_extended,
             #[cfg(test)]

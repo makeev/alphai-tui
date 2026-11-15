@@ -700,6 +700,7 @@ alphai-tui -s finnhub NVDA  # explicit source for one run
 | `-i, --interval` | `15m` | Candle size: `1m 2m 5m 15m 30m 60m 1d` |
 | `--theme` | `default` | Color preset, e.g. `catppuccin-mocha` (also a key and a settings row) |
 | `--bare` | off | Start without the header and footer, for a tmux pane (`z` toggles it live) |
+| `--hide-source` | off | Leave the price source's name off the header, the quote rail and the chart, for screenshots (also `ALPHAI_TUI_HIDE_SOURCE=1`); the settings screen still shows it |
 | `--once` | | Print quotes to stdout and exit |
 | `--json` | | Print those quotes as JSON instead of a text table (implies `--once`) |
 | `--earnings TICKER` | | Print the latest earnings read to stdout and exit (needs an AlphAI key; one request) |

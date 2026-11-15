@@ -66,6 +66,11 @@ struct Args {
     #[arg(long)]
     bare: bool,
 
+    /// Leave the price source's name off the screen (header, quote rail,
+    /// chart labels), for screenshots; also ALPHAI_TUI_HIDE_SOURCE=1
+    #[arg(long)]
+    hide_source: bool,
+
     /// Print quotes once to stdout and exit (no TUI); handy for scripts
     #[arg(long)]
     once: bool,
@@ -94,6 +99,12 @@ struct Args {
     /// Use an alternate config file (the settings screen saves back to it)
     #[arg(long, value_name = "PATH")]
     config: Option<PathBuf>,
+}
+
+/// `ALPHAI_TUI_HIDE_SOURCE` set to anything but empty, `0` or `false`.
+fn hide_source_env() -> bool {
+    std::env::var("ALPHAI_TUI_HIDE_SOURCE")
+        .is_ok_and(|v| !matches!(v.trim().to_ascii_lowercase().as_str(), "" | "0" | "false"))
 }
 
 fn main() -> Result<()> {
@@ -250,6 +261,7 @@ fn main() -> Result<()> {
     for (symbol, entry) in seeds {
         app.seed_cached(symbol, entry);
     }
+    app.hide_source = args.hide_source || hide_source_env();
     let result = rt.block_on(app.run(&mut terminal));
     ratatui::restore();
     result

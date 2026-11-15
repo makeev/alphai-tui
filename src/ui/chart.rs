@@ -431,13 +431,13 @@ fn push_ext(
     } else if feeds.is_empty() {
         Some("no data".to_string())
     } else {
-        Some(
-            feeds
-                .iter()
-                .map(|f| f.label())
-                .collect::<Vec<_>>()
-                .join(" / "),
-        )
+        let shown = feeds
+            .iter()
+            .map(|f| f.shown_label(app.hide_source))
+            .filter(|label| !label.is_empty())
+            .collect::<Vec<_>>()
+            .join(" / ");
+        (!shown.is_empty()).then_some(shown)
     };
     spans.push(Span::styled("· ", theme.faint()));
     let toggle = Some(Button::Key(Action::ToggleExtended));
@@ -577,7 +577,7 @@ fn bar_line(data: &TickerData, app: &App, width: u16) -> Line<'static> {
         time_axis::label(bar.ts, "%d %b %H:%M", app.chart.timezone, us),
         time_axis::zone_name(app.chart.timezone, us),
     );
-    for part in [bar.feed.label(), time.as_str()] {
+    for part in [bar.feed.shown_label(app.hide_source), time.as_str()] {
         if !part.is_empty() {
             let span = Span::styled(format!(" · {part}"), app.theme.subtle());
             if spans.iter().map(Span::width).sum::<usize>() + span.width() <= width as usize {

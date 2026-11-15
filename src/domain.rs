@@ -191,6 +191,16 @@ impl PriceFeed {
             Self::Tiingo => "Tiingo",
         }
     }
+
+    /// `label`, or nothing when it names the data provider (Yahoo, Finnhub,
+    /// Alpaca, Tiingo) and `hide_source` is on. IEX and SIP name the market
+    /// feed rather than who resold it, so they stay.
+    pub fn shown_label(self, hide_source: bool) -> &'static str {
+        match self {
+            Self::Yahoo | Self::Finnhub | Self::Crypto | Self::Tiingo if hide_source => "",
+            _ => self.label(),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]

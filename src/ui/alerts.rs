@@ -77,13 +77,18 @@ fn sample_text(app: &App, symbol: &str, sample: &Sample) -> String {
         .as_ref()
         .map(|c| format!(" {c}"))
         .unwrap_or_default();
-    let feed = if sample.feed.label().is_empty() {
-        "feed unknown"
+    // A provider's name hidden by --hide-source drops out; an unknown
+    // feed still says so.
+    let label = sample.feed.shown_label(app.hide_source);
+    let feed = if !label.is_empty() {
+        format!(" · {label}")
+    } else if sample.feed.label().is_empty() {
+        " · feed unknown".to_string()
     } else {
-        sample.feed.label()
+        String::new()
     };
     format!(
-        "{}{currency} · {feed} · {session} {}",
+        "{}{currency}{feed} · {session} {}",
         sample.price,
         stamp(app, symbol, sample.timestamp)
     )

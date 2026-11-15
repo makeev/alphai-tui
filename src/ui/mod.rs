@@ -317,7 +317,11 @@ fn header_line(app: &App, area: Rect) -> Header {
     // The connection status and, where it fits, the keys to the settings
     // (where the source and the key are changed) and the help, as keycaps
     // with their words or bare.
-    let source = format!(" · {} {}", app.source_name, app.refresh_marker());
+    let source = if app.hide_source {
+        format!(" {}", app.refresh_marker())
+    } else {
+        format!(" · {} {}", app.source_name, app.refresh_marker())
+    };
     let settings = app.keymap.labels(&[Action::Settings]);
     let help = app.keymap.labels(&[Action::Help]);
     let status = |keys: Option<bool>, with_state: bool| {
