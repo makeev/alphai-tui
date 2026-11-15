@@ -5,7 +5,7 @@ the crates.io releases; from 0.7.0 on each one is also a git tag and a
 GitHub release with prebuilt binaries. The Homebrew tap, the AUR and the
 apt repository joined later, and carry every version since.
 
-## 0.44.0 - 2026-11-15
+## Unreleased
 
 - `--hide-source` (or `ALPHAI_TUI_HIDE_SOURCE=1`) leaves the price
   source's name off the screen: the header, the quote rail and the chart's
