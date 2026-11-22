@@ -5,8 +5,12 @@ the crates.io releases; from 0.7.0 on each one is also a git tag and a
 GitHub release with prebuilt binaries. The Homebrew tap, the AUR and the
 apt repository joined later, and carry every version since.
 
-## Unreleased
+## 0.44.0 - 2026-11-22
 
+- Import portfolio holdings with `--import-positions FILE`. It reads IBKR
+  Activity Statement, Flex Query and generic positions CSV exports. Add
+  `--dry-run` to preview the changes. Existing holdings absent from the file
+  stay in the portfolio.
 - `--hide-source` (or `ALPHAI_TUI_HIDE_SOURCE=1`) leaves the price
   source's name off the screen: the header, the quote rail and the chart's
   feed labels. Market feeds (IEX, SIP) still show, and so does the settings

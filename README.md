@@ -421,6 +421,37 @@ There is no currency conversion here and there is not going to be one: if
 the holdings quote in more than one currency, the total says `mixed
 currencies` rather than pretending the sum means something.
 
+#### Import positions from CSV
+
+Preview the changes, then run the same command without `--dry-run` to
+save them. Use `--config PATH` with either command to choose the portfolio.
+
+```sh
+alphai-tui --import-positions holdings.csv --dry-run
+alphai-tui --import-positions holdings.csv
+```
+
+- **Interactive Brokers Activity Statement**. Export an Activity Statement
+  as CSV. The importer reads the USD stock summaries in Open Positions.
+- **Interactive Brokers Flex Query**. Export Open Positions for a single
+  date, with Summary detail, symbol, quantity, cost basis price or money,
+  asset class and currency. Select one position basis (trade date or settlement
+  date) when including section codes. Include Listing Exchange for international
+  stocks. For example, `700` on SEHK becomes `0700.HK`. Check the units of
+  London cost prices against the quoted price before saving.
+- **Other brokers**. A UTF-8 file needs a ticker, quantity and either a
+  per-share cost or total cost basis. For example, `Symbol,Shares,Avg Cost`
+  or `Ticker,Quantity,Cost Basis Total`. The importer also reads tab-separated
+  files and semicolon-separated files with decimal commas or points. Use one
+  decimal convention throughout and omit ambiguous thousands separators.
+
+Rows for the same ticker across accounts are combined at their
+quantity-weighted average cost. A ticker with both long and short
+positions is skipped. The preview lists each added, changed, unchanged
+and retained holding, plus the reasons for skipped rows. Existing holdings
+absent from the export stay in the portfolio. Restart open panels to see
+the saved positions. Each additional holding joins the quote polling cycle.
+
 ### 9 Calendar: reports and macro releases
 
 ![alphai-tui calendar: scheduled reports, filings with reads pending, published earnings reads and US macro releases](https://raw.githubusercontent.com/makeev/alphai-tui/main/assets/calendar.png)
@@ -704,6 +735,8 @@ alphai-tui -s finnhub NVDA  # explicit source for one run
 | `--once` | | Print quotes to stdout and exit |
 | `--json` | | Print those quotes as JSON instead of a text table (implies `--once`) |
 | `--earnings TICKER` | | Print the latest earnings read to stdout and exit (needs an AlphAI key; one request) |
+| `--import-positions FILE` | | Import holdings from a broker CSV and print the changes |
+| `--dry-run` | | Preview a position import |
 | `--events TICKER` | | Print the ticker's corporate events to stdout and exit (needs an AlphAI key; one request) |
 | `--config` | | Use an alternate config file (Save writes back to it) |
 

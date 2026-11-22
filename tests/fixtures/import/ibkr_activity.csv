@@ -1,0 +1,11 @@
+Statement,Header,Field Name,Field Value
+Statement,Data,Title,Activity Statement
+Trades,Header,DataDiscriminator,Asset Category,Currency,Symbol,Quantity,Cost Price
+Trades,Data,Order,Stocks,USD,TRADE,55,110
+Open Positions,Header,DataDiscriminator,Asset Category,Currency,Symbol,Quantity,Cost Price,Cost Basis
+Open Positions,Data,Summary,Stocks,USD,BRK B,2,15.5,31
+Open Positions,Data,Lot,Stocks,USD,BRK B,2,15.5,31
+Open Positions,Data,Summary,Stocks,USD,XYZ,-5,,-155
+Open Positions,Data,Summary,Stocks,EUR,ASML,7,100,700
+Open Positions,Data,Summary,Futures,USD,ES,1,5000,5000
+Open Positions,Total,,Stocks,USD,,2,,31

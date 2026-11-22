@@ -6,6 +6,7 @@ mod category;
 mod config;
 mod domain;
 mod event;
+mod import;
 mod indicators;
 mod insider_decision;
 mod keymap;
@@ -96,6 +97,14 @@ struct Args {
     )]
     events: Option<String>,
 
+    /// Import holdings from a broker positions CSV and exit
+    #[arg(long, value_name = "FILE", conflicts_with_all = ["symbols", "once", "json", "earnings", "events"])]
+    import_positions: Option<PathBuf>,
+
+    /// Preview the position changes without writing the config
+    #[arg(long, requires = "import_positions")]
+    dry_run: bool,
+
     /// Use an alternate config file (the settings screen saves back to it)
     #[arg(long, value_name = "PATH")]
     config: Option<PathBuf>,
@@ -109,6 +118,18 @@ fn hide_source_env() -> bool {
 
 fn main() -> Result<()> {
     let args = Args::parse();
+    if let Some(file) = &args.import_positions {
+        let path = args.config.or_else(config::path).ok_or_else(|| {
+            anyhow::anyhow!("no config directory on this platform, pass --config PATH")
+        })?;
+        return import::run(
+            file,
+            &path,
+            args.dry_run,
+            args.source.as_deref(),
+            args.every,
+        );
+    }
     let (cfg, cfg_state, config_path) = config::load_at(args.config.as_deref());
     // Validation warnings go to stderr before the TUI takes the terminal,
     // so they stay readable in scrollback after exit.
@@ -132,19 +153,7 @@ fn main() -> Result<()> {
     // Holdings off the watchlist are polled too, so they count here: a
     // budget warning that ignored them would understate the real load.
     let polled = portfolio::polled_symbols(&symbols, &resolved.positions);
-    if let Some(info) = source::registry::find(&source_name)
-        && let Some(msg) = source::registry::rate_warning(
-            info,
-            polled.len(),
-            every.max(2),
-            matches!(
-                source::extended_provider(info, &cfg),
-                source::extended::Provider::Sip { .. }
-            ),
-        )
-    {
-        eprintln!("warning: {msg}");
-    }
+    warn_rate(&cfg, &source_name, every, polled.len());
     let (range, interval) = chart_window(&args, &cfg);
 
     let rt = tokio::runtime::Runtime::new()?;
@@ -265,6 +274,22 @@ fn main() -> Result<()> {
     let result = rt.block_on(app.run(&mut terminal));
     ratatui::restore();
     result
+}
+
+fn warn_rate(cfg: &config::Config, source_name: &str, every: u64, count: usize) {
+    if let Some(info) = source::registry::find(source_name)
+        && let Some(msg) = source::registry::rate_warning(
+            info,
+            count,
+            every.max(2),
+            matches!(
+                source::extended_provider(info, cfg),
+                source::extended::Provider::Sip { .. }
+            ),
+        )
+    {
+        eprintln!("warning: {msg}");
+    }
 }
 
 fn startup_symbols(cli: &[String], saved: &[String]) -> Result<Vec<String>> {

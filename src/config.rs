@@ -509,7 +509,10 @@ fn resolve_extended_source(cfg: &Config, warnings: &mut Vec<String>) {
 /// `[[positions]]`: a broken entry warns and is dropped, the rest stand.
 /// Symbols are upper-cased the way the watchlist is, so a holding written
 /// in lower case still meets its quote.
-fn resolve_positions(raw: &[PositionEntry], warnings: &mut Vec<String>) -> Vec<Position> {
+pub(crate) fn resolve_positions(
+    raw: &[PositionEntry],
+    warnings: &mut Vec<String>,
+) -> Vec<Position> {
     let mut out: Vec<Position> = Vec::new();
     for entry in raw {
         let Some(symbol) = entry.symbol() else {
@@ -957,7 +960,7 @@ pub fn load_from(p: &Path) -> Result<Option<Config>> {
 /// One line on why `load_from` failed, short enough for the footer: the
 /// TOML error's first line names the line and column, the rest of it is a
 /// drawing of the spot.
-fn load_error(e: &anyhow::Error) -> String {
+pub(crate) fn load_error(e: &anyhow::Error) -> String {
     let cause = e.root_cause().to_string();
     cause.lines().next().unwrap_or_default().trim().to_string()
 }
@@ -1050,6 +1053,33 @@ pub fn update(p: &Path, missing: &Config, change: impl Fn(&mut Config)) -> Resul
     Ok(on_disk)
 }
 
+/// Import changes only the positions table. Keep all other TOML values,
+/// including sections written by a newer version, in the same transaction.
+pub fn update_positions<T>(
+    p: &Path,
+    change: impl FnOnce(&mut Config) -> (T, usize),
+) -> Result<(Config, (T, usize))> {
+    let _lock = lock(p)?;
+    let mut document: toml::Table = match std::fs::read_to_string(p) {
+        Ok(text) => toml::from_str(&text)
+            .map_err(|_| anyhow::anyhow!("fix {} before importing: invalid TOML", p.display()))?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => toml::Table::new(),
+        Err(e) => return Err(e).context("read config failed"),
+    };
+    let mut cfg: Config = document.clone().try_into().map_err(|_| {
+        anyhow::anyhow!(
+            "fix {} before importing: invalid config settings",
+            p.display()
+        )
+    })?;
+    let (report, changes) = change(&mut cfg);
+    if changes > 0 {
+        document.insert("positions".into(), toml::Value::try_from(&cfg.positions)?);
+        save_serialized(p, &toml::to_string_pretty(&document)?)?;
+    }
+    Ok((cfg, (report, changes)))
+}
+
 /// Save in the settings screen: writes `cfg` whole, under the lock. The
 /// holdings are not on that screen, so they come from the file as it is
 /// now, with `pending` (the keypress edits that never reached it) on top.
@@ -1099,15 +1129,18 @@ pub fn save_at(path: Option<&Path>, cfg: &Config) -> Result<()> {
 
 /// The file may hold API keys, so it is created user-only (0600) on unix.
 pub fn save_to(p: &Path, cfg: &Config) -> Result<()> {
+    save_serialized(p, &toml::to_string_pretty(cfg).context("serialize failed")?)
+}
+
+fn save_serialized(p: &Path, raw: &str) -> Result<()> {
     if let Some(dir) = p.parent() {
         std::fs::create_dir_all(dir).context("create config dir failed")?;
     }
-    let raw = toml::to_string_pretty(cfg).context("serialize failed")?;
     // Written beside the target and renamed over it. The position prompt
     // saves on every edit, so a torn write is no longer a once-a-session
     // risk, and this file also holds the API keys.
     let tmp = p.with_extension(format!("toml.tmp{}", std::process::id()));
-    let saved = write_private(&tmp, &raw)
+    let saved = write_private(&tmp, raw)
         .context("write failed")
         .and_then(|()| std::fs::rename(&tmp, p).context("replace failed"));
     if saved.is_err() {

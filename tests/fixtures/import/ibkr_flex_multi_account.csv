@@ -1,0 +1,6 @@
+ClientAccountID,AssetClass,Symbol,Quantity,CostBasisPrice,CurrencyPrimary
+example-a,STK,AAPL,2,100,USD
+example-a,STK,XYZ,-1,12,USD
+ClientAccountID,AssetClass,Symbol,Quantity,CostBasisPrice,CurrencyPrimary
+example-b,STK,AAPL,3,125,USD
+example-b,STK,XYZ,2,13,USD

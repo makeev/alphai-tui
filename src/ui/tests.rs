@@ -4791,6 +4791,7 @@ fn earnings_app(
 #[test]
 fn earnings_view_renders_a_read() {
     let (mut app, _cmds) = earnings_app(FULL_METRICS, "2026-11-17");
+    app.frozen_now = Some("2026-11-16T12:00:00Z".parse().unwrap());
     let screen = render_sized(&mut app, 110, 32);
     assert!(
         screen.contains("Second Quarter Fiscal 2027"),
