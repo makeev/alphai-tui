@@ -39,6 +39,13 @@ pub const ALPHAI_KEY_FIELD: KeyField = KeyField {
     label: "AlphAI key",
 };
 
+/// Where a credential was found (see `Config::key_origin`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum KeyOrigin {
+    Env,
+    File,
+}
+
 /// Persisted app settings. Precedence at use time: CLI args > env vars
 /// (for API keys) > this file > built-in defaults.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -886,6 +893,18 @@ impl Config {
 
     pub fn alphai_key(&self) -> Option<String> {
         self.key_value(&ALPHAI_KEY_FIELD)
+    }
+
+    /// Where `key_value` finds this credential, by the same rule: the env
+    /// var over the file, blank counting as unset.
+    pub fn key_origin(&self, field: &KeyField) -> Option<KeyOrigin> {
+        if env_key(field.env_var).is_some() {
+            return Some(KeyOrigin::Env);
+        }
+        self.keys
+            .get(field.config_name)
+            .filter(|v| !v.trim().is_empty())
+            .map(|_| KeyOrigin::File)
     }
 
     /// True when Enter on a news article should open the original source

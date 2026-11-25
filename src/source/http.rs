@@ -8,6 +8,7 @@
 //! The AlphAI client in `crate::alphai` is deliberately separate: different
 //! timeout, bearer auth and a richer error envelope.
 
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -84,6 +85,8 @@ pub fn client_with(ua: &str, headers: Option<HeaderMap>) -> Result<reqwest::Clie
 /// GET `url` with `query` and parse a 2xx JSON body as `T`. A non-2xx status
 /// routes `(status, body)` through `err_map`, so each source keeps its own
 /// API-specific messages; `api` names the source in the bad-JSON context.
+/// The key's per-minute budget, when the provider reports one, goes into
+/// `meter` (see `Budget`).
 ///
 /// A transient status is retried up to `MAX_RETRIES` times (see
 /// `is_transient`). That budget is deliberate: price sources are metered by
@@ -97,12 +100,22 @@ pub async fn get_json<T: DeserializeOwned>(
     url: &str,
     query: &[(&str, &str)],
     err_map: impl Fn(StatusCode, &str) -> String,
+    meter: &Meter,
 ) -> Result<T> {
-    get_json_retrying(client, api, url, query, err_map, Retry::Transient).await
+    get_json_inner(
+        client,
+        api,
+        url,
+        query,
+        err_map,
+        Retry::Transient,
+        Some(meter),
+    )
+    .await
 }
 
-/// `get_json` for a source that wants a different retry policy; see
-/// `Retry`.
+/// `get_json` for a source that wants a different retry policy (see
+/// `Retry`) and reports no budget.
 pub async fn get_json_retrying<T: DeserializeOwned>(
     client: &reqwest::Client,
     api: &str,
@@ -110,6 +123,18 @@ pub async fn get_json_retrying<T: DeserializeOwned>(
     query: &[(&str, &str)],
     err_map: impl Fn(StatusCode, &str) -> String,
     retry: Retry,
+) -> Result<T> {
+    get_json_inner(client, api, url, query, err_map, retry, None).await
+}
+
+async fn get_json_inner<T: DeserializeOwned>(
+    client: &reqwest::Client,
+    api: &str,
+    url: &str,
+    query: &[(&str, &str)],
+    err_map: impl Fn(StatusCode, &str) -> String,
+    retry: Retry,
+    meter: Option<&Meter>,
 ) -> Result<T> {
     let mut resp = client
         .get(url)
@@ -129,6 +154,9 @@ pub async fn get_json_retrying<T: DeserializeOwned>(
             .await
             .context("request failed")?;
     }
+    if let Some(meter) = meter {
+        meter.note(resp.headers());
+    }
     let status = resp.status();
     if !status.is_success() {
         let body = resp.text().await.unwrap_or_default();
@@ -137,6 +165,53 @@ pub async fn get_json_retrying<T: DeserializeOwned>(
     resp.json()
         .await
         .with_context(|| format!("bad JSON from {api}"))
+}
+
+/// What a key has left of its per-minute allowance, from the
+/// `X-Ratelimit-Remaining` and `X-Ratelimit-Limit` headers Alpaca and
+/// Finnhub put on their answers (Alpaca leaves them off a 429). The first
+/// thing to look at when a key keeps being refused: measured 2026-09-22,
+/// an Alpaca key sat at 0 to 7 of 200 after a minute of silence from the
+/// app, because another client on the same key was spending it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Budget {
+    pub remaining: u64,
+    pub limit: u64,
+}
+
+impl Budget {
+    pub fn from_headers(headers: &HeaderMap) -> Option<Self> {
+        let number = |name: &str| headers.get(name)?.to_str().ok()?.trim().parse::<u64>().ok();
+        Some(Self {
+            remaining: number("x-ratelimit-remaining")?,
+            limit: number("x-ratelimit-limit")?,
+        })
+    }
+}
+
+/// The lowest budget a source's answers reported since it was built
+/// (`--doctor` builds a fresh one for its check). The lowest rather than
+/// the latest: requests that run side by side (Alpaca's
+/// snapshot and bars) answer in any order, and the later answer is not the
+/// later count.
+#[derive(Default)]
+pub struct Meter(Mutex<Option<Budget>>);
+
+impl Meter {
+    fn note(&self, headers: &HeaderMap) {
+        let Some(seen) = Budget::from_headers(headers) else {
+            return;
+        };
+        let mut slot = self.0.lock().unwrap();
+        *slot = Some(match *slot {
+            Some(old) if old.remaining <= seen.remaining => old,
+            _ => seen,
+        });
+    }
+
+    pub fn get(&self) -> Option<Budget> {
+        *self.0.lock().unwrap()
+    }
 }
 
 /// Statuses worth exactly one more try: a rate limiter that refused a burst,
@@ -317,6 +392,45 @@ mod tests {
             "only {scattered} of {} neighbouring draws moved",
             draws.len() - 1
         );
+    }
+
+    #[test]
+    fn budget_reads_both_headers_or_nothing() {
+        let mut headers = HeaderMap::new();
+        assert_eq!(Budget::from_headers(&headers), None);
+        headers.insert("X-Ratelimit-Remaining", "7".parse().unwrap());
+        assert_eq!(Budget::from_headers(&headers), None, "limit missing");
+        headers.insert("X-Ratelimit-Limit", "200".parse().unwrap());
+        assert_eq!(
+            Budget::from_headers(&headers),
+            Some(Budget {
+                remaining: 7,
+                limit: 200
+            })
+        );
+        headers.insert("X-Ratelimit-Limit", "lots".parse().unwrap());
+        assert_eq!(Budget::from_headers(&headers), None);
+    }
+
+    /// Side-by-side requests answer in any order: the meter keeps the
+    /// lowest count it saw, not whichever answer landed last.
+    #[test]
+    fn meter_keeps_the_lowest_remaining() {
+        let headers = |remaining: &str| {
+            let mut h = HeaderMap::new();
+            h.insert("x-ratelimit-remaining", remaining.parse().unwrap());
+            h.insert("x-ratelimit-limit", "200".parse().unwrap());
+            h
+        };
+        let meter = Meter::default();
+        assert_eq!(meter.get(), None);
+        meter.note(&HeaderMap::new());
+        assert_eq!(meter.get(), None);
+        meter.note(&headers("12"));
+        meter.note(&headers("13"));
+        assert_eq!(meter.get().unwrap().remaining, 12);
+        meter.note(&headers("11"));
+        assert_eq!(meter.get().unwrap().remaining, 11);
     }
 
     #[test]

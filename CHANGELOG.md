@@ -5,6 +5,18 @@ the crates.io releases; from 0.7.0 on each one is also a git tag and a
 GitHub release with prebuilt binaries. The Homebrew tap, the AUR and the
 apt repository joined later, and carry every version since.
 
+## 0.45.0 - 2026-11-25
+
+- `--doctor` checks what the app depends on and prints one line per
+  finding: the config file, every key and where it came from, one fetch
+  from each price source with a key plus Yahoo (with the key's minute
+  budget on Alpaca and Finnhub), the AlphAI plan and what is left of its
+  day, the quote cache, the terminal and whether a newer release is out.
+  Keys are masked and the home directory shows as `~`, so the report can
+  be pasted into an issue as it is. The exit code is 1 when a check fails.
+- An AlphAI rate limit message names your plan's limits instead of always
+  quoting the Free plan's.
+
 ## 0.44.0 - 2026-11-22
 
 - Import portfolio holdings with `--import-positions FILE`. It reads IBKR

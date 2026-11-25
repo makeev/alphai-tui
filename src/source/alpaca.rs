@@ -41,6 +41,8 @@ pub struct Alpaca {
     feed: String,
     /// Consolidated daily bars (see `daily_consolidated`).
     daily: Mutex<extended::Cache>,
+    /// The key's per-minute budget, as the answers report it.
+    meter: http::Meter,
 }
 
 impl Alpaca {
@@ -64,6 +66,7 @@ impl Alpaca {
             base,
             feed: feed(),
             daily: Mutex::new(extended::Cache::default()),
+            meter: http::Meter::default(),
         })
     }
 
@@ -74,6 +77,7 @@ impl Alpaca {
             base,
             feed: feed.into(),
             daily: Mutex::new(extended::Cache::default()),
+            meter: http::Meter::default(),
         }
     }
 
@@ -93,7 +97,15 @@ impl Alpaca {
 
     async fn get_json<T: DeserializeOwned>(&self, path: &str, query: &[(&str, &str)]) -> Result<T> {
         let url = format!("{}{}", self.base, path);
-        http::get_json(&self.client, "alpaca", &url, query, error_message).await
+        http::get_json(
+            &self.client,
+            "alpaca",
+            &url,
+            query,
+            error_message,
+            &self.meter,
+        )
+        .await
     }
 
     /// One bars request, newest first, followed through its pages while the
@@ -337,6 +349,10 @@ impl DataSource for Alpaca {
     /// volume alone) and full SIP is real time on a paid plan.
     fn delay_note(&self) -> Option<&'static str> {
         (self.feed == "delayed_sip").then_some("delayed 15m")
+    }
+
+    fn budget(&self) -> Option<http::Budget> {
+        self.meter.get()
     }
 
     async fn fetch(

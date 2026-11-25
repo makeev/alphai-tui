@@ -15,7 +15,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use chrono::{SecondsFormat, Utc};
 
-use super::{DataSource, alpaca::Alpaca, normalize_sessions, yahoo::Yahoo};
+use super::{DataSource, alpaca::Alpaca, http, normalize_sessions, yahoo::Yahoo};
 use crate::config::Config;
 use crate::domain::{Candle, Interval, PriceFeed, Quote, Range, Sessions, TickerData};
 use crate::market::{self, Session};
@@ -161,6 +161,10 @@ impl DataSource for Borrowed {
 
     fn begin_cycle(&self, symbols: &[String]) {
         self.inner.begin_cycle(symbols)
+    }
+
+    fn budget(&self) -> Option<http::Budget> {
+        self.inner.budget()
     }
 
     async fn fetch(

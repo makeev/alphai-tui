@@ -102,6 +102,117 @@ pub struct Client {
     key: String,
 }
 
+/// The key's daily allowance, from the `X-RateLimit-*` headers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DailyBudget {
+    pub limit: u64,
+    pub remaining: u64,
+    /// Unix seconds the allowance refills (00:00 UTC), when sent.
+    pub reset: Option<i64>,
+}
+
+impl DailyBudget {
+    pub fn from_headers(headers: &reqwest::header::HeaderMap) -> Option<Self> {
+        let text = |name: &str| headers.get(name)?.to_str().ok().map(str::trim);
+        Some(Self {
+            limit: text("x-ratelimit-limit")?.parse().ok()?,
+            remaining: text("x-ratelimit-remaining")?.parse().ok()?,
+            reset: text("x-ratelimit-reset").and_then(|v| v.parse().ok()),
+        })
+    }
+
+    /// The plan a daily ceiling belongs to, by the API's published tiers.
+    pub fn plan(&self) -> Option<&'static str> {
+        match self.limit {
+            100 => Some("Free"),
+            10_000 => Some("Basic"),
+            100_000 => Some("Pro"),
+            _ => None,
+        }
+    }
+}
+
+/// What `Client::probe` learned.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Probe {
+    /// None when the answer carried no budget headers.
+    pub budget: Option<DailyBudget>,
+    /// False when the API lists no such ticker (the key still answered).
+    pub known: bool,
+}
+
+/// A response with a non-success status turned into the error the views
+/// show: the key advice on 401, the plan's limits on 429, the archive gate,
+/// otherwise the API's own message.
+async fn checked(resp: reqwest::Response) -> Result<reqwest::Response> {
+    let status = resp.status();
+    if status == reqwest::StatusCode::UNAUTHORIZED {
+        return Err(ApiError {
+            status,
+            message: "invalid AlphAI API key, press s to update it (free keys: alphai.io)".into(),
+        }
+        .into());
+    }
+    if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+        let wait = resp
+            .headers()
+            .get("retry-after")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("60")
+            .to_string();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(ApiError {
+            status,
+            message: rate_limit_message(&wait, &body),
+        }
+        .into());
+    }
+    if !status.is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        let parsed = serde_json::from_str::<ErrorBody>(&body).ok();
+        // Paging back past the plan's archive horizon (Free 30 days,
+        // Basic 90) is a 403 with a machine-readable reason.
+        if parsed
+            .as_ref()
+            .and_then(|e| e.extra.as_ref())
+            .and_then(|x| x.reason.as_deref())
+            == Some("archive_horizon")
+        {
+            bail!("{ARCHIVE_GATE_MSG}");
+        }
+        let msg = parsed
+            .and_then(|e| e.message.or(e.detail).or(e.error))
+            .unwrap_or_else(|| body.chars().take(120).collect());
+        return Err(ApiError {
+            status,
+            message: format!("AlphAI API {status}: {msg}"),
+        }
+        .into());
+    }
+    Ok(resp)
+}
+
+/// The 429 text, naming the caller's own plan and limits when the body
+/// carries them (`extra.tier`, `limit_per_minute`, `limit_per_day`), and
+/// the Free plan's otherwise, which is where most keys that hit it are.
+fn rate_limit_message(wait: &str, body: &str) -> String {
+    let extra = serde_json::from_str::<ErrorBody>(body)
+        .ok()
+        .and_then(|e| e.extra);
+    let limits = extra.and_then(|x| Some((x.tier?, x.limit_per_minute?, x.limit_per_day?)));
+    let plan = match limits {
+        Some((tier, per_min, per_day)) => {
+            let mut name = tier;
+            if let Some(first) = name.get_mut(..1) {
+                first.make_ascii_uppercase();
+            }
+            format!("{name} plan: {per_min}/min, {per_day}/day")
+        }
+        None => "Free tier: 20/min, 100/day".to_string(),
+    };
+    format!("AlphAI rate limit hit, retry in {wait}s ({plan})")
+}
+
 /// Filters shared by every page and delta poll of a news feed.
 #[derive(Clone, Copy)]
 pub struct NewsFilters {
@@ -125,61 +236,39 @@ impl Client {
     }
 
     async fn get_json<T: DeserializeOwned>(&self, path: &str, query: &[(&str, &str)]) -> Result<T> {
-        let resp = self
-            .http
+        let resp = checked(self.send(path, query).await?).await?;
+        resp.json().await.context("bad JSON from AlphAI")
+    }
+
+    async fn send(&self, path: &str, query: &[(&str, &str)]) -> Result<reqwest::Response> {
+        self.http
             .get(format!("{}{}", self.base, path))
             .bearer_auth(&self.key)
             .query(query)
             .send()
             .await
-            .context("request failed")?;
+            .context("request failed")
+    }
 
-        let status = resp.status();
-        if status == reqwest::StatusCode::UNAUTHORIZED {
-            return Err(ApiError {
-                status,
-                message: "invalid AlphAI API key, press s to update it (free keys: alphai.io)"
-                    .into(),
-            }
-            .into());
+    /// One small keyed request for `--doctor`: whether the key works, and
+    /// what is left of its daily allowance. The API puts
+    /// `X-RateLimit-Limit/Remaining/Reset` (the per-day layer) on keyed
+    /// answers. A ticker the API does not list still proves the key, so a
+    /// 404 is an answer here, not an error. Costs one request of the day.
+    pub async fn probe(&self, ticker: &str) -> Result<Probe> {
+        let resp = self.send(&format!("/api/symbols/{ticker}/"), &[]).await?;
+        let budget = DailyBudget::from_headers(resp.headers());
+        match checked(resp).await {
+            Ok(_) => Ok(Probe {
+                budget,
+                known: true,
+            }),
+            Err(e) if is_unknown_symbol(&format!("{e:#}")) => Ok(Probe {
+                budget,
+                known: false,
+            }),
+            Err(e) => Err(e),
         }
-        if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
-            let wait = resp
-                .headers()
-                .get("retry-after")
-                .and_then(|v| v.to_str().ok())
-                .unwrap_or("60");
-            return Err(ApiError {
-                status,
-                message: format!(
-                    "AlphAI rate limit hit, retry in {wait}s (Free tier: 20/min, 100/day)"
-                ),
-            }
-            .into());
-        }
-        if !status.is_success() {
-            let body = resp.text().await.unwrap_or_default();
-            let parsed = serde_json::from_str::<ErrorBody>(&body).ok();
-            // Paging back past the plan's archive horizon (Free 30 days,
-            // Basic 90) is a 403 with a machine-readable reason.
-            if parsed
-                .as_ref()
-                .and_then(|e| e.extra.as_ref())
-                .and_then(|x| x.reason.as_deref())
-                == Some("archive_horizon")
-            {
-                bail!("{ARCHIVE_GATE_MSG}");
-            }
-            let msg = parsed
-                .and_then(|e| e.message.or(e.detail).or(e.error))
-                .unwrap_or_else(|| body.chars().take(120).collect());
-            return Err(ApiError {
-                status,
-                message: format!("AlphAI API {status}: {msg}"),
-            }
-            .into());
-        }
-        resp.json().await.context("bad JSON from AlphAI")
     }
 
     /// One page of enriched news; `symbol: None` = market-wide feed, `cursor`
@@ -978,6 +1067,10 @@ struct ErrorBody {
 #[derive(Deserialize)]
 struct ErrorExtra {
     reason: Option<String>,
+    /// On a 429: the caller's plan and its two ceilings.
+    tier: Option<String>,
+    limit_per_minute: Option<u64>,
+    limit_per_day: Option<u64>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -2045,6 +2138,48 @@ pub fn fmt_usd(decimal: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Live 2026-11-25: `/api/symbols/AAPL/` answered with Limit 100000,
+    /// Remaining 96429, Reset 1795651200 (00:00 UTC the next day).
+    #[test]
+    fn daily_budget_reads_the_headers_and_names_the_plan() {
+        use reqwest::header::HeaderMap;
+        let mut headers = HeaderMap::new();
+        assert_eq!(DailyBudget::from_headers(&headers), None);
+        headers.insert("X-RateLimit-Limit", "100000".parse().unwrap());
+        headers.insert("X-RateLimit-Remaining", "96429".parse().unwrap());
+        let budget = DailyBudget::from_headers(&headers).unwrap();
+        assert_eq!(budget.reset, None, "reset is optional");
+        assert_eq!(budget.plan(), Some("Pro"));
+        headers.insert("X-RateLimit-Reset", "1795651200".parse().unwrap());
+        assert_eq!(
+            DailyBudget::from_headers(&headers).unwrap().reset,
+            Some(1_795_651_200)
+        );
+        for (limit, plan) in [(100, Some("Free")), (10_000, Some("Basic")), (500, None)] {
+            let b = DailyBudget {
+                limit,
+                remaining: 1,
+                reset: None,
+            };
+            assert_eq!(b.plan(), plan, "{limit}");
+        }
+    }
+
+    /// The 429 body names the caller's own plan; without one the message
+    /// falls back to the Free plan's limits it always quoted.
+    #[test]
+    fn rate_limit_message_names_the_plan_the_body_reports() {
+        let body = r#"{"detail":"Request was throttled.","extra":{"tier":"basic","limit_per_minute":60,"limit_per_day":10000,"retry_after_seconds":9}}"#;
+        assert_eq!(
+            rate_limit_message("9", body),
+            "AlphAI rate limit hit, retry in 9s (Basic plan: 60/min, 10000/day)"
+        );
+        assert_eq!(
+            rate_limit_message("60", "<html>busy</html>"),
+            "AlphAI rate limit hit, retry in 60s (Free tier: 20/min, 100/day)"
+        );
+    }
 
     const SAMPLE: &str = r#"{
       "results": [{

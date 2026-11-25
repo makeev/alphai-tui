@@ -4,6 +4,7 @@ mod app;
 mod cache;
 mod category;
 mod config;
+mod doctor;
 mod domain;
 mod event;
 mod import;
@@ -105,6 +106,18 @@ struct Args {
     #[arg(long, requires = "import_positions")]
     dry_run: bool,
 
+    /// Check the config, keys, price sources, AlphAI and the terminal, print
+    /// a report that is safe to paste into an issue, and exit. Costs one
+    /// fetch per source with a key, plus Yahoo, and one AlphAI request. A
+    /// ticker after it is the one asked for (default AAPL)
+    // `dry_run` is listed on its own: clap drops a `requires` whose target
+    // conflicts with an argument that is present.
+    #[arg(
+        long,
+        conflicts_with_all = ["once", "json", "earnings", "events", "import_positions", "dry_run"]
+    )]
+    doctor: bool,
+
     /// Use an alternate config file (the settings screen saves back to it)
     #[arg(long, value_name = "PATH")]
     config: Option<PathBuf>,
@@ -129,6 +142,19 @@ fn main() -> Result<()> {
             args.source.as_deref(),
             args.every,
         );
+    }
+    if args.doctor {
+        let code = doctor::run(doctor::Options {
+            config: args.config,
+            source: args.source,
+            every: args.every,
+            theme: args.theme,
+            symbol: args.symbols.into_iter().next(),
+        })?;
+        if code != 0 {
+            std::process::exit(code);
+        }
+        return Ok(());
     }
     let (cfg, cfg_state, config_path) = config::load_at(args.config.as_deref());
     // Validation warnings go to stderr before the TUI takes the terminal,
@@ -756,9 +782,19 @@ mod tests {
         for args in [
             vec!["alphai-tui", "--json", "--events", "AAPL"],
             vec!["alphai-tui", "--earnings", "AAPL", "--events", "AAPL"],
+            vec!["alphai-tui", "--doctor", "--once"],
+            vec!["alphai-tui", "--doctor", "--json"],
+            vec!["alphai-tui", "--doctor", "--earnings", "AAPL"],
+            vec!["alphai-tui", "--doctor", "--events", "AAPL"],
+            vec!["alphai-tui", "--doctor", "--import-positions", "x.csv"],
+            vec!["alphai-tui", "--doctor", "--dry-run"],
         ] {
-            assert!(Args::try_parse_from(args).is_err());
+            assert!(Args::try_parse_from(&args).is_err(), "{args:?} parsed");
         }
+        // A ticker after --doctor is the one the check asks for.
+        let args = Args::try_parse_from(["alphai-tui", "--doctor", "tsla"]).unwrap();
+        assert!(args.doctor);
+        assert_eq!(args.symbols, ["TSLA"]);
         let saved = vec!["AAPL".into(), "NASDAQ COMPOSITE".into()];
         let error = startup_symbols(&[], &saved).unwrap_err().to_string();
         assert!(error.contains("config watchlist"), "{error}");

@@ -56,6 +56,13 @@ pub trait DataSource: Send + Sync {
     /// whole round with one request instead of one per symbol; the others
     /// ignore it.
     fn begin_cycle(&self, _symbols: &[String]) {}
+
+    /// What the key has left of its per-minute allowance, for a provider
+    /// that reports it on its answers (see `http::Budget`). None until a
+    /// request has answered, and always for the ones that do not report.
+    fn budget(&self) -> Option<http::Budget> {
+        None
+    }
 }
 
 /// Build a source by name (registry id or alias). Credentials resolve

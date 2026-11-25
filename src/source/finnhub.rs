@@ -20,6 +20,8 @@ pub struct Finnhub {
     client: reqwest::Client,
     token: String,
     history: Mutex<HashMap<String, Vec<Candle>>>,
+    /// The key's per-minute budget, as the answers report it.
+    meter: http::Meter,
 }
 
 impl Finnhub {
@@ -28,6 +30,7 @@ impl Finnhub {
             client: http::client()?,
             token,
             history: Mutex::new(HashMap::new()),
+            meter: http::Meter::default(),
         })
     }
 }
@@ -40,6 +43,10 @@ impl DataSource for Finnhub {
 
     fn extended_candles(&self) -> bool {
         false
+    }
+
+    fn budget(&self) -> Option<http::Budget> {
+        self.meter.get()
     }
 
     /// `sessions` is ignored along with the window: this source has no
@@ -62,6 +69,7 @@ impl DataSource for Finnhub {
                 }
                 _ => format!("finnhub API {status}"),
             },
+            &self.meter,
         )
         .await?;
 

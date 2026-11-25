@@ -166,9 +166,57 @@ impl Drop for Store {
     }
 }
 
+/// What the cache file holds, for `--doctor`. Read from disk here rather
+/// than through `Store::load_at`, which turns a file it cannot use into an
+/// empty store without saying so.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Summary {
+    /// No file yet: no session has written one.
+    Missing,
+    /// A file this version cannot use, with why; the app starts without
+    /// cached prices and writes a new one.
+    Unusable(String),
+    Usable {
+        bytes: u64,
+        /// Entries in the file, one per source and ticker.
+        entries: usize,
+        /// Those young enough to be seeded (see `MAX_AGE`).
+        fresh: usize,
+        /// Unix seconds of the newest entry.
+        newest: Option<i64>,
+    },
+}
+
+pub fn summary(path: &std::path::Path) -> Summary {
+    let raw = match std::fs::read_to_string(path) {
+        Ok(raw) => raw,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Summary::Missing,
+        Err(e) => return Summary::Unusable(e.to_string()),
+    };
+    let file = match serde_json::from_str::<File>(&raw) {
+        Ok(file) => file,
+        Err(_) => return Summary::Unusable("not a cache this version can read".into()),
+    };
+    if file.version != VERSION {
+        return Summary::Unusable(format!(
+            "written by another version (format {}, this one reads {VERSION})",
+            file.version
+        ));
+    }
+    let now = unix_now();
+    let max_age = MAX_AGE.as_secs() as i64;
+    let fetched: Vec<i64> = file.entries.values().map(|e| e.fetched).collect();
+    Summary::Usable {
+        bytes: raw.len() as u64,
+        entries: fetched.len(),
+        fresh: fetched.iter().filter(|t| now - **t <= max_age).count(),
+        newest: fetched.into_iter().max(),
+    }
+}
+
 /// `<cache dir>/alphai-tui/quotes.json`, or None on a platform with no
 /// cache directory (the store then works in memory and writes nothing).
-fn default_path() -> Option<PathBuf> {
+pub(crate) fn default_path() -> Option<PathBuf> {
     Some(dirs::cache_dir()?.join("alphai-tui").join("quotes.json"))
 }
 
@@ -324,6 +372,43 @@ mod tests {
                 .get("yahoo", "AAPL", &params)
                 .is_none()
         );
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    /// `--doctor` tells a missing cache from one it cannot use, which
+    /// `Store::load_at` folds into the same empty store.
+    #[test]
+    fn summary_tells_missing_unusable_and_fresh_apart() {
+        let path = tmp_path("summary");
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+        assert_eq!(summary(&path), Summary::Missing);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "{\"version\": 99, \"entries\": {}}").unwrap();
+        assert!(matches!(summary(&path), Summary::Unusable(why) if why.contains("99")));
+        std::fs::write(&path, "{ not json").unwrap();
+        assert!(matches!(summary(&path), Summary::Unusable(_)));
+
+        let params = params_key(Range::D1, Interval::M5, Sessions::Regular);
+        let mut store = Store::load_at(Some(path.clone()));
+        store.put("yahoo", "AAPL", &params, &data(10.0));
+        store.put("yahoo", "MSFT", &params, &data(11.0));
+        let old = store.entries.get_mut(&key("yahoo", "MSFT")).unwrap();
+        old.fetched -= MAX_AGE.as_secs() as i64 + 60;
+        let newest = store.entries[&key("yahoo", "AAPL")].fetched;
+        assert!(store.flush());
+        let Summary::Usable {
+            bytes,
+            entries,
+            fresh,
+            newest: seen,
+        } = summary(&path)
+        else {
+            panic!("expected a usable cache");
+        };
+        assert!(bytes > 0);
+        assert_eq!(entries, 2);
+        assert_eq!(fresh, 1, "the week-old entry would not be seeded");
+        assert_eq!(seen, Some(newest));
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 

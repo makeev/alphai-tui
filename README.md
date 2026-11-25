@@ -719,6 +719,7 @@ and options persist in the config file, so next time plain `alphai-tui` works.
 alphai-tui --once AAPL      # print quotes to stdout and exit (for scripts)
 alphai-tui --json AAPL      # the same run as JSON, for a status bar
 alphai-tui -s finnhub NVDA  # explicit source for one run
+alphai-tui --doctor         # check the config, keys and sources, then exit
 ```
 
 ## Options
@@ -738,11 +739,63 @@ alphai-tui -s finnhub NVDA  # explicit source for one run
 | `--import-positions FILE` | | Import holdings from a broker CSV and print the changes |
 | `--dry-run` | | Preview a position import |
 | `--events TICKER` | | Print the ticker's corporate events to stdout and exit (needs an AlphAI key; one request) |
+| `--doctor` | | Check the config, keys, price sources, AlphAI and the terminal, print a report that is safe to paste into an issue, and exit |
 | `--config` | | Use an alternate config file (Save writes back to it) |
 
 `-r` and `-i` set the startup window; the `t` key cycles the preset
 combinations (configurable as `[chart] presets`) for the session without
 persisting them.
+
+### Health check
+
+```sh
+alphai-tui --doctor         # check everything and exit
+alphai-tui --doctor TSLA    # ask the price sources for TSLA instead of AAPL
+```
+
+`--doctor` prints one line per finding, marked `ok`, `warn`, `fail`,
+`info` or `--` (not configured):
+
+```
+Prices (AAPL, one fetch per source)
+  ok    yahoo    354.07 USD  252 ms, timing varies
+  ok    alpaca   354.24 USD  1061 ms, key budget 3 of 200 this minute
+  warn  alpaca: 3 of 200 requests left this minute after this check: something else is spending the key (another app, or another alphai-tui pane)
+  ok    tiingo   354.07 USD  793 ms  in use
+  info  tiingo polls 6 tickers every 15s
+```
+
+It looks at:
+
+- the config file: whether it loads, whether other users can read it (it
+  holds keys), every value the app would ignore, and the watchlist;
+- each key, masked to its first two and last four characters, and whether
+  it came from an env var or the config;
+- every price source whose keys are set, plus Yahoo: one fetch each, the
+  price, how long it took, and on Alpaca and Finnhub what the key has left
+  of its minute. A key that is nearly spent right after the check is being
+  used by something else, another app or another alphai-tui pane;
+- what polling costs against the source's per-minute limit, where one is
+  published (Alpaca, Finnhub), where pre and after hours come from, and
+  whether the fallback is on;
+- the AlphAI key: its plan and what is left of the day;
+- the quote cache, the terminal (`NO_COLOR`, a 24-bit theme without
+  truecolor, a window under 80x24), the market session, and whether a
+  newer release is on crates.io.
+
+The exit code is 1 when a line says `fail`: the source in use or the
+AlphAI key refused, a config that does not load, half of an Alpaca key
+pair. Warnings do not fail it, and nothing is written.
+
+A run costs one request to each source it checks (two on Alpaca, two or
+three on Tiingo, which is a few of the 50 an hour its free plan allows;
+a refused request is retried), one of the day's AlphAI requests and one
+request to crates.io. Yahoo is always asked once, which only matters
+right after it blocked your IP.
+
+The report is meant for bug reports: keys are masked everywhere, error
+messages included, and your home directory shows as `~`. When something
+looks wrong, run it and paste the output into an issue.
 
 ### Quotes as JSON
 
