@@ -742,6 +742,24 @@ fn chart_toggles_to_line_mode() {
     assert_eq!(app.chart_style, ChartStyle::Candles);
 }
 
+/// While the newest bar is still forming, the price tag's label counts down
+/// to its close; once `now` has left the bar behind, the label is plain.
+#[test]
+fn price_tag_counts_down_the_forming_bar() {
+    let mut app = fake_app();
+    app.view_idx = ui::view_index(ui::ViewId::Chart);
+    app.show_rail = false;
+    app.interval = crate::domain::Interval::M5;
+    let last = app.data["AAPL"].candles.last().unwrap().ts;
+    app.frozen_now = Some(chrono::DateTime::from_timestamp(last + 139, 0).unwrap());
+    let screen = render_sized(&mut app, 140, 30);
+    assert!(screen.contains("quote 2:41"), "screen:\n{screen}");
+    app.frozen_now = Some(chrono::DateTime::from_timestamp(last + 301, 0).unwrap());
+    let screen = render_sized(&mut app, 140, 30);
+    assert!(screen.contains("quote"), "screen:\n{screen}");
+    assert!(!screen.contains("quote 0:"), "screen:\n{screen}");
+}
+
 /// The default 20% right margin keeps candles off the right edge and hosts
 /// the last-price tag; `right_margin_pct = 0` restores the old flush layout.
 #[test]

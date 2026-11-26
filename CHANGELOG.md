@@ -5,6 +5,12 @@ the crates.io releases; from 0.7.0 on each one is also a git tag and a
 GitHub release with prebuilt binaries. The Homebrew tap, the AUR and the
 apt repository joined later, and carry every version since.
 
+## 0.45.1 - 2026-11-26
+
+- While the newest candle is still forming, the label under the price tag
+  counts down to its close (`quote 2:41`). The countdown stops at the end
+  of the session for US listings and is not shown for daily candles.
+
 ## 0.45.0 - 2026-11-25
 
 - `--doctor` checks what the app depends on and prints one line per

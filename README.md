@@ -227,7 +227,8 @@ with its candle size), because `t` and `T` cycle forward and backward
 through presets that change the window as well as the candle size.
 The `Last bar` line shows the newest candle's close, feed and start time.
 The price marker is labelled `quote`, `PRE`, `AH` or `bar` to distinguish
-a trade from a candle close. With the quote rail hidden, the chart title
+a trade from a candle close. While the newest candle is still forming, the
+label also counts down to its close (`quote 2:41`). With the quote rail hidden, the chart title
 also carries the quote, currency and daily change.
 
 The ticker's news is marked on the candles it was published in: `▲` and

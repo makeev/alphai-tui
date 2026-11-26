@@ -984,16 +984,30 @@ fn render_price_candles(
             } else {
                 "quote"
             };
-            if margin > label.len() as u16 {
+            // The forming bar's time left rides along while the margin
+            // has room: the candle the quote keeps redrawing, and when it
+            // stops changing.
+            let left = data
+                .candles
+                .last()
+                .and_then(|c| bar_countdown(c, drawn.interval, symbol, app.now().timestamp()));
+            let forms = match left {
+                Some(left) => vec![format!("{label} {left}"), left, label.to_string()],
+                None => vec![label.to_string()],
+            };
+            if let Some(text) = forms
+                .iter()
+                .find(|text| margin > text.chars().count() as u16)
+            {
                 let label_y = if row + 1 < plot.bottom() {
                     row + 1
                 } else {
                     row - 1
                 };
                 buf.set_string(
-                    plot.right() - label.len() as u16,
+                    plot.right() - text.chars().count() as u16,
                     label_y,
-                    label,
+                    text,
                     app.theme.subtle(),
                 );
             }
@@ -1019,6 +1033,33 @@ fn render_price_candles(
         sample_idx,
         axis,
         display,
+    })
+}
+
+/// Time left in the newest bar, `m:ss` (`h:mm:ss` from an hour up), while
+/// `now` falls inside that bar's own interval: the bar the live quote keeps
+/// redrawing. A US listing's bar ends with its session at the latest (the
+/// last hour bar from 15:30 closes at 16:00). A last bar that `now` has
+/// left behind (a delayed feed, a closed market) and daily bars get none.
+fn bar_countdown(last: &Candle, interval: Interval, symbol: &str, now: i64) -> Option<String> {
+    // Finnhub's candles are ticks stamped with their own time, not bars.
+    if interval == Interval::D1 || last.feed == PriceFeed::Finnhub {
+        return None;
+    }
+    let mut end = last.ts + interval.secs();
+    if market::is_us_equity(symbol)
+        && let Some(window) = market::window_at(last.ts)
+    {
+        end = end.min(window.end);
+    }
+    if !(last.ts..end).contains(&now) {
+        return None;
+    }
+    let left = end - now;
+    Some(if left >= 3_600 {
+        format!("{}:{:02}:{:02}", left / 3_600, left % 3_600 / 60, left % 60)
+    } else {
+        format!("{}:{:02}", left / 60, left % 60)
     })
 }
 
@@ -1512,6 +1553,47 @@ mod tests {
     fn candle_column_worked_example() {
         let cols = candle_column(&candle(2.0, 9.0, 1.0, 6.0), 0.0, 10.0, 5);
         assert_eq!(cols, vec![(0, '╷'), (1, '│'), (2, '█'), (3, '█'), (4, '▀')]);
+    }
+
+    #[test]
+    fn countdown_runs_inside_the_newest_bar_only() {
+        // Tue 2026-11-24 15:00 ET = 20:00 UTC (EST), a regular session.
+        let bar = Candle {
+            ts: 1_795_550_400,
+            ..candle(1.0, 1.0, 1.0, 1.0)
+        };
+        let at = |secs: i64| bar.ts + secs;
+        assert_eq!(
+            bar_countdown(&bar, Interval::M5, "AAPL", at(0)).as_deref(),
+            Some("5:00")
+        );
+        assert_eq!(
+            bar_countdown(&bar, Interval::M5, "AAPL", at(139)).as_deref(),
+            Some("2:41")
+        );
+        assert_eq!(bar_countdown(&bar, Interval::M5, "AAPL", at(300)), None);
+        assert_eq!(bar_countdown(&bar, Interval::M5, "AAPL", at(-1)), None);
+        assert_eq!(bar_countdown(&bar, Interval::D1, "AAPL", at(10)), None);
+        // The 15:30 hour bar closes with the session at 16:00, not 16:30.
+        let late = Candle {
+            ts: bar.ts + 1_800,
+            ..bar
+        };
+        assert_eq!(
+            bar_countdown(&late, Interval::M60, "AAPL", late.ts + 60).as_deref(),
+            Some("29:00")
+        );
+        // Finnhub's tick candles carry the tick's time, not a bar's start.
+        let tick = Candle {
+            feed: PriceFeed::Finnhub,
+            ..bar
+        };
+        assert_eq!(bar_countdown(&tick, Interval::M5, "AAPL", at(10)), None);
+        // Crypto has no session to end the bar early.
+        assert_eq!(
+            bar_countdown(&late, Interval::M60, "BTC-USD", late.ts + 60).as_deref(),
+            Some("59:00")
+        );
     }
 
     #[test]
